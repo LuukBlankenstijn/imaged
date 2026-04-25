@@ -1,0 +1,6 @@
+.direnv
+http-root
+tftp
+result
+vmlinuz
+initramfs.cpio.gz
