@@ -2,12 +2,20 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::{domain::host::HostRepository, error::AppError};
+use crate::{
+    domain::{host::HostRepository, image::ImageRepository},
+    error::AppError,
+};
 
 mod host;
+mod image;
 
 pub fn host_repo(pool: SqlitePool) -> Arc<dyn HostRepository> {
     Arc::new(host::SqliteHostRepository::new(pool))
+}
+
+pub fn image_repo(pool: SqlitePool) -> Arc<dyn ImageRepository> {
+    Arc::new(image::SqliteImageRepository::new(pool))
 }
 
 impl From<sqlx::Error> for AppError {

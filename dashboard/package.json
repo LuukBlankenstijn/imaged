@@ -10,6 +10,7 @@
     "typecheck": "tsgo -p . --noEmit"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
     "@connectrpc/connect": "^2.0.2",
     "@connectrpc/connect-web": "^2.0.2",
     "@imaged/gen": "workspace:*",
@@ -21,8 +22,8 @@
   "devDependencies": {
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0",
     "@typescript/native-preview": "^7.0.0-dev",
+    "@vitejs/plugin-react": "^5.0.0",
     "vite": "^7.0.0"
   }
 }

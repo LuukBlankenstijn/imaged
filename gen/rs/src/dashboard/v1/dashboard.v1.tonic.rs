@@ -119,7 +119,7 @@ pub mod dashboard_service_client {
         ///
         pub async fn update_host_name(
             &mut self,
-            request: impl tonic::IntoRequest<super::UpdateHostNameRequest>,
+            request: impl tonic::IntoRequest<super::UpdateNameRequest>,
         ) -> std::result::Result<tonic::Response<super::Host>, tonic::Status> {
             self.inner
                 .ready()
@@ -138,6 +138,28 @@ pub mod dashboard_service_client {
                 .insert(
                     GrpcMethod::new("dashboard.v1.DashboardService", "UpdateHostName"),
                 );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn delete_host(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/DeleteHost",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "DeleteHost"));
             self.inner.unary(req, path, codec).await
         }
         /** sends updates on the host connection status. On first connect receives the current state will be send
@@ -169,6 +191,103 @@ pub mod dashboard_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
+        pub async fn get_all_images(
+            &mut self,
+            request: impl tonic::IntoRequest<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetAllImagesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/GetAllImages",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("dashboard.v1.DashboardService", "GetAllImages"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn update_image_name(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateNameRequest>,
+        ) -> std::result::Result<tonic::Response<super::Image>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/UpdateImageName",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("dashboard.v1.DashboardService", "UpdateImageName"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /** Creates an image and captures it from the specified host.
+ If this host is not online, there will be a task put in the queue
+*/
+        pub async fn create_image(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateImageRequest>,
+        ) -> std::result::Result<tonic::Response<super::Image>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/CreateImage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "CreateImage"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn delete_image(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/DeleteImage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "DeleteImage"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -195,8 +314,13 @@ pub mod dashboard_service_server {
         ///
         async fn update_host_name(
             &self,
-            request: tonic::Request<super::UpdateHostNameRequest>,
+            request: tonic::Request<super::UpdateNameRequest>,
         ) -> std::result::Result<tonic::Response<super::Host>, tonic::Status>;
+        ///
+        async fn delete_host(
+            &self,
+            request: tonic::Request<super::DeleteRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
         /// Server streaming response type for the ConnectionState method.
         type ConnectionStateStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<super::HostConnectionEvent, tonic::Status>,
@@ -213,6 +337,31 @@ pub mod dashboard_service_server {
             tonic::Response<Self::ConnectionStateStream>,
             tonic::Status,
         >;
+        ///
+        async fn get_all_images(
+            &self,
+            request: tonic::Request<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetAllImagesResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn update_image_name(
+            &self,
+            request: tonic::Request<super::UpdateNameRequest>,
+        ) -> std::result::Result<tonic::Response<super::Image>, tonic::Status>;
+        /** Creates an image and captures it from the specified host.
+ If this host is not online, there will be a task put in the queue
+*/
+        async fn create_image(
+            &self,
+            request: tonic::Request<super::CreateImageRequest>,
+        ) -> std::result::Result<tonic::Response<super::Image>, tonic::Status>;
+        ///
+        async fn delete_image(
+            &self,
+            request: tonic::Request<super::DeleteRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
     }
     ///
     #[derive(Debug)]
@@ -337,7 +486,7 @@ pub mod dashboard_service_server {
                     struct UpdateHostNameSvc<T: DashboardService>(pub Arc<T>);
                     impl<
                         T: DashboardService,
-                    > tonic::server::UnaryService<super::UpdateHostNameRequest>
+                    > tonic::server::UnaryService<super::UpdateNameRequest>
                     for UpdateHostNameSvc<T> {
                         type Response = super::Host;
                         type Future = BoxFuture<
@@ -346,7 +495,7 @@ pub mod dashboard_service_server {
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::UpdateHostNameRequest>,
+                            request: tonic::Request<super::UpdateNameRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
@@ -363,6 +512,51 @@ pub mod dashboard_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = UpdateHostNameSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/DeleteHost" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteHostSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::DeleteRequest>
+                    for DeleteHostSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::delete_host(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteHostSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -416,6 +610,183 @@ pub mod dashboard_service_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/GetAllImages" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetAllImagesSvc<T: DashboardService>(pub Arc<T>);
+                    impl<T: DashboardService> tonic::server::UnaryService<()>
+                    for GetAllImagesSvc<T> {
+                        type Response = super::GetAllImagesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::get_all_images(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetAllImagesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/UpdateImageName" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateImageNameSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::UpdateNameRequest>
+                    for UpdateImageNameSvc<T> {
+                        type Response = super::Image;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpdateNameRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::update_image_name(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateImageNameSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/CreateImage" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateImageSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::CreateImageRequest>
+                    for CreateImageSvc<T> {
+                        type Response = super::Image;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateImageRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::create_image(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateImageSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/DeleteImage" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteImageSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::DeleteRequest>
+                    for DeleteImageSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::delete_image(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteImageSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

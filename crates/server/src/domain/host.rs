@@ -17,4 +17,6 @@ pub trait HostRepository: Send + Sync {
     async fn update_name(&self, id: i64, name: String) -> Result<Host>;
 
     async fn get_all(&self) -> Result<Vec<Host>>;
+
+    async fn delete(&self, id: i64) -> Result;
 }

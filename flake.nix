@@ -159,7 +159,7 @@
             cp ${pkgs.pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
             cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"
             cp ${partclone}/bin/partclone.vfat "$STAGING/bin/"
-            cp "$(pwd)/target/x86_64-unknown-linux-musl/debug/imaged-client" "$STAGING/bin/"
+            cp "$(pwd)/target/x86_64-unknown-linux-musl/release/imaged-client" "$STAGING/bin/"
             ln -sfr "$STAGING/bin/partclone.extfs" "$STAGING/bin/partclone.ext4"
             ln -sf busybox "$STAGING/bin/sh"
 

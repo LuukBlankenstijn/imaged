@@ -3,7 +3,7 @@ export type Tab = "hosts" | "groups" | "images" | "tasks";
 const ENTRIES: { id: Tab; label: string; enabled: boolean }[] = [
   { id: "hosts", label: "Hosts", enabled: true },
   { id: "groups", label: "Groups", enabled: false },
-  { id: "images", label: "Images", enabled: false },
+  { id: "images", label: "Images", enabled: true },
   { id: "tasks", label: "Tasks", enabled: false },
 ];
 

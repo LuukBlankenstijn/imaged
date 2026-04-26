@@ -1,61 +1,57 @@
+mod host;
+mod image;
+
 use std::sync::Arc;
 
-use derive_more::Constructor;
-use imaged_rpc::client::v1 as pb;
-use imaged_rpc::client::v1::client_service_server::ClientService;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response};
+use axum::{
+    Router,
+    extract::{FromRequestParts, Query},
+    http::request::Parts,
+    routing::{get, put},
+};
+use serde::Deserialize;
 
-use crate::{domain::host::HostRepository, registry::HostRegistry};
+use crate::{api::HandlerState, error::AppError};
 
-#[derive(Clone, Constructor)]
-pub struct ClientHandler {
-    host_repo: Arc<dyn HostRepository>,
-    host_registry: Arc<HostRegistry>,
+pub fn router() -> Router<Arc<HandlerState>> {
+    Router::new()
+        .route(
+            "/client/images/{image_id}/partitions/{partition_number}/data",
+            put(image::upload_partition_data).get(image::download_partition_data),
+        )
+        .route("/client/hosts/stream", get(host::start_stream))
 }
 
-#[tonic::async_trait]
-impl ClientService for ClientHandler {
-    type StartStreamStream = ReceiverStream<Result<pb::Task, tonic::Status>>;
+pub struct AgentMac(pub String);
 
-    async fn start_stream(
-        &self,
-        req: Request<pb::StartStreamRequest>,
-    ) -> Result<Response<Self::StartStreamStream>, tonic::Status> {
-        let request = req.into_inner();
-        let host = self
-            .host_repo
-            .upsert_host(request.mac.clone(), request.disk_size_bytes)
-            .await?;
+#[derive(Deserialize)]
+struct MacQuery {
+    mac: Option<String>,
+}
 
-        let (tx, rx) = mpsc::channel(8);
+impl<S> FromRequestParts<S> for AgentMac
+where
+    S: Send + Sync,
+{
+    type Rejection = AppError;
 
-        let mut registration = self.host_registry.register(host.id)?;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // try header first
+        if let Some(mac) = parts
+            .headers
+            .get("X-Agent-Mac")
+            .and_then(|v| v.to_str().ok())
+        {
+            return Ok(AgentMac(mac.to_string()));
+        }
 
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    maybe_event = registration.receiver.recv() => {
-                        match maybe_event {
-                            Some(_event) => {
-                                let task = pb::Task {};
-                                if tx.send(Ok(task)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            None => break,
-                        }
-                    }
+        // fall back to query
+        let Query(q) = Query::<MacQuery>::from_request_parts(parts, _state)
+            .await
+            .map_err(|_| AppError::InvalidArgument("missing mac".into()))?;
 
-                    // grpc channel closed
-                    _ = tx.closed() => {
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(Response::new(ReceiverStream::new(rx)))
+        q.mac
+            .map(AgentMac)
+            .ok_or(AppError::InvalidArgument("missing mac".into()))
     }
 }

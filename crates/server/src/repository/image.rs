@@ -1,0 +1,201 @@
+use std::collections::HashMap;
+
+use crate::{domain::image::ImagePartition, error::Result};
+use chrono::{DateTime, Utc};
+use derive_more::Constructor;
+use sqlx::SqlitePool;
+
+use crate::domain::image::{Image, ImageRepository, ImageStatus};
+
+#[derive(Debug, Constructor)]
+pub struct SqliteImageRepository {
+    pool: SqlitePool,
+}
+
+#[async_trait::async_trait]
+impl ImageRepository for SqliteImageRepository {
+    async fn create_image(&self, name: String) -> Result<Image> {
+        let status = ImageStatus::Empty.to_string();
+        let image = sqlx::query!(
+            "INSERT INTO images (name, status) VALUES (?,?) RETURNING *",
+            name,
+            status
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(Image::new(
+            image.id,
+            image.name,
+            None,
+            image.status.into(),
+            Vec::new(),
+        ))
+    }
+    async fn update_name(&self, id: i64, name: String) -> Result<Image> {
+        let image = sqlx::query!(
+            r#"UPDATE images SET name = ? WHERE id = ?
+               RETURNING
+                 id as "id!: i64",
+                 name,
+                 captured_at as "captured_at: DateTime<Utc>",
+                 status
+            "#,
+            name,
+            id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let partitions = sqlx::query!(
+            r#"SELECT
+                id as "id!: i64",
+                partition_number,
+                fstype,
+                size_bytes,
+                file_path,
+                sha256
+            FROM image_partitions WHERE image_id = ?"#,
+            id
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|record| {
+            ImagePartition::new(
+                record.id,
+                record.partition_number,
+                record.fstype,
+                record.size_bytes as u64,
+                record.file_path,
+                record.sha256,
+            )
+        })
+        .collect();
+
+        Ok(Image::new(
+            image.id,
+            image.name,
+            image.captured_at,
+            image.status.into(),
+            partitions,
+        ))
+    }
+
+    async fn get_all(&self) -> Result<Vec<Image>> {
+        // 1. Fetch everything in one JOIN query
+        // We use a LEFT JOIN so images with zero partitions are still included
+        let rows = sqlx::query!(
+            r#"
+            SELECT 
+                i.id AS "image_id!",
+                i.name AS "image_name!",
+                i.status AS "image_status!",
+                i.captured_at as "captured_at: DateTime<Utc>",
+                p.id AS "p_id?: i64",
+                p.partition_number AS "p_num?: i64",
+                p.fstype AS "p_fstype?",
+                p.size_bytes AS "p_size?: i64",
+                p.file_path AS "p_path?",
+                p.sha256 AS "p_sha?"
+            FROM images i
+            LEFT JOIN image_partitions p ON i.id = p.image_id
+            ORDER BY i.id, p.partition_number
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut images_map: HashMap<i64, Image> = HashMap::new();
+        // Keep track of order since HashMap is unordered
+        let mut image_ids = Vec::new();
+
+        for row in rows {
+            let entry = images_map.entry(row.image_id).or_insert_with(|| {
+                image_ids.push(row.image_id);
+                Image::new(
+                    row.image_id,
+                    row.image_name,
+                    row.captured_at,
+                    row.image_status.into(),
+                    Vec::new(),
+                )
+            });
+
+            // 3. Add partition if it exists (the LEFT JOIN will yield nulls for p_* if empty)
+            if let (
+                Some(p_id),
+                Some(p_num),
+                Some(p_fstype),
+                Some(p_size),
+                Some(p_path),
+                Some(p_sha),
+            ) = (
+                row.p_id,
+                row.p_num,
+                row.p_fstype,
+                row.p_size,
+                row.p_path,
+                row.p_sha,
+            ) {
+                entry.partitions.push(ImagePartition::new(
+                    p_id,
+                    p_num,
+                    p_fstype,
+                    p_size as u64,
+                    p_path,
+                    p_sha,
+                ));
+            }
+        }
+
+        // 4. Transform back into a Vec ordered by the original query
+        let result = image_ids
+            .into_iter()
+            .filter_map(|id| images_map.remove(&id))
+            .collect();
+
+        Ok(result)
+    }
+
+    async fn save_partition(
+        &self,
+        image_id: i64,
+        partition: ImagePartition,
+    ) -> Result<ImagePartition> {
+        let size = partition.size_bytes as i64;
+        let partition = sqlx::query!(
+            r#"
+                INSERT INTO image_partitions 
+                    (image_id, partition_number, fstype, size_bytes, file_path, sha256) 
+                VALUES 
+                    (?,?,?,?,?,?)
+                RETURNING *
+            "#,
+            image_id,
+            partition.partition_number,
+            partition.fstype,
+            size,
+            partition.filepath,
+            partition.sha256
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(ImagePartition::new(
+            // for some reason id is an option
+            partition.id.unwrap(),
+            partition.image_id,
+            partition.fstype,
+            partition.size_bytes as u64,
+            partition.file_path,
+            partition.sha256,
+        ))
+    }
+
+    async fn delete_image(&self, id: i64) -> Result {
+        sqlx::query!("DELETE FROM images WHERE id = ?", id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}

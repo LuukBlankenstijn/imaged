@@ -17,7 +17,9 @@ export function HostsView() {
     <>
       <header className="page-head">
         <h1 className="page-title">Hosts</h1>
-        <span className="page-meta"><strong>{hosts.length}</strong> tracked</span>
+        <span className="page-meta">
+          <strong>{hosts.length}</strong> tracked
+        </span>
       </header>
 
       {isLoading && <div className="state">Loading…</div>}
@@ -26,31 +28,31 @@ export function HostsView() {
 
       {hosts.length > 0 && (
         <div className="table-card">
-        <table className="table">
-          <colgroup>
-            <col className="col-id" />
-            <col className="col-status" />
-            <col className="col-mac" />
-            <col className="col-name" />
-            <col className="col-disk" />
-            <col className="col-actions" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th></th>
-              <th>MAC</th>
-              <th>Name</th>
-              <th className="right">Disk</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {hosts.map((host) => (
-              <HostRow key={host.id.toString()} host={host} />
-            ))}
-          </tbody>
-        </table>
+          <table className="table">
+            <colgroup>
+              <col className="col-id" />
+              <col className="col-status" />
+              <col className="col-mac" />
+              <col className="col-name" />
+              <col className="col-disk" />
+              <col className="col-actions-wide" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th></th>
+                <th>MAC</th>
+                <th>Name</th>
+                <th className="right">Disk</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {hosts.map((host) => (
+                <HostRow key={host.id.toString()} host={host} />
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </>
@@ -71,7 +73,7 @@ function HostRow({ host }: { host: Host }) {
     if (!editing) setDraft(host.name);
   }, [host.name, editing]);
 
-  const mutation = useMutation({
+  const renameMutation = useMutation({
     mutationFn: (newName: string) =>
       dashboardClient.updateHostName({ id: host.id, newName }),
     onSuccess: () => {
@@ -80,16 +82,29 @@ function HostRow({ host }: { host: Host }) {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => dashboardClient.deleteHost({ id: host.id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosts"] });
+    },
+  });
+
   const dirty = draft !== host.name;
+  const busy = renameMutation.isPending || deleteMutation.isPending;
 
   function commit() {
-    if (dirty) mutation.mutate(draft);
+    if (dirty) renameMutation.mutate(draft);
     else setEditing(false);
   }
 
   function cancel() {
     setDraft(host.name);
     setEditing(false);
+  }
+
+  function remove() {
+    const label = host.name || `host ${host.id}`;
+    if (window.confirm(`Delete ${label}?`)) deleteMutation.mutate();
   }
 
   return (
@@ -107,7 +122,7 @@ function HostRow({ host }: { host: Host }) {
               if (e.key === "Enter") commit();
               if (e.key === "Escape") cancel();
             }}
-            disabled={mutation.isPending}
+            disabled={busy}
             placeholder="unnamed"
           />
         ) : host.name ? (
@@ -121,21 +136,20 @@ function HostRow({ host }: { host: Host }) {
         <div className="action-group">
           {editing ? (
             <>
-              <button
-                className="primary"
-                onClick={commit}
-                disabled={mutation.isPending || !dirty}
-              >
-                {mutation.isPending ? "Saving…" : "Save"}
+              <button className="primary" onClick={commit} disabled={busy || !dirty}>
+                {renameMutation.isPending ? "Saving…" : "Save"}
               </button>
-              <button onClick={cancel} disabled={mutation.isPending}>
-                Cancel
-              </button>
+              <button onClick={cancel} disabled={busy}>Cancel</button>
             </>
           ) : (
-            <button className="ghost" onClick={() => setEditing(true)}>
-              Rename
-            </button>
+            <>
+              <button className="ghost" onClick={() => setEditing(true)} disabled={busy}>
+                Rename
+              </button>
+              <button className="ghost danger" onClick={remove} disabled={busy}>
+                {deleteMutation.isPending ? "Deleting…" : "Delete"}
+              </button>
+            </>
           )}
         </div>
       </td>

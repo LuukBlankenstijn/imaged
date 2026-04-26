@@ -88,6 +88,11 @@ button.ghost:hover:not(:disabled) {
   border-color: transparent;
 }
 
+button.ghost.danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.10);
+}
+
 input {
   font: inherit;
   background: transparent;
@@ -226,6 +231,12 @@ input {
   letter-spacing: -0.015em;
 }
 
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .page-meta {
   display: inline-flex;
   align-items: center;
@@ -237,6 +248,22 @@ input {
   border: 1px solid var(--line);
   padding: 0.3rem 0.65rem;
   border-radius: 999px;
+}
+
+.create-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.create-bar input {
+  flex: 1;
+  font-size: 0.95rem;
 }
 
 .page-meta strong {
@@ -271,10 +298,14 @@ input {
 
 .table colgroup col.col-id { width: 4.5rem; }
 .table colgroup col.col-status { width: 2.5rem; }
+.table colgroup col.col-status-text { width: 6.5rem; }
 .table colgroup col.col-mac { width: 12rem; }
 .table colgroup col.col-name { width: auto; }
 .table colgroup col.col-disk { width: 7.5rem; }
+.table colgroup col.col-captured { width: 8rem; }
+.table colgroup col.col-parts { width: 4.5rem; }
 .table colgroup col.col-actions { width: 10.5rem; }
+.table colgroup col.col-actions-wide { width: 13.5rem; }
 
 .cell-status {
   text-align: center;
@@ -292,6 +323,55 @@ input {
 .status-dot.online {
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent-soft), 0 0 0 2px var(--accent-soft);
+}
+
+.cell-captured {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.cell-parts {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  text-align: right;
+  color: var(--text-mono);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.badge-ok {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.badge-progress {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.10);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.badge-error {
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.10);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.badge-neutral {
+  color: var(--text-dim);
+  background: var(--hover);
+  border-color: var(--line-strong);
 }
 
 .table thead {

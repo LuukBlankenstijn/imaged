@@ -3,40 +3,50 @@ mod domain;
 mod error;
 mod registry;
 mod repository;
+mod service;
 
 use std::{str::FromStr, sync::Arc};
 
 use axum::Router;
-use imaged_rpc::{client::v1::client_service_server, dashboard::v1::dashboard_service_server};
+use imaged_rpc::dashboard::v1::dashboard_service_server;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tracing_subscriber::EnvFilter;
 
+use crate::api::dashboard::DashboardHandler;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
 
     let pool = setup_database().await?;
-    let host_repo = repository::host_repo(pool);
+    let host_repo = repository::host_repo(pool.clone());
     let host_registry = Arc::new(registry::HostRegistry::new());
-    let client_service = client_service_server::ClientServiceServer::new(
-        api::client::ClientHandler::new(host_repo.clone(), host_registry.clone()),
-    );
+    let image_repo = repository::image_repo(pool);
+    let image_service = Arc::new(service::image::ImageService::new("images".to_string()));
+
+    let handler_state = Arc::new(api::HandlerState::new(
+        host_repo.clone(),
+        host_registry.clone(),
+        image_repo.clone(),
+        image_service.clone(),
+    ));
     let dashboard_service = dashboard_service_server::DashboardServiceServer::new(
-        api::dashboard::DashboardHandler::new(host_repo, host_registry),
+        DashboardHandler::new(handler_state.clone()),
     );
 
     let grpc_router = tonic::service::Routes::builder()
-        .add_service(client_service)
         .add_service(dashboard_service)
         .clone()
         .routes()
         .into_axum_router()
         .layer(tonic_web::GrpcWebLayer::new());
 
-    let routes = Router::new().merge(grpc_router);
+    let routes = Router::new()
+        .merge(api::client::router().with_state(handler_state))
+        .merge(grpc_router);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     let service = routes.into_make_service();

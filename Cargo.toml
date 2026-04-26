@@ -15,7 +15,7 @@ prost = "0.14"
 prost-types = "0.14"
 tonic = { version = "0.14", features = ["transport", "tls-ring"] }
 tonic-prost = "0.14"
-tokio = { version = "1.52.1", features = ["rt-multi-thread"]}
+tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread"]}
 imaged-rpc = { path = "gen/rs" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }
@@ -23,3 +23,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3.32"
 thiserror = "2.0.18"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"

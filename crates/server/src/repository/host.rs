@@ -79,4 +79,11 @@ impl domain::host::HostRepository for SqliteHostRepository {
             .map(|row| row.into())
             .collect())
     }
+
+    async fn delete(&self, id: i64) -> Result {
+        sqlx::query_as!(HostRow, "DELETE FROM hosts WHERE id = ?", id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

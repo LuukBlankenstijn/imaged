@@ -17,11 +17,16 @@ pub struct GetAllHostsResponse {
     pub hosts: ::prost::alloc::vec::Vec<Host>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct UpdateHostNameRequest {
+pub struct UpdateNameRequest {
     #[prost(int64, tag="1")]
     pub id: i64,
     #[prost(string, tag="2")]
     pub new_name: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DeleteRequest {
+    #[prost(int64, tag="1")]
+    pub id: i64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HostConnectionEvent {
@@ -29,6 +34,44 @@ pub struct HostConnectionEvent {
     pub id: i64,
     #[prost(bool, tag="2")]
     pub connected: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Image {
+    #[prost(int64, tag="1")]
+    pub id: i64,
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub captured_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(string, tag="4")]
+    pub status: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="5")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="6")]
+    pub partitions: ::prost::alloc::vec::Vec<ImagePartition>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ImagePartition {
+    #[prost(int64, tag="1")]
+    pub id: i64,
+    #[prost(int64, tag="2")]
+    pub partition_number: i64,
+    #[prost(string, tag="3")]
+    pub fstype: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub size_bytes: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetAllImagesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub images: ::prost::alloc::vec::Vec<Image>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateImageRequest {
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(int64, tag="2")]
+    pub host_id: i64,
 }
 include!("dashboard.v1.tonic.rs");
 // @@protoc_insertion_point(module)

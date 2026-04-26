@@ -3,6 +3,7 @@ mod transport;
 
 use clap::Parser;
 use futures::StreamExt;
+use futures::pin_mut;
 use tracing_subscriber::EnvFilter;
 
 use crate::transport::start_stream;
@@ -26,16 +27,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mac = sys::get_mac()?;
     let disk = sys::find_target_disk()?;
 
-    let mut stream = start_stream(server, mac, disk.size).await?;
+    let stream = start_stream(server, mac, disk.size).await?;
+    pin_mut!(stream);
 
+    tracing::info!("starting imaged-client");
     while let Some(message) = stream.next().await {
         match message {
             Ok(message) => tracing::info!(msg=%message, "received message"),
             Err(e) => tracing::error!(err=%e, "received stream error"),
         }
     }
-
-    tracing::info!("starting imaged-client");
 
     Ok(())
 }

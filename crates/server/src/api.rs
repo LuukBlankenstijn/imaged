@@ -1,9 +1,31 @@
+use std::sync::Arc;
+
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use derive_more::Constructor;
+use serde_json::json;
 use tonic::Status;
 
-use crate::error::AppError;
+use crate::{
+    domain::{host::HostRepository, image::ImageRepository},
+    error::AppError,
+    registry::HostRegistry,
+    service::image::ImageService,
+};
 
 pub mod client;
 pub mod dashboard;
+
+#[derive(Clone, Constructor)]
+pub struct HandlerState {
+    host_repo: Arc<dyn HostRepository>,
+    host_registry: Arc<HostRegistry>,
+    image_repo: Arc<dyn ImageRepository>,
+    image_service: Arc<ImageService>,
+}
 
 impl From<AppError> for Status {
     fn from(err: AppError) -> Self {
@@ -21,5 +43,36 @@ impl From<AppError> for Status {
                 Status::internal("internal database error")
             }
         }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match self {
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::InvalidArgument(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::FailedPrecondition(msg) => (StatusCode::PRECONDITION_FAILED, msg),
+            AppError::Internal(msg) => {
+                tracing::error!("Internal server error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal server error occurred".to_string(),
+                )
+            }
+            AppError::AlreadyExists(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Database(msg) => {
+                tracing::error!("Database error: {}", msg);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal server error occurred".to_string(),
+                )
+            }
+        };
+
+        let body = Json(json!({
+            "error": error_message,
+        }));
+
+        (status, body).into_response()
     }
 }

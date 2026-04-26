@@ -4,15 +4,15 @@
 
 import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { EmptySchema } from "@bufbuild/protobuf/wkt";
-import { file_google_protobuf_empty } from "@bufbuild/protobuf/wkt";
+import type { EmptySchema, Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_empty, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file v1/dashboard/dashboard.proto.
  */
 export const file_v1_dashboard_dashboard: GenFile = /*@__PURE__*/
-  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiTgoESG9zdBIKCgJpZBgBIAEoAxITCgttYWNfYWRkcmVzcxgCIAEoCRIMCgRuYW1lGAMgASgJEhcKD2Rpc2tfc2l6ZV9ieXRlcxgEIAEoBCI4ChNHZXRBbGxIb3N0c1Jlc3BvbnNlEiEKBWhvc3RzGAEgAygLMhIuZGFzaGJvYXJkLnYxLkhvc3QiNQoVVXBkYXRlSG9zdE5hbWVSZXF1ZXN0EgoKAmlkGAEgASgDEhAKCG5ld19uYW1lGAIgASgJIjQKE0hvc3RDb25uZWN0aW9uRXZlbnQSCgoCaWQYASABKAMSEQoJY29ubmVjdGVkGAIgASgIMv0BChBEYXNoYm9hcmRTZXJ2aWNlEkoKC0dldEFsbEhvc3RzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiEuZGFzaGJvYXJkLnYxLkdldEFsbEhvc3RzUmVzcG9uc2UiABJLCg5VcGRhdGVIb3N0TmFtZRIjLmRhc2hib2FyZC52MS5VcGRhdGVIb3N0TmFtZVJlcXVlc3QaEi5kYXNoYm9hcmQudjEuSG9zdCIAElAKD0Nvbm5lY3Rpb25TdGF0ZRIWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eRohLmRhc2hib2FyZC52MS5Ib3N0Q29ubmVjdGlvbkV2ZW50IgAwAUJzChBjb20uZGFzaGJvYXJkLnYxQg5EYXNoYm9hcmRQcm90b1ABogIDRFhYqgIMRGFzaGJvYXJkLlYxygIMRGFzaGJvYXJkXFYx4gIYRGFzaGJvYXJkXFYxXEdQQk1ldGFkYXRh6gINRGFzaGJvYXJkOjpWMWIGcHJvdG8z", [file_google_protobuf_empty]);
+  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiTgoESG9zdBIKCgJpZBgBIAEoAxITCgttYWNfYWRkcmVzcxgCIAEoCRIMCgRuYW1lGAMgASgJEhcKD2Rpc2tfc2l6ZV9ieXRlcxgEIAEoBCI4ChNHZXRBbGxIb3N0c1Jlc3BvbnNlEiEKBWhvc3RzGAEgAygLMhIuZGFzaGJvYXJkLnYxLkhvc3QiMQoRVXBkYXRlTmFtZVJlcXVlc3QSCgoCaWQYASABKAMSEAoIbmV3X25hbWUYAiABKAkiGwoNRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoAyI0ChNIb3N0Q29ubmVjdGlvbkV2ZW50EgoKAmlkGAEgASgDEhEKCWNvbm5lY3RlZBgCIAEoCCLCAQoFSW1hZ2USCgoCaWQYASABKAMSDAoEbmFtZRgCIAEoCRIvCgtjYXB0dXJlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDgoGc3RhdHVzGAQgASgJEhoKDWVycm9yX21lc3NhZ2UYBSABKAlIAIgBARIwCgpwYXJ0aXRpb25zGAYgAygLMhwuZGFzaGJvYXJkLnYxLkltYWdlUGFydGl0aW9uQhAKDl9lcnJvcl9tZXNzYWdlIloKDkltYWdlUGFydGl0aW9uEgoKAmlkGAEgASgDEhgKEHBhcnRpdGlvbl9udW1iZXIYAiABKAMSDgoGZnN0eXBlGAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiOwoUR2V0QWxsSW1hZ2VzUmVzcG9uc2USIwoGaW1hZ2VzGAEgAygLMhMuZGFzaGJvYXJkLnYxLkltYWdlIjMKEkNyZWF0ZUltYWdlUmVxdWVzdBIMCgRuYW1lGAEgASgJEg8KB2hvc3RfaWQYAiABKAMy5QQKEERhc2hib2FyZFNlcnZpY2USSgoLR2V0QWxsSG9zdHMSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuR2V0QWxsSG9zdHNSZXNwb25zZSIAEkcKDlVwZGF0ZUhvc3ROYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhIuZGFzaGJvYXJkLnYxLkhvc3QiABJDCgpEZWxldGVIb3N0EhsuZGFzaGJvYXJkLnYxLkRlbGV0ZVJlcXVlc3QaFi5nb29nbGUucHJvdG9idWYuRW1wdHkiABJQCg9Db25uZWN0aW9uU3RhdGUSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuSG9zdENvbm5lY3Rpb25FdmVudCIAMAESTAoMR2V0QWxsSW1hZ2VzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiIuZGFzaGJvYXJkLnYxLkdldEFsbEltYWdlc1Jlc3BvbnNlIgASSQoPVXBkYXRlSW1hZ2VOYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRgoLQ3JlYXRlSW1hZ2USIC5kYXNoYm9hcmQudjEuQ3JlYXRlSW1hZ2VSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRAoLRGVsZXRlSW1hZ2USGy5kYXNoYm9hcmQudjEuRGVsZXRlUmVxdWVzdBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAQnMKEGNvbS5kYXNoYm9hcmQudjFCDkRhc2hib2FyZFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_empty, file_google_protobuf_timestamp]);
 
 /**
  * @generated from message dashboard.v1.Host
@@ -64,9 +64,9 @@ export const GetAllHostsResponseSchema: GenMessage<GetAllHostsResponse> = /*@__P
   messageDesc(file_v1_dashboard_dashboard, 1);
 
 /**
- * @generated from message dashboard.v1.UpdateHostNameRequest
+ * @generated from message dashboard.v1.UpdateNameRequest
  */
-export type UpdateHostNameRequest = Message<"dashboard.v1.UpdateHostNameRequest"> & {
+export type UpdateNameRequest = Message<"dashboard.v1.UpdateNameRequest"> & {
   /**
    * @generated from field: int64 id = 1;
    */
@@ -79,11 +79,28 @@ export type UpdateHostNameRequest = Message<"dashboard.v1.UpdateHostNameRequest"
 };
 
 /**
- * Describes the message dashboard.v1.UpdateHostNameRequest.
- * Use `create(UpdateHostNameRequestSchema)` to create a new message.
+ * Describes the message dashboard.v1.UpdateNameRequest.
+ * Use `create(UpdateNameRequestSchema)` to create a new message.
  */
-export const UpdateHostNameRequestSchema: GenMessage<UpdateHostNameRequest> = /*@__PURE__*/
+export const UpdateNameRequestSchema: GenMessage<UpdateNameRequest> = /*@__PURE__*/
   messageDesc(file_v1_dashboard_dashboard, 2);
+
+/**
+ * @generated from message dashboard.v1.DeleteRequest
+ */
+export type DeleteRequest = Message<"dashboard.v1.DeleteRequest"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+};
+
+/**
+ * Describes the message dashboard.v1.DeleteRequest.
+ * Use `create(DeleteRequestSchema)` to create a new message.
+ */
+export const DeleteRequestSchema: GenMessage<DeleteRequest> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 3);
 
 /**
  * @generated from message dashboard.v1.HostConnectionEvent
@@ -105,7 +122,120 @@ export type HostConnectionEvent = Message<"dashboard.v1.HostConnectionEvent"> & 
  * Use `create(HostConnectionEventSchema)` to create a new message.
  */
 export const HostConnectionEventSchema: GenMessage<HostConnectionEvent> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 3);
+  messageDesc(file_v1_dashboard_dashboard, 4);
+
+/**
+ * @generated from message dashboard.v1.Image
+ */
+export type Image = Message<"dashboard.v1.Image"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+
+  /**
+   * @generated from field: string name = 2;
+   */
+  name: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp captured_at = 3;
+   */
+  capturedAt?: Timestamp;
+
+  /**
+   * @generated from field: string status = 4;
+   */
+  status: string;
+
+  /**
+   * @generated from field: optional string error_message = 5;
+   */
+  errorMessage?: string;
+
+  /**
+   * @generated from field: repeated dashboard.v1.ImagePartition partitions = 6;
+   */
+  partitions: ImagePartition[];
+};
+
+/**
+ * Describes the message dashboard.v1.Image.
+ * Use `create(ImageSchema)` to create a new message.
+ */
+export const ImageSchema: GenMessage<Image> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 5);
+
+/**
+ * @generated from message dashboard.v1.ImagePartition
+ */
+export type ImagePartition = Message<"dashboard.v1.ImagePartition"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+
+  /**
+   * @generated from field: int64 partition_number = 2;
+   */
+  partitionNumber: bigint;
+
+  /**
+   * @generated from field: string fstype = 3;
+   */
+  fstype: string;
+
+  /**
+   * @generated from field: uint64 size_bytes = 4;
+   */
+  sizeBytes: bigint;
+};
+
+/**
+ * Describes the message dashboard.v1.ImagePartition.
+ * Use `create(ImagePartitionSchema)` to create a new message.
+ */
+export const ImagePartitionSchema: GenMessage<ImagePartition> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 6);
+
+/**
+ * @generated from message dashboard.v1.GetAllImagesResponse
+ */
+export type GetAllImagesResponse = Message<"dashboard.v1.GetAllImagesResponse"> & {
+  /**
+   * @generated from field: repeated dashboard.v1.Image images = 1;
+   */
+  images: Image[];
+};
+
+/**
+ * Describes the message dashboard.v1.GetAllImagesResponse.
+ * Use `create(GetAllImagesResponseSchema)` to create a new message.
+ */
+export const GetAllImagesResponseSchema: GenMessage<GetAllImagesResponse> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 7);
+
+/**
+ * @generated from message dashboard.v1.CreateImageRequest
+ */
+export type CreateImageRequest = Message<"dashboard.v1.CreateImageRequest"> & {
+  /**
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: int64 host_id = 2;
+   */
+  hostId: bigint;
+};
+
+/**
+ * Describes the message dashboard.v1.CreateImageRequest.
+ * Use `create(CreateImageRequestSchema)` to create a new message.
+ */
+export const CreateImageRequestSchema: GenMessage<CreateImageRequest> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 8);
 
 /**
  * @generated from service dashboard.v1.DashboardService
@@ -124,8 +254,16 @@ export const DashboardService: GenService<{
    */
   updateHostName: {
     methodKind: "unary";
-    input: typeof UpdateHostNameRequestSchema;
+    input: typeof UpdateNameRequestSchema;
     output: typeof HostSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.DeleteHost
+   */
+  deleteHost: {
+    methodKind: "unary";
+    input: typeof DeleteRequestSchema;
+    output: typeof EmptySchema;
   },
   /**
    * sends updates on the host connection status. On first connect receives the current state will be send
@@ -137,6 +275,41 @@ export const DashboardService: GenService<{
     methodKind: "server_streaming";
     input: typeof EmptySchema;
     output: typeof HostConnectionEventSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.GetAllImages
+   */
+  getAllImages: {
+    methodKind: "unary";
+    input: typeof EmptySchema;
+    output: typeof GetAllImagesResponseSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.UpdateImageName
+   */
+  updateImageName: {
+    methodKind: "unary";
+    input: typeof UpdateNameRequestSchema;
+    output: typeof ImageSchema;
+  },
+  /**
+   * Creates an image and captures it from the specified host.
+   * If this host is not online, there will be a task put in the queue
+   *
+   * @generated from rpc dashboard.v1.DashboardService.CreateImage
+   */
+  createImage: {
+    methodKind: "unary";
+    input: typeof CreateImageRequestSchema;
+    output: typeof ImageSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.DeleteImage
+   */
+  deleteImage: {
+    methodKind: "unary";
+    input: typeof DeleteRequestSchema;
+    output: typeof EmptySchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_v1_dashboard_dashboard, 0);

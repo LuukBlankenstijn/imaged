@@ -4,12 +4,17 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-imaged-rpc = { workspace = true, features = ["client-v1"] }
-clap = { version = "4.6.1", features = ["derive"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tonic.workspace = true
 tokio.workspace = true
 futures.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+clap = { version = "4.6.1", features = ["derive"] }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest-eventsource = "0.6"
+
 mac_address = "1.1.8"
