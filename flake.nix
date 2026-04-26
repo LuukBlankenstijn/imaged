@@ -159,6 +159,7 @@
             cp ${pkgs.pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
             cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"
             cp ${partclone}/bin/partclone.vfat "$STAGING/bin/"
+            cp "$(pwd)/target/x86_64-unknown-linux-musl/debug/imaged-client" "$STAGING/bin/"
             ln -sfr "$STAGING/bin/partclone.extfs" "$STAGING/bin/partclone.ext4"
             ln -sf busybox "$STAGING/bin/sh"
 
@@ -197,6 +198,7 @@
               -m 1G \
               -kernel vmlinuz \
               -initrd initramfs.cpio.gz \
+              -drive file=storage.qcow2,format=qcow2,if=virtio \
               -append "console=tty0 console=ttyS0 earlyprintk=vga loglevel=8" \
               -nographic
           '';
@@ -210,19 +212,35 @@
           inherit build-initramfs;
           inherit run-vm;
         };
-        devShells.default = pkgs.mkShell {
-          packages = [
-            rustToolchain
-            build-initramfs
-            run-vm
-          ];
+        devShells.default =
+          with pkgs;
+          pkgs.mkShell {
+            packages = [
+              rustToolchain
+              build-initramfs
+              run-vm
+              buf
+              protoc-gen-tonic
+              protoc-gen-prost
+              protoc-gen-es
+              protoc-gen-prost-crate
+              sqlx-cli
 
-          shellHook = ''
-            cp -f ${pkgs.ipxe}/ipxe.efi ./tftp/ipxe.efi
-            cp -f ${pkgs.ipxe}/undionly.kpxe ./tftp/undionly.kpxe
-            cp -f ${kernel}/bzImage ./vmlinuz
-          '';
-        };
+              nodejs
+              pnpm
+            ];
+
+            env = {
+              CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+              DATABASE_URL = "sqlite://imaged.db";
+            };
+
+            shellHook = ''
+              cp -f ${pkgs.ipxe}/ipxe.efi ./tftp/ipxe.efi
+              cp -f ${pkgs.ipxe}/undionly.kpxe ./tftp/undionly.kpxe
+              cp -f ${kernel}/bzImage ./vmlinuz
+            '';
+          };
       }
     );
 }

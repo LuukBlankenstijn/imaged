@@ -1,0 +1,154 @@
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { Host } from "@imaged/gen/v1/dashboard/dashboard_pb";
+import { dashboardClient } from "./transport";
+import { formatBytes } from "./format";
+import { useConnection } from "./connectionStore";
+
+export function HostsView() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["hosts"],
+    queryFn: () => dashboardClient.getAllHosts({}),
+  });
+
+  const hosts = data?.hosts ?? [];
+
+  return (
+    <>
+      <header className="page-head">
+        <h1 className="page-title">Hosts</h1>
+        <span className="page-meta"><strong>{hosts.length}</strong> tracked</span>
+      </header>
+
+      {isLoading && <div className="state">Loading…</div>}
+      {error && <div className="state error">Failed to load hosts.</div>}
+      {data && hosts.length === 0 && <div className="state">No hosts yet.</div>}
+
+      {hosts.length > 0 && (
+        <div className="table-card">
+        <table className="table">
+          <colgroup>
+            <col className="col-id" />
+            <col className="col-status" />
+            <col className="col-mac" />
+            <col className="col-name" />
+            <col className="col-disk" />
+            <col className="col-actions" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th></th>
+              <th>MAC</th>
+              <th>Name</th>
+              <th className="right">Disk</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {hosts.map((host) => (
+              <HostRow key={host.id.toString()} host={host} />
+            ))}
+          </tbody>
+        </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function HostRow({ host }: { host: Host }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(host.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing) setDraft(host.name);
+  }, [host.name, editing]);
+
+  const mutation = useMutation({
+    mutationFn: (newName: string) =>
+      dashboardClient.updateHostName({ id: host.id, newName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosts"] });
+      setEditing(false);
+    },
+  });
+
+  const dirty = draft !== host.name;
+
+  function commit() {
+    if (dirty) mutation.mutate(draft);
+    else setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(host.name);
+    setEditing(false);
+  }
+
+  return (
+    <tr>
+      <td className="cell-mono cell-id">{host.id.toString()}</td>
+      <td className="cell-status"><StatusDot id={host.id} /></td>
+      <td className="cell-mono cell-mac">{host.macAddress}</td>
+      <td className="cell-name">
+        {editing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              if (e.key === "Escape") cancel();
+            }}
+            disabled={mutation.isPending}
+            placeholder="unnamed"
+          />
+        ) : host.name ? (
+          host.name
+        ) : (
+          <span className="name-empty">unnamed</span>
+        )}
+      </td>
+      <td className="cell-disk">{formatBytes(host.diskSizeBytes)}</td>
+      <td className="cell-actions">
+        <div className="action-group">
+          {editing ? (
+            <>
+              <button
+                className="primary"
+                onClick={commit}
+                disabled={mutation.isPending || !dirty}
+              >
+                {mutation.isPending ? "Saving…" : "Save"}
+              </button>
+              <button onClick={cancel} disabled={mutation.isPending}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="ghost" onClick={() => setEditing(true)}>
+              Rename
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function StatusDot({ id }: { id: bigint }) {
+  const online = useConnection(id);
+  return (
+    <span
+      className={`status-dot${online ? " online" : ""}`}
+      title={online ? "online" : "offline"}
+    />
+  );
+}

@@ -1,0 +1,18 @@
+[package]
+name = "imaged-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+imaged-rpc = { workspace = true, features = ["client-v1", "dashboard-v1"] }
+tonic.workspace = true
+tokio-stream.workspace = true
+derive_more.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+axum = "0.8"
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+async-trait = "0.1.89"
+thiserror.workspace = true
+tonic-web = "0.14.5"

@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package dashboard.v1;
+
+import "google/protobuf/empty.proto";
+
+message Host {
+  int64 id = 1;
+  string mac_address = 2;
+  string name = 3;
+  uint64 disk_size_bytes = 4;
+}
+
+message GetAllHostsResponse {
+  repeated Host hosts = 1;
+}
+
+message UpdateHostNameRequest {
+  int64 id = 1;
+  string new_name = 2;
+}
+
+message HostConnectionEvent {
+  int64 id = 1;
+  bool connected = 2;
+}
+
+service DashboardService {
+  rpc GetAllHosts(google.protobuf.Empty) returns (GetAllHostsResponse) {}
+  rpc UpdateHostName(UpdateHostNameRequest) returns (Host) {}
+  // sends updates on the host connection status. On first connect receives the current state will be send
+  // as a bunch of connected = true messages
+  rpc ConnectionState(google.protobuf.Empty) returns (stream HostConnectionEvent) {}
+}

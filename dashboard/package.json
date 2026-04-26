@@ -1,0 +1,28 @@
+{
+  "name": "@imaged/dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsgo -p . && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsgo -p . --noEmit"
+  },
+  "dependencies": {
+    "@connectrpc/connect": "^2.0.2",
+    "@connectrpc/connect-web": "^2.0.2",
+    "@imaged/gen": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
+    "motion": "^12.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@typescript/native-preview": "^7.0.0-dev",
+    "vite": "^7.0.0"
+  }
+}

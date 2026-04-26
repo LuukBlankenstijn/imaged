@@ -1,0 +1,12 @@
+{
+  "name": "@imaged/gen",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.11.0"
+  }
+}

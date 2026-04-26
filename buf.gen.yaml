@@ -1,0 +1,22 @@
+version: v2
+plugins:
+  - local: protoc-gen-prost
+    out: gen/rs/src
+    opt:
+      - compile_well_known_types
+      - extern_path=.google.protobuf.Timestamp=::prost_types::Timestamp
+      - extern_path=.google.protobuf.Empty=()
+  - local: protoc-gen-tonic
+    out: gen/rs/src
+  - local: protoc-gen-prost-crate
+    out: gen/rs
+    strategy: all
+    opt:
+      - gen_crate=gen/rs/Cargo.toml.tpl
+  - local: protoc-gen-es
+    out: gen/ts
+    opt:
+      - target=ts
+    include_imports: true
+managed:
+  enabled: true
