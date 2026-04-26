@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Host } from "@imaged/gen/v1/dashboard/dashboard_pb";
 import { dashboardClient } from "./transport";
 import { formatBytes } from "./format";
 import { useConnection } from "./connectionStore";
+
+type RowMode = "view" | "renaming" | "deploying";
 
 export function HostsView() {
   const { data, isLoading, error } = useQuery({
@@ -35,7 +37,7 @@ export function HostsView() {
               <col className="col-mac" />
               <col className="col-name" />
               <col className="col-disk" />
-              <col className="col-actions-wide" />
+              <col className="col-actions-host" />
             </colgroup>
             <thead>
               <tr>
@@ -61,25 +63,44 @@ export function HostsView() {
 
 function HostRow({ host }: { host: Host }) {
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
+  const [mode, setMode] = useState<RowMode>("view");
   const [draft, setDraft] = useState(host.name);
+  const [deployImageId, setDeployImageId] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
+    if (mode === "renaming") inputRef.current?.focus();
+  }, [mode]);
 
   useEffect(() => {
-    if (!editing) setDraft(host.name);
-  }, [host.name, editing]);
+    if (mode !== "renaming") setDraft(host.name);
+  }, [host.name, mode]);
+
+  const imagesQuery = useQuery({
+    queryKey: ["images"],
+    queryFn: () => dashboardClient.getAllImages({}),
+    enabled: mode === "deploying",
+  });
+
+  const images = useMemo(
+    () => imagesQuery.data?.images ?? [],
+    [imagesQuery.data],
+  );
+
+  useEffect(() => {
+    if (mode === "deploying" && !deployImageId && images.length > 0) {
+      setDeployImageId(images[0].id.toString());
+    }
+  }, [mode, deployImageId, images]);
 
   const renameMutation = useMutation({
     mutationFn: (newName: string) =>
       dashboardClient.updateHostName({ id: host.id, newName }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["hosts"] });
-      setEditing(false);
+      setMode("view");
     },
+    meta: { errorTitle: "Rename host failed" },
   });
 
   const deleteMutation = useMutation({
@@ -87,19 +108,44 @@ function HostRow({ host }: { host: Host }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["hosts"] });
     },
+    meta: { errorTitle: "Delete host failed" },
+  });
+
+  const deployMutation = useMutation({
+    mutationFn: (imageId: bigint) =>
+      dashboardClient.deploy({ id: host.id, imageId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      setMode("view");
+      setDeployImageId("");
+    },
+    meta: { errorTitle: "Deploy failed" },
   });
 
   const dirty = draft !== host.name;
-  const busy = renameMutation.isPending || deleteMutation.isPending;
+  const busy =
+    renameMutation.isPending ||
+    deleteMutation.isPending ||
+    deployMutation.isPending;
 
-  function commit() {
+  function commitRename() {
     if (dirty) renameMutation.mutate(draft);
-    else setEditing(false);
+    else setMode("view");
+  }
+
+  function startDeploy() {
+    setMode("deploying");
+  }
+
+  function submitDeploy() {
+    if (!deployImageId) return;
+    deployMutation.mutate(BigInt(deployImageId));
   }
 
   function cancel() {
     setDraft(host.name);
-    setEditing(false);
+    setDeployImageId("");
+    setMode("view");
   }
 
   function remove() {
@@ -113,13 +159,13 @@ function HostRow({ host }: { host: Host }) {
       <td className="cell-status"><StatusDot id={host.id} /></td>
       <td className="cell-mono cell-mac">{host.macAddress}</td>
       <td className="cell-name">
-        {editing ? (
+        {mode === "renaming" ? (
           <input
             ref={inputRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
+              if (e.key === "Enter") commitRename();
               if (e.key === "Escape") cancel();
             }}
             disabled={busy}
@@ -134,16 +180,50 @@ function HostRow({ host }: { host: Host }) {
       <td className="cell-disk">{formatBytes(host.diskSizeBytes)}</td>
       <td className="cell-actions">
         <div className="action-group">
-          {editing ? (
+          {mode === "renaming" && (
             <>
-              <button className="primary" onClick={commit} disabled={busy || !dirty}>
+              <button className="primary" onClick={commitRename} disabled={busy || !dirty}>
                 {renameMutation.isPending ? "Saving…" : "Save"}
               </button>
               <button onClick={cancel} disabled={busy}>Cancel</button>
             </>
-          ) : (
+          )}
+
+          {mode === "deploying" && (
             <>
-              <button className="ghost" onClick={() => setEditing(true)} disabled={busy}>
+              <select
+                className="row-select"
+                value={deployImageId}
+                onChange={(e) => setDeployImageId(e.target.value)}
+                disabled={busy || imagesQuery.isLoading}
+              >
+                {imagesQuery.isLoading && <option value="">Loading…</option>}
+                {!imagesQuery.isLoading && images.length === 0 && (
+                  <option value="">No images</option>
+                )}
+                {images.map((image) => (
+                  <option key={image.id.toString()} value={image.id.toString()}>
+                    {image.name || `image ${image.id}`}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="primary"
+                onClick={submitDeploy}
+                disabled={busy || !deployImageId}
+              >
+                {deployMutation.isPending ? "Deploying…" : "Deploy"}
+              </button>
+              <button onClick={cancel} disabled={busy}>Cancel</button>
+            </>
+          )}
+
+          {mode === "view" && (
+            <>
+              <button className="ghost" onClick={startDeploy} disabled={busy}>
+                Deploy
+              </button>
+              <button className="ghost" onClick={() => setMode("renaming")} disabled={busy}>
                 Rename
               </button>
               <button className="ghost danger" onClick={remove} disabled={busy}>

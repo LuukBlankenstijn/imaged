@@ -10,7 +10,7 @@ use serde_json::json;
 use tonic::Status;
 
 use crate::{
-    domain::{host::HostRepository, image::ImageRepository},
+    domain::{host::HostRepository, image::ImageRepository, task::TaskRepository},
     error::AppError,
     registry::HostRegistry,
     service::image::ImageService,
@@ -24,6 +24,7 @@ pub struct HandlerState {
     host_repo: Arc<dyn HostRepository>,
     host_registry: Arc<HostRegistry>,
     image_repo: Arc<dyn ImageRepository>,
+    task_repo: Arc<dyn TaskRepository>,
     image_service: Arc<ImageService>,
 }
 

@@ -7,7 +7,7 @@ edition.workspace = true
 imaged-rpc = { workspace = true, features = ["dashboard-v1"] }
 tonic.workspace = true
 tokio-stream.workspace = true
-derive_more.workspace = true
+derive_more = { workspace = true, features = ["display", "from_str", "is_variant", "unwrap"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true

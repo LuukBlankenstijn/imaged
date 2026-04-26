@@ -23,15 +23,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = setup_database().await?;
     let host_repo = repository::host_repo(pool.clone());
+    let image_repo = repository::image_repo(pool.clone());
+    let task_repo = repository::task_repo(pool);
     let host_registry = Arc::new(registry::HostRegistry::new());
-    let image_repo = repository::image_repo(pool);
     let image_service = Arc::new(service::image::ImageService::new("images".to_string()));
 
     let handler_state = Arc::new(api::HandlerState::new(
-        host_repo.clone(),
-        host_registry.clone(),
-        image_repo.clone(),
-        image_service.clone(),
+        host_repo,
+        host_registry,
+        image_repo,
+        task_repo,
+        image_service,
     ));
     let dashboard_service = dashboard_service_server::DashboardServiceServer::new(
         DashboardHandler::new(handler_state.clone()),

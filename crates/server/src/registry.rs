@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 use derive_more::Constructor;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::domain::types::Task;
+use crate::domain::task::Task;
 use crate::error::{AppError, Result};
 
 #[derive(Constructor)]

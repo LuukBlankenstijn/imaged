@@ -28,7 +28,8 @@ impl ImageRepository for SqliteImageRepository {
             image.id,
             image.name,
             None,
-            image.status.into(),
+            ImageStatus::from_string(image.status)?,
+            image.error,
             Vec::new(),
         ))
     }
@@ -39,7 +40,8 @@ impl ImageRepository for SqliteImageRepository {
                  id as "id!: i64",
                  name,
                  captured_at as "captured_at: DateTime<Utc>",
-                 status
+                 status,
+                 error
             "#,
             name,
             id
@@ -77,7 +79,8 @@ impl ImageRepository for SqliteImageRepository {
             image.id,
             image.name,
             image.captured_at,
-            image.status.into(),
+            ImageStatus::from_string(image.status)?,
+            image.error,
             partitions,
         ))
     }
@@ -91,6 +94,7 @@ impl ImageRepository for SqliteImageRepository {
                 i.id AS "image_id!",
                 i.name AS "image_name!",
                 i.status AS "image_status!",
+                i.error AS "error",
                 i.captured_at as "captured_at: DateTime<Utc>",
                 p.id AS "p_id?: i64",
                 p.partition_number AS "p_num?: i64",
@@ -117,7 +121,9 @@ impl ImageRepository for SqliteImageRepository {
                     row.image_id,
                     row.image_name,
                     row.captured_at,
-                    row.image_status.into(),
+                    ImageStatus::from_string(row.image_status)
+                        .expect("image status error, should never happen"),
+                    row.error,
                     Vec::new(),
                 )
             });

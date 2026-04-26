@@ -4,7 +4,8 @@ CREATE TABLE images (
   id                     INTEGER PRIMARY KEY,
   name                   TEXT    NOT NULL,
   captured_at            TEXT,
-  status                 TEXT    NOT NULL
+  status                 TEXT    NOT NULL,
+  error                  TEXT
 ) STRICT;
 
 CREATE TABLE image_partitions (

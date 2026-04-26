@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Image } from "@imaged/gen/v1/dashboard/dashboard_pb";
 import { dashboardClient } from "./transport";
@@ -8,6 +8,7 @@ export function ImagesView() {
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [draftHostId, setDraftHostId] = useState<string>("");
   const createInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, error } = useQuery({
@@ -15,29 +16,49 @@ export function ImagesView() {
     queryFn: () => dashboardClient.getAllImages({}),
   });
 
+  const hostsQuery = useQuery({
+    queryKey: ["hosts"],
+    queryFn: () => dashboardClient.getAllHosts({}),
+    enabled: creating,
+  });
+
+  const hosts = useMemo(() => hostsQuery.data?.hosts ?? [], [hostsQuery.data]);
+
   const createMutation = useMutation({
-    mutationFn: (name: string) => dashboardClient.createImage({ name }),
+    mutationFn: (input: { name: string; hostId: bigint }) =>
+      dashboardClient.createImage(input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
       setCreating(false);
       setDraftName("");
+      setDraftHostId("");
     },
+    meta: { errorTitle: "Create image failed" },
   });
 
   useEffect(() => {
     if (creating) createInputRef.current?.focus();
   }, [creating]);
 
+  useEffect(() => {
+    if (creating && !draftHostId && hosts.length > 0) {
+      setDraftHostId(hosts[0].id.toString());
+    }
+  }, [creating, draftHostId, hosts]);
+
   const images = data?.images ?? [];
 
   function submitCreate() {
     const name = draftName.trim();
-    if (name) createMutation.mutate(name);
+    if (!name || !draftHostId) return;
+    createMutation.mutate({ name, hostId: BigInt(draftHostId) });
   }
 
   function cancelCreate() {
     setCreating(false);
     setDraftName("");
+    setDraftHostId("");
   }
 
   return (
@@ -69,10 +90,28 @@ export function ImagesView() {
             }}
             disabled={createMutation.isPending}
           />
+          <select
+            className="create-bar-select"
+            value={draftHostId}
+            onChange={(e) => setDraftHostId(e.target.value)}
+            disabled={createMutation.isPending || hostsQuery.isLoading}
+          >
+            {hostsQuery.isLoading && <option value="">Loading hosts…</option>}
+            {!hostsQuery.isLoading && hosts.length === 0 && (
+              <option value="">No hosts available</option>
+            )}
+            {hosts.map((host) => (
+              <option key={host.id.toString()} value={host.id.toString()}>
+                {host.name || host.macAddress || `host ${host.id}`}
+              </option>
+            ))}
+          </select>
           <button
             className="primary"
             onClick={submitCreate}
-            disabled={createMutation.isPending || !draftName.trim()}
+            disabled={
+              createMutation.isPending || !draftName.trim() || !draftHostId
+            }
           >
             {createMutation.isPending ? "Creating…" : "Create"}
           </button>
@@ -144,6 +183,7 @@ function ImageRow({ image }: { image: Image }) {
       queryClient.invalidateQueries({ queryKey: ["images"] });
       setEditing(false);
     },
+    meta: { errorTitle: "Rename image failed" },
   });
 
   const deleteMutation = useMutation({
@@ -151,6 +191,7 @@ function ImageRow({ image }: { image: Image }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["images"] });
     },
+    meta: { errorTitle: "Delete image failed" },
   });
 
   const dirty = draft !== image.name;
@@ -236,10 +277,19 @@ function StatusBadge({ status, error }: { status: string; error?: string }) {
   );
 }
 
-function statusTone(status: string): "ok" | "progress" | "error" | "neutral" {
-  const s = status.toLowerCase();
-  if (s.includes("ready") || s.includes("complete") || s.includes("done")) return "ok";
-  if (s.includes("captur") || s.includes("process") || s.includes("pending")) return "progress";
-  if (s.includes("fail") || s.includes("error")) return "error";
-  return "neutral";
+function statusTone(
+  status: string,
+): "ok" | "progress" | "error" | "neutral" | "empty" {
+  switch (status.toLowerCase()) {
+    case "ready":
+      return "ok";
+    case "capturing":
+      return "progress";
+    case "faulted":
+      return "error";
+    case "empty":
+      return "empty";
+    default:
+      return "neutral";
+  }
 }

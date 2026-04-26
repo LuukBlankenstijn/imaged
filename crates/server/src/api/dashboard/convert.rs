@@ -1,11 +1,13 @@
 use std::time::SystemTime;
 
-use imaged_rpc::dashboard::v1::{self as pb};
+use imaged_rpc::dashboard::v1 as pb;
+use prost_types::Timestamp;
 
 use crate::{
     domain::{
         host::Host,
         image::{Image, ImagePartition},
+        task::{Task, TaskState, TaskType},
     },
     registry::HostConnectionEvent,
 };
@@ -43,13 +45,12 @@ impl From<HostConnectionEvent> for pb::HostConnectionEvent {
 
 impl From<Image> for pb::Image {
     fn from(value: Image) -> Self {
-        let (status, error_message) = value.status.into_parts();
         pb::Image {
             id: value.id,
             name: value.name,
             captured_at: value.captured_at.map(|v| SystemTime::from(v).into()),
-            status,
-            error_message,
+            status: value.status.to_string(),
+            error_message: value.error,
             partitions: value.partitions.into_iter().map(Into::into).collect(),
         }
     }
@@ -63,5 +64,47 @@ impl From<ImagePartition> for pb::ImagePartition {
             fstype: value.fstype,
             size_bytes: value.size_bytes,
         }
+    }
+}
+
+impl From<Task> for pb::Task {
+    fn from(value: Task) -> Self {
+        Self {
+            id: value.id,
+            r#type: value.task_type.into(),
+            host_id: value.host_id,
+            image_id: value.image_id,
+            state: value.state.into(),
+            created_at: Some(Timestamp::from(SystemTime::from(value.created_at))),
+            started_at: value
+                .started_at
+                .map(|v| Timestamp::from(SystemTime::from(v))),
+            finished_at: value
+                .finished_at
+                .map(|v| Timestamp::from(SystemTime::from(v))),
+            error: value.error,
+        }
+    }
+}
+
+impl From<TaskType> for i32 {
+    fn from(value: TaskType) -> Self {
+        match value {
+            TaskType::Capture => pb::TaskType::TypeCapture.into(),
+            TaskType::Deploy => pb::TaskType::TypeDeploy.into(),
+        }
+    }
+}
+
+impl From<TaskState> for i32 {
+    fn from(value: TaskState) -> Self {
+        let state = match value {
+            TaskState::Pending => pb::TaskState::TaskPending,
+            TaskState::Running => pb::TaskState::TaskRunning,
+            TaskState::Done => pb::TaskState::TaskDone,
+            TaskState::Failed => pb::TaskState::TaskFailed,
+            TaskState::Cancelled => pb::TaskState::TaskCancelled,
+        };
+        state.into()
     }
 }

@@ -9,6 +9,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response};
 
 use crate::api::HandlerState;
+use crate::domain::task::TaskType;
+use crate::error::AppError;
 
 mod convert;
 
@@ -80,9 +82,26 @@ impl DashboardService for DashboardHandler {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-    async fn delete_host(&self, req: Request<pb::DeleteRequest>) -> TonicResult {
-        let _ = self.host_repo.delete(req.into_inner().id).await?;
+    async fn delete_host(&self, req: Request<pb::Id>) -> TonicResult {
+        let id = req.into_inner().id;
+        if self.task_repo.get_next(id).await?.is_some() {
+            return Err(AppError::InvalidArgument(format!(
+                "Host with id {id} has active tasks, finish or cancel those first"
+            ))
+            .into());
+        }
+        let _ = self.host_repo.delete(id).await?;
         Ok(Response::new(()))
+    }
+
+    async fn deploy(&self, req: Request<pb::DeployHostRequest>) -> TonicResult<pb::Task> {
+        let request = req.into_inner();
+        let task = self
+            .task_repo
+            .create(TaskType::Deploy, request.id, request.image_id)
+            .await?;
+        // TODO: notify host of task
+        Ok(Response::new(task.into()))
     }
 
     async fn get_all_images(&self, _: Request<()>) -> TonicResult<pb::GetAllImagesResponse> {
@@ -111,13 +130,57 @@ impl DashboardService for DashboardHandler {
         let request = req.into_inner();
         let image = self.image_repo.create_image(request.name).await?;
 
-        // TODO: create a capture task here
+        self.task_repo
+            .create(TaskType::Capture, request.host_id, image.id)
+            .await?;
+        // TODO: notify host of task
 
         Ok(Response::new(image.into()))
     }
 
-    async fn delete_image(&self, req: Request<pb::DeleteRequest>) -> TonicResult {
-        self.image_repo.delete_image(req.into_inner().id).await?;
+    async fn delete_image(&self, req: Request<pb::Id>) -> TonicResult {
+        let request = req.into_inner();
+        if !self
+            .task_repo
+            .get_active_by_image(request.id)
+            .await?
+            .is_empty()
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "image with id {} has active tasks, first cancel or complete those",
+                request.id
+            ))
+            .into());
+        };
+
+        self.image_repo.delete_image(request.id).await?;
+        Ok(Response::new(()))
+    }
+
+    async fn get_all_tasks(&self, _: Request<()>) -> TonicResult<pb::GetAllTasksResponse> {
+        Ok(Response::new(pb::GetAllTasksResponse {
+            tasks: self
+                .task_repo
+                .get_all()
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }))
+    }
+
+    async fn cancel_task(&self, req: Request<pb::Id>) -> TonicResult {
+        let request = req.into_inner();
+        let task = self.task_repo.get(request.id).await?;
+        if !(task.state.is_pending() || task.state.is_running()) {
+            return Err(AppError::InvalidArgument(format!(
+                "cannot cancel task {}, task is not pending or running",
+                request.id
+            ))
+            .into());
+        }
+        self.task_repo.cancel(task.id).await?;
+        // TODO: notify host of cancelation
         Ok(Response::new(()))
     }
 }

@@ -2,8 +2,8 @@
 // @generated from file v1/dashboard/dashboard.proto (package dashboard.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { EmptySchema, Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_empty, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
@@ -12,7 +12,24 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file v1/dashboard/dashboard.proto.
  */
 export const file_v1_dashboard_dashboard: GenFile = /*@__PURE__*/
-  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiTgoESG9zdBIKCgJpZBgBIAEoAxITCgttYWNfYWRkcmVzcxgCIAEoCRIMCgRuYW1lGAMgASgJEhcKD2Rpc2tfc2l6ZV9ieXRlcxgEIAEoBCI4ChNHZXRBbGxIb3N0c1Jlc3BvbnNlEiEKBWhvc3RzGAEgAygLMhIuZGFzaGJvYXJkLnYxLkhvc3QiMQoRVXBkYXRlTmFtZVJlcXVlc3QSCgoCaWQYASABKAMSEAoIbmV3X25hbWUYAiABKAkiGwoNRGVsZXRlUmVxdWVzdBIKCgJpZBgBIAEoAyI0ChNIb3N0Q29ubmVjdGlvbkV2ZW50EgoKAmlkGAEgASgDEhEKCWNvbm5lY3RlZBgCIAEoCCLCAQoFSW1hZ2USCgoCaWQYASABKAMSDAoEbmFtZRgCIAEoCRIvCgtjYXB0dXJlZF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDgoGc3RhdHVzGAQgASgJEhoKDWVycm9yX21lc3NhZ2UYBSABKAlIAIgBARIwCgpwYXJ0aXRpb25zGAYgAygLMhwuZGFzaGJvYXJkLnYxLkltYWdlUGFydGl0aW9uQhAKDl9lcnJvcl9tZXNzYWdlIloKDkltYWdlUGFydGl0aW9uEgoKAmlkGAEgASgDEhgKEHBhcnRpdGlvbl9udW1iZXIYAiABKAMSDgoGZnN0eXBlGAMgASgJEhIKCnNpemVfYnl0ZXMYBCABKAQiOwoUR2V0QWxsSW1hZ2VzUmVzcG9uc2USIwoGaW1hZ2VzGAEgAygLMhMuZGFzaGJvYXJkLnYxLkltYWdlIjMKEkNyZWF0ZUltYWdlUmVxdWVzdBIMCgRuYW1lGAEgASgJEg8KB2hvc3RfaWQYAiABKAMy5QQKEERhc2hib2FyZFNlcnZpY2USSgoLR2V0QWxsSG9zdHMSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuR2V0QWxsSG9zdHNSZXNwb25zZSIAEkcKDlVwZGF0ZUhvc3ROYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhIuZGFzaGJvYXJkLnYxLkhvc3QiABJDCgpEZWxldGVIb3N0EhsuZGFzaGJvYXJkLnYxLkRlbGV0ZVJlcXVlc3QaFi5nb29nbGUucHJvdG9idWYuRW1wdHkiABJQCg9Db25uZWN0aW9uU3RhdGUSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuSG9zdENvbm5lY3Rpb25FdmVudCIAMAESTAoMR2V0QWxsSW1hZ2VzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiIuZGFzaGJvYXJkLnYxLkdldEFsbEltYWdlc1Jlc3BvbnNlIgASSQoPVXBkYXRlSW1hZ2VOYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRgoLQ3JlYXRlSW1hZ2USIC5kYXNoYm9hcmQudjEuQ3JlYXRlSW1hZ2VSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRAoLRGVsZXRlSW1hZ2USGy5kYXNoYm9hcmQudjEuRGVsZXRlUmVxdWVzdBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAQnMKEGNvbS5kYXNoYm9hcmQudjFCDkRhc2hib2FyZFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_empty, file_google_protobuf_timestamp]);
+  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiEAoCSWQSCgoCaWQYASABKAMiTgoESG9zdBIKCgJpZBgBIAEoAxITCgttYWNfYWRkcmVzcxgCIAEoCRIMCgRuYW1lGAMgASgJEhcKD2Rpc2tfc2l6ZV9ieXRlcxgEIAEoBCI4ChNHZXRBbGxIb3N0c1Jlc3BvbnNlEiEKBWhvc3RzGAEgAygLMhIuZGFzaGJvYXJkLnYxLkhvc3QiMQoRVXBkYXRlTmFtZVJlcXVlc3QSCgoCaWQYASABKAMSEAoIbmV3X25hbWUYAiABKAkiNAoTSG9zdENvbm5lY3Rpb25FdmVudBIKCgJpZBgBIAEoAxIRCgljb25uZWN0ZWQYAiABKAgiMQoRRGVwbG95SG9zdFJlcXVlc3QSCgoCaWQYASABKAMSEAoIaW1hZ2VfaWQYAiABKAMiwgEKBUltYWdlEgoKAmlkGAEgASgDEgwKBG5hbWUYAiABKAkSLwoLY2FwdHVyZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnN0YXR1cxgEIAEoCRIaCg1lcnJvcl9tZXNzYWdlGAUgASgJSACIAQESMAoKcGFydGl0aW9ucxgGIAMoCzIcLmRhc2hib2FyZC52MS5JbWFnZVBhcnRpdGlvbkIQCg5fZXJyb3JfbWVzc2FnZSJaCg5JbWFnZVBhcnRpdGlvbhIKCgJpZBgBIAEoAxIYChBwYXJ0aXRpb25fbnVtYmVyGAIgASgDEg4KBmZzdHlwZRgDIAEoCRISCgpzaXplX2J5dGVzGAQgASgEIjsKFEdldEFsbEltYWdlc1Jlc3BvbnNlEiMKBmltYWdlcxgBIAMoCzITLmRhc2hib2FyZC52MS5JbWFnZSIzChJDcmVhdGVJbWFnZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIPCgdob3N0X2lkGAIgASgDIv4CCgRUYXNrEgoKAmlkGAEgASgDEiQKBHR5cGUYAiABKA4yFi5kYXNoYm9hcmQudjEuVGFza1R5cGUSFAoHaG9zdF9pZBgDIAEoA0gAiAEBEhUKCGltYWdlX2lkGAQgASgDSAGIAQESJgoFc3RhdGUYBSABKA4yFy5kYXNoYm9hcmQudjEuVGFza1N0YXRlEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjMKCnN0YXJ0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAKIAQESNAoLZmluaXNoZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAOIAQESEgoFZXJyb3IYCSABKAlIBIgBAUIKCghfaG9zdF9pZEILCglfaW1hZ2VfaWRCDQoLX3N0YXJ0ZWRfYXRCDgoMX2ZpbmlzaGVkX2F0QggKBl9lcnJvciI4ChNHZXRBbGxUYXNrc1Jlc3BvbnNlEiEKBXRhc2tzGAEgAygLMhIuZGFzaGJvYXJkLnYxLlRhc2sqQwoIVGFza1R5cGUSFAoQVFlQRV9VTlNQRUNJRklFRBAAEhAKDFRZUEVfQ0FQVFVSRRABEg8KC1RZUEVfREVQTE9ZEAIqeQoJVGFza1N0YXRlEhQKEFRBU0tfVU5TUEVDSUZJRUQQABIQCgxUQVNLX1BFTkRJTkcQARIQCgxUQVNLX1JVTk5JTkcQAhINCglUQVNLX0RPTkUQAxISCg5UQVNLX0NBTkNFTExFRBAEEg8KC1RBU0tfRkFJTEVEEAUylgYKEERhc2hib2FyZFNlcnZpY2USSgoLR2V0QWxsSG9zdHMSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuR2V0QWxsSG9zdHNSZXNwb25zZSIAEkcKDlVwZGF0ZUhvc3ROYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhIuZGFzaGJvYXJkLnYxLkhvc3QiABI4CgpEZWxldGVIb3N0EhAuZGFzaGJvYXJkLnYxLklkGhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5IgASUAoPQ29ubmVjdGlvblN0YXRlEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiEuZGFzaGJvYXJkLnYxLkhvc3RDb25uZWN0aW9uRXZlbnQiADABEj8KBkRlcGxveRIfLmRhc2hib2FyZC52MS5EZXBsb3lIb3N0UmVxdWVzdBoSLmRhc2hib2FyZC52MS5UYXNrIgASTAoMR2V0QWxsSW1hZ2VzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiIuZGFzaGJvYXJkLnYxLkdldEFsbEltYWdlc1Jlc3BvbnNlIgASSQoPVXBkYXRlSW1hZ2VOYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRgoLQ3JlYXRlSW1hZ2USIC5kYXNoYm9hcmQudjEuQ3JlYXRlSW1hZ2VSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASOQoLRGVsZXRlSW1hZ2USEC5kYXNoYm9hcmQudjEuSWQaFi5nb29nbGUucHJvdG9idWYuRW1wdHkiABJKCgtHZXRBbGxUYXNrcxIWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eRohLmRhc2hib2FyZC52MS5HZXRBbGxUYXNrc1Jlc3BvbnNlIgASOAoKQ2FuY2VsVGFzaxIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAQnMKEGNvbS5kYXNoYm9hcmQudjFCDkRhc2hib2FyZFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_empty, file_google_protobuf_timestamp]);
+
+/**
+ * @generated from message dashboard.v1.Id
+ */
+export type Id = Message<"dashboard.v1.Id"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+};
+
+/**
+ * Describes the message dashboard.v1.Id.
+ * Use `create(IdSchema)` to create a new message.
+ */
+export const IdSchema: GenMessage<Id> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 0);
 
 /**
  * @generated from message dashboard.v1.Host
@@ -44,7 +61,7 @@ export type Host = Message<"dashboard.v1.Host"> & {
  * Use `create(HostSchema)` to create a new message.
  */
 export const HostSchema: GenMessage<Host> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 0);
+  messageDesc(file_v1_dashboard_dashboard, 1);
 
 /**
  * @generated from message dashboard.v1.GetAllHostsResponse
@@ -61,7 +78,7 @@ export type GetAllHostsResponse = Message<"dashboard.v1.GetAllHostsResponse"> & 
  * Use `create(GetAllHostsResponseSchema)` to create a new message.
  */
 export const GetAllHostsResponseSchema: GenMessage<GetAllHostsResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 1);
+  messageDesc(file_v1_dashboard_dashboard, 2);
 
 /**
  * @generated from message dashboard.v1.UpdateNameRequest
@@ -83,23 +100,6 @@ export type UpdateNameRequest = Message<"dashboard.v1.UpdateNameRequest"> & {
  * Use `create(UpdateNameRequestSchema)` to create a new message.
  */
 export const UpdateNameRequestSchema: GenMessage<UpdateNameRequest> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 2);
-
-/**
- * @generated from message dashboard.v1.DeleteRequest
- */
-export type DeleteRequest = Message<"dashboard.v1.DeleteRequest"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-};
-
-/**
- * Describes the message dashboard.v1.DeleteRequest.
- * Use `create(DeleteRequestSchema)` to create a new message.
- */
-export const DeleteRequestSchema: GenMessage<DeleteRequest> = /*@__PURE__*/
   messageDesc(file_v1_dashboard_dashboard, 3);
 
 /**
@@ -123,6 +123,28 @@ export type HostConnectionEvent = Message<"dashboard.v1.HostConnectionEvent"> & 
  */
 export const HostConnectionEventSchema: GenMessage<HostConnectionEvent> = /*@__PURE__*/
   messageDesc(file_v1_dashboard_dashboard, 4);
+
+/**
+ * @generated from message dashboard.v1.DeployHostRequest
+ */
+export type DeployHostRequest = Message<"dashboard.v1.DeployHostRequest"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+
+  /**
+   * @generated from field: int64 image_id = 2;
+   */
+  imageId: bigint;
+};
+
+/**
+ * Describes the message dashboard.v1.DeployHostRequest.
+ * Use `create(DeployHostRequestSchema)` to create a new message.
+ */
+export const DeployHostRequestSchema: GenMessage<DeployHostRequest> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 5);
 
 /**
  * @generated from message dashboard.v1.Image
@@ -164,7 +186,7 @@ export type Image = Message<"dashboard.v1.Image"> & {
  * Use `create(ImageSchema)` to create a new message.
  */
 export const ImageSchema: GenMessage<Image> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 5);
+  messageDesc(file_v1_dashboard_dashboard, 6);
 
 /**
  * @generated from message dashboard.v1.ImagePartition
@@ -196,7 +218,7 @@ export type ImagePartition = Message<"dashboard.v1.ImagePartition"> & {
  * Use `create(ImagePartitionSchema)` to create a new message.
  */
 export const ImagePartitionSchema: GenMessage<ImagePartition> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 6);
+  messageDesc(file_v1_dashboard_dashboard, 7);
 
 /**
  * @generated from message dashboard.v1.GetAllImagesResponse
@@ -213,7 +235,7 @@ export type GetAllImagesResponse = Message<"dashboard.v1.GetAllImagesResponse"> 
  * Use `create(GetAllImagesResponseSchema)` to create a new message.
  */
 export const GetAllImagesResponseSchema: GenMessage<GetAllImagesResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 7);
+  messageDesc(file_v1_dashboard_dashboard, 8);
 
 /**
  * @generated from message dashboard.v1.CreateImageRequest
@@ -235,7 +257,148 @@ export type CreateImageRequest = Message<"dashboard.v1.CreateImageRequest"> & {
  * Use `create(CreateImageRequestSchema)` to create a new message.
  */
 export const CreateImageRequestSchema: GenMessage<CreateImageRequest> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 8);
+  messageDesc(file_v1_dashboard_dashboard, 9);
+
+/**
+ * @generated from message dashboard.v1.Task
+ */
+export type Task = Message<"dashboard.v1.Task"> & {
+  /**
+   * @generated from field: int64 id = 1;
+   */
+  id: bigint;
+
+  /**
+   * @generated from field: dashboard.v1.TaskType type = 2;
+   */
+  type: TaskType;
+
+  /**
+   * @generated from field: optional int64 host_id = 3;
+   */
+  hostId?: bigint;
+
+  /**
+   * @generated from field: optional int64 image_id = 4;
+   */
+  imageId?: bigint;
+
+  /**
+   * @generated from field: dashboard.v1.TaskState state = 5;
+   */
+  state: TaskState;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 6;
+   */
+  createdAt?: Timestamp;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp started_at = 7;
+   */
+  startedAt?: Timestamp;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp finished_at = 8;
+   */
+  finishedAt?: Timestamp;
+
+  /**
+   * @generated from field: optional string error = 9;
+   */
+  error?: string;
+};
+
+/**
+ * Describes the message dashboard.v1.Task.
+ * Use `create(TaskSchema)` to create a new message.
+ */
+export const TaskSchema: GenMessage<Task> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 10);
+
+/**
+ * @generated from message dashboard.v1.GetAllTasksResponse
+ */
+export type GetAllTasksResponse = Message<"dashboard.v1.GetAllTasksResponse"> & {
+  /**
+   * @generated from field: repeated dashboard.v1.Task tasks = 1;
+   */
+  tasks: Task[];
+};
+
+/**
+ * Describes the message dashboard.v1.GetAllTasksResponse.
+ * Use `create(GetAllTasksResponseSchema)` to create a new message.
+ */
+export const GetAllTasksResponseSchema: GenMessage<GetAllTasksResponse> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_dashboard, 11);
+
+/**
+ * @generated from enum dashboard.v1.TaskType
+ */
+export enum TaskType {
+  /**
+   * @generated from enum value: TYPE_UNSPECIFIED = 0;
+   */
+  TYPE_UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: TYPE_CAPTURE = 1;
+   */
+  TYPE_CAPTURE = 1,
+
+  /**
+   * @generated from enum value: TYPE_DEPLOY = 2;
+   */
+  TYPE_DEPLOY = 2,
+}
+
+/**
+ * Describes the enum dashboard.v1.TaskType.
+ */
+export const TaskTypeSchema: GenEnum<TaskType> = /*@__PURE__*/
+  enumDesc(file_v1_dashboard_dashboard, 0);
+
+/**
+ * @generated from enum dashboard.v1.TaskState
+ */
+export enum TaskState {
+  /**
+   * @generated from enum value: TASK_UNSPECIFIED = 0;
+   */
+  TASK_UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: TASK_PENDING = 1;
+   */
+  TASK_PENDING = 1,
+
+  /**
+   * @generated from enum value: TASK_RUNNING = 2;
+   */
+  TASK_RUNNING = 2,
+
+  /**
+   * @generated from enum value: TASK_DONE = 3;
+   */
+  TASK_DONE = 3,
+
+  /**
+   * @generated from enum value: TASK_CANCELLED = 4;
+   */
+  TASK_CANCELLED = 4,
+
+  /**
+   * @generated from enum value: TASK_FAILED = 5;
+   */
+  TASK_FAILED = 5,
+}
+
+/**
+ * Describes the enum dashboard.v1.TaskState.
+ */
+export const TaskStateSchema: GenEnum<TaskState> = /*@__PURE__*/
+  enumDesc(file_v1_dashboard_dashboard, 1);
 
 /**
  * @generated from service dashboard.v1.DashboardService
@@ -262,7 +425,7 @@ export const DashboardService: GenService<{
    */
   deleteHost: {
     methodKind: "unary";
-    input: typeof DeleteRequestSchema;
+    input: typeof IdSchema;
     output: typeof EmptySchema;
   },
   /**
@@ -275,6 +438,14 @@ export const DashboardService: GenService<{
     methodKind: "server_streaming";
     input: typeof EmptySchema;
     output: typeof HostConnectionEventSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.Deploy
+   */
+  deploy: {
+    methodKind: "unary";
+    input: typeof DeployHostRequestSchema;
+    output: typeof TaskSchema;
   },
   /**
    * @generated from rpc dashboard.v1.DashboardService.GetAllImages
@@ -308,7 +479,23 @@ export const DashboardService: GenService<{
    */
   deleteImage: {
     methodKind: "unary";
-    input: typeof DeleteRequestSchema;
+    input: typeof IdSchema;
+    output: typeof EmptySchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.GetAllTasks
+   */
+  getAllTasks: {
+    methodKind: "unary";
+    input: typeof EmptySchema;
+    output: typeof GetAllTasksResponseSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.CancelTask
+   */
+  cancelTask: {
+    methodKind: "unary";
+    input: typeof IdSchema;
     output: typeof EmptySchema;
   },
 }> = /*@__PURE__*/

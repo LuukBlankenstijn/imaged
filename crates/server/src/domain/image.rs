@@ -1,56 +1,26 @@
-use std::fmt::Display;
+use std::str::FromStr;
 
-use derive_more::Constructor;
+use derive_more::{Constructor, Display, FromStr, IsVariant};
 use serde::Serialize;
 
-use crate::error::Result;
+use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 
-#[derive(Debug)]
+#[derive(Debug, Display, FromStr, IsVariant)]
+#[display(rename_all = "lowercase")]
 pub enum ImageStatus {
     Empty,
     Capturing,
     Ready,
-    Faulted(String),
+    Faulted,
 }
 
 impl ImageStatus {
-    pub fn into_parts(self) -> (String, Option<String>) {
-        match self {
-            ImageStatus::Empty => ("empty".to_string(), None),
-            ImageStatus::Capturing => ("capturing".to_string(), None),
-            ImageStatus::Ready => ("ready".to_string(), None),
-            ImageStatus::Faulted(msg) => ("faulted".to_string(), Some(msg)),
-        }
-    }
-}
-
-impl From<String> for ImageStatus {
-    fn from(value: String) -> Self {
-        let val = value.to_lowercase();
-        match val.as_str() {
-            "empty" => ImageStatus::Empty,
-            "capturing" => ImageStatus::Capturing,
-            "ready" => ImageStatus::Ready,
-            _ if val.starts_with("faulted(") && val.ends_with(')') => {
-                let msg = &val[8..val.len() - 1];
-                ImageStatus::Faulted(msg.to_string())
-            }
-            _ => ImageStatus::Faulted("invalid status".to_string()),
-        }
-    }
-}
-
-impl Display for ImageStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let string = match self {
-            ImageStatus::Empty => "empty".to_string(),
-            ImageStatus::Capturing => "capturing".to_string(),
-            ImageStatus::Ready => "ready".to_string(),
-            ImageStatus::Faulted(msg) => format!("faulted({msg})"),
-        };
-
-        write!(f, "{}", string)
+    pub fn from_string(value: String) -> Result<Self> {
+        ImageStatus::from_str(&value).map_err(|e| {
+            tracing::info!(err=%e, "failed to convert string to ImageStatus");
+            AppError::Internal("conversion error".to_string())
+        })
     }
 }
 
@@ -60,6 +30,7 @@ pub struct Image {
     pub name: String,
     pub captured_at: Option<DateTime<Utc>>,
     pub status: ImageStatus,
+    pub error: Option<String>,
     pub partitions: Vec<ImagePartition>,
 }
 
