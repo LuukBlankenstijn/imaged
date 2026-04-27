@@ -1,7 +1,6 @@
 use std::io;
 
 use futures::TryStreamExt;
-use serde_json::json;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 
@@ -33,26 +32,5 @@ impl ApiClient {
         let stream = response.bytes_stream().map_err(io::Error::other);
 
         Ok(StreamReader::new(stream))
-    }
-
-    pub async fn mark_deploy_finished(&self, image_id: i64) -> anyhow::Result<()> {
-        let url = self.url(&format!("client/deploy/{}/finished", image_id))?;
-
-        self.send(self.client.post(url), "mark_deploy_finished")
-            .await?;
-        Ok(())
-    }
-
-    pub async fn mark_deploy_failed(&self, image_id: i64, err: String) -> anyhow::Result<()> {
-        let url = self.url(&format!("client/deploy/{}/failed", image_id))?;
-
-        self.send(
-            self.client.post(url).json(&json!({
-                "error": err
-            })),
-            "mark_deploy_failed",
-        )
-        .await?;
-        Ok(())
     }
 }

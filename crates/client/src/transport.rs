@@ -1,6 +1,7 @@
 mod capture;
 mod deploy;
 pub mod sse;
+mod task;
 
 use reqwest::{Client, RequestBuilder, Response, Url};
 

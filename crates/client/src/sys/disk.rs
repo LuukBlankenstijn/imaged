@@ -78,14 +78,6 @@ pub async fn find_target_disk() -> Result<BlockDevice, Error> {
     Ok(disk.clone())
 }
 
-pub async fn enumerate_disk(device: &str) -> Result<BlockDevice, Error> {
-    lsblk(Some(device))
-        .await?
-        .into_iter()
-        .next()
-        .ok_or(Error::NoDisk)
-}
-
 async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>, Error> {
     let mut cmd = Command::new("lsblk");
     cmd.args(["-J", "-b", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN"]);

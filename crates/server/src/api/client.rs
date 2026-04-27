@@ -1,6 +1,7 @@
 mod capture;
 mod deploy;
 mod sse;
+mod task;
 
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{api::HandlerState, error::AppError};
+use crate::{api::HandlerState, domain::task::Task, error::AppError};
 
 pub fn router() -> Router<Arc<HandlerState>> {
     Router::new()
@@ -24,22 +25,8 @@ pub fn router() -> Router<Arc<HandlerState>> {
             "/client/images/{image_id}/parttable",
             put(capture::upload_partition_table).get(deploy::download_partition_table),
         )
-        .route(
-            "/client/capture/{image_id}/finished",
-            post(capture::mark_finished),
-        )
-        .route(
-            "/client/capture/{image_id}/failed",
-            post(capture::mark_failed),
-        )
-        .route(
-            "/client/deploy/{image_id}/finished",
-            post(deploy::mark_finished),
-        )
-        .route(
-            "/client/deploy/{image_id}/failed",
-            post(deploy::mark_failed),
-        )
+        .route("/client/task/{task_id}/finished", post(task::mark_finished))
+        .route("/client/task/{task_id}/faulted", post(task::mark_faulted))
         .route("/client/hosts/stream", get(sse::start_stream))
 }
 
@@ -75,4 +62,13 @@ where
             .map(AgentMac)
             .ok_or(AppError::InvalidArgument("missing mac".into()))
     }
+}
+
+async fn get_next_task(state: Arc<HandlerState>, mac: &str) -> crate::error::Result<Task> {
+    let host = state.host_repo.get_by_mac(mac).await?;
+    let task =
+        state.task_repo.get_next(host.id).await?.ok_or_else(|| {
+            AppError::InvalidArgument(format!("No active task found for host {mac}"))
+        })?;
+    Ok(task)
 }

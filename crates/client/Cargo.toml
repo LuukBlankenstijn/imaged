@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 imaged-shared.workspace = true
 tokio-util.workspace = true
+derive_more.workspace = true
 
 clap = { version = "4.6.1", features = ["derive"] }
 

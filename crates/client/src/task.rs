@@ -1,39 +1,17 @@
 mod capture;
 mod deploy;
-use anyhow::Result;
-use tokio::{sync::Mutex, task::JoinHandle};
+mod types;
 
 use std::sync::Arc;
+pub use types::ClientState;
+use types::RunningTask;
 
 use imaged_shared::{ServerEvent, Task, TaskType};
 use tokio_util::sync::CancellationToken;
 
-use crate::transport::ApiClient;
+use crate::task::types::ClientTaskExt;
 
-pub struct ClientState {
-    http: crate::transport::ApiClient,
-    current_task: Mutex<Option<RunningTask>>,
-}
-
-impl ClientState {
-    pub fn new(base_url: String, mac: String) -> Result<Self> {
-        Ok(Self {
-            http: ApiClient::new(base_url, mac)?,
-            current_task: Mutex::new(None),
-        })
-    }
-
-    pub fn client(&self) -> &ApiClient {
-        &self.http
-    }
-}
-
-struct RunningTask {
-    task_id: i64,
-    // can be used for forcefully aborting the task
-    _handle: JoinHandle<()>,
-    cancel: tokio_util::sync::CancellationToken,
-}
+const PARTTABLE_TMP: &str = "/parttable.bin";
 
 pub async fn handle_message(state: Arc<ClientState>, msg: ServerEvent) {
     match msg {
@@ -55,9 +33,7 @@ async fn start_task(state: Arc<ClientState>, task: Task) {
 
     let handle = tokio::spawn(async move {
         tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
-        if let Err(e) = run_task(state_for_task.clone(), task, cancel_for_task).await {
-            tracing::error!(err=%e, task_id=%task.id, "task failed");
-        }
+        run_task(state_for_task.clone(), task, cancel_for_task).await;
         let mut current = state_for_task.current_task.lock().await;
         *current = None;
     });
@@ -69,31 +45,25 @@ async fn start_task(state: Arc<ClientState>, task: Task) {
     });
 }
 
-async fn run_task(
-    state: Arc<ClientState>,
-    task: Task,
-    cancel_for_task: CancellationToken,
-) -> Result<()> {
-    match task.task_type {
+async fn run_task(state: Arc<ClientState>, task: Task, cancel_for_task: CancellationToken) {
+    let result = match task.task_type {
         TaskType::Capture => {
-            let result = capture::run(state.clone(), task.image_id, cancel_for_task).await;
-            if let Err(ref e) = result {
-                let _ = state
-                    .http
-                    .mark_capture_failed(task.image_id, format!("{}", e))
-                    .await;
-            };
-            result
+            let task = capture::CaptureTask::new(task.image_id);
+            task.run(state.clone(), cancel_for_task).await
         }
         TaskType::Deploy => {
-            let result = deploy::run(state.clone(), task.image_id, cancel_for_task).await;
-            if let Err(ref e) = result {
-                let _ = state
-                    .http
-                    .mark_deploy_failed(task.image_id, format!("{}", e))
-                    .await;
-            };
-            result
+            let task = deploy::DeployTask::new(task.image_id);
+            task.run(state.clone(), cancel_for_task).await
+        }
+    };
+    match result {
+        Ok(_) => {
+            let _ = state.http.mark_task_finished(task.id).await;
+            tracing::info!(task_id=%task.id, task_type=%task.task_type, "task completed");
+        }
+        Err(e) => {
+            let _ = state.http.mark_task_failed(task.id, &format!("{e}")).await;
+            tracing::error!(err=%e, task_id=%task.id, task_type=%task.task_type, "task failed");
         }
     }
 }
