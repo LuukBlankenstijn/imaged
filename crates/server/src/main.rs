@@ -13,12 +13,13 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use tower_http::trace::TraceLayer;
 
 use crate::api::dashboard::DashboardHandler;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    imaged_shared::setup_logging();
+    imaged_shared::setup_logging!("debug");
 
     let pool = setup_database().await?;
     let host_repo = repository::host_repo(pool.clone());
@@ -47,7 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let routes = Router::new()
         .merge(api::client::router().with_state(handler_state))
-        .merge(grpc_router);
+        .merge(grpc_router)
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     let service = routes.into_make_service();

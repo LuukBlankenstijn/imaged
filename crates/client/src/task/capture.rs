@@ -26,8 +26,6 @@ pub async fn run(state: Arc<ClientState>, image_id: i64, cancel: CancellationTok
     }
 
     state.http.mark_capture_finished(image_id).await?;
-
-    // 3.mark capture as done at the server
     Ok(())
 }
 
@@ -60,17 +58,17 @@ async fn capture_partition(
         tracing::info!(name=%partition.name, "skipping partition with no fstype");
         return Ok(());
     };
-    let bin = partition
+    let partclone_bin = partition
         .get_partclone_binary()
         .ok_or_else(|| anyhow::anyhow!("filetype not supported: {fstype}"))?;
-    let mut child = tokio::process::Command::new(bin)
+    let mut child = tokio::process::Command::new(partclone_bin)
         .args([
-            "-c",
-            "-s",
-            &partition.get_device(),
-            "-L",
+            "--clone",
+            "--logfile",
             "/tmp/partclone-log",
-            "-o",
+            "--source",
+            &partition.get_device(),
+            "--output",
             "-",
         ])
         .stdout(std::process::Stdio::piped())

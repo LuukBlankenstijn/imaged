@@ -1,9 +1,9 @@
 -- Add migration script here
 CREATE TABLE tasks (
-  id          INTEGER PRIMARY KEY,
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
   type        TEXT    NOT NULL,    -- 'deploy' | 'capture'
-  host_id   INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
-  image_id  INTEGER REFERENCES images(id) ON DELETE SET NULL,
+  host_id     INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+  image_id    INTEGER REFERENCES images(id) ON DELETE SET NULL,
   state       TEXT    NOT NULL,    -- 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
   created_at  TEXT    NOT NULL,
   started_at  TEXT,

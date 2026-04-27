@@ -235,7 +235,7 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(row.try_into()?)
     }
 
-    async fn finish(&self, id: i64) -> Result {
+    async fn mark_finished(&self, id: i64) -> Result {
         let state = TaskState::Done.to_string();
         let now = Utc::now();
         sqlx::query!(

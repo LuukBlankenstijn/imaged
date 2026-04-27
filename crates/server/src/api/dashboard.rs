@@ -157,6 +157,7 @@ impl DashboardService for DashboardHandler {
         };
 
         self.image_repo.delete_image(request.id).await?;
+        self.image_service.clear_image_data(request.id).await?;
         Ok(Response::new(()))
     }
 

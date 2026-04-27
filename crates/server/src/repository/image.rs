@@ -14,6 +14,12 @@ pub struct SqliteImageRepository {
 
 #[async_trait::async_trait]
 impl ImageRepository for SqliteImageRepository {
+    async fn get_status(&self, id: i64) -> Result<ImageStatus> {
+        let result = sqlx::query!("SELECT status FROM images WHERE id = ?", id)
+            .fetch_one(&self.pool)
+            .await?;
+        return ImageStatus::from_string(result.status);
+    }
     async fn create_image(&self, name: String) -> Result<Image> {
         let status = ImageStatus::Empty.to_string();
         let image = sqlx::query!(

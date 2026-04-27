@@ -6,10 +6,10 @@ mod transport;
 
 use std::sync::Arc;
 
-use crate::transport::sse::start_stream;
 use clap::Parser;
 use futures::StreamExt;
 use futures::pin_mut;
+use imaged_shared::setup_logging;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -19,18 +19,20 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    imaged_shared::setup_logging();
+    setup_logging!("debug");
 
     let args = Args::parse();
     let server = args.server;
     let mac = sys::mac::get_mac()?;
     let disk = sys::disk::find_target_disk().await?;
 
-    let stream = start_stream(server.clone(), mac.clone(), disk.size).await?;
+    // create the state
+    let state = Arc::new(task::ClientState::new(server, mac)?);
+    // start the stream
+    let stream = state.client().start_stream(disk.size).await?;
     pin_mut!(stream);
 
-    let state = Arc::new(task::ClientState::new(server, mac)?);
-
+    // start the handler for the shell
     tokio::spawn(shell::watch_for_shell_hotkey());
     tracing::info!("starting imaged-client");
     while let Some(message) = stream.next().await {

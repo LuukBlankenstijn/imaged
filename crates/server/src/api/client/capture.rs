@@ -20,7 +20,6 @@ use futures::TryStreamExt;
 use serde::Deserialize;
 
 use super::HandlerState;
-
 pub async fn upload_partition_data(
     State(state): State<Arc<HandlerState>>,
     Path((image_id, partition_number)): Path<(i64, i64)>,
@@ -58,18 +57,6 @@ pub async fn upload_partition_data(
     Ok((StatusCode::CREATED, Json(partition)))
 }
 
-pub async fn download_partition_data(
-    State(state): State<Arc<HandlerState>>,
-    Path((image_id, partition_number)): Path<(i64, i64)>,
-) -> Result<impl IntoResponse> {
-    let stream = state
-        .image_service
-        .read_partition_data(image_id, partition_number)
-        .await?;
-
-    Ok(Body::from_stream(stream))
-}
-
 pub async fn upload_partition_table(
     State(state): State<Arc<HandlerState>>,
     Path(image_id): Path<i64>,
@@ -105,7 +92,7 @@ pub async fn mark_finished(
     }
 
     state.image_repo.mark_finished(image_id).await?;
-    state.task_repo.finish(task.id).await?;
+    state.task_repo.mark_finished(task.id).await?;
 
     Ok(())
 }

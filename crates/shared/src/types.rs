@@ -1,7 +1,7 @@
-use derive_more::{Constructor, From, IsVariant};
+use derive_more::{Constructor, Display, From, IsVariant};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, IsVariant, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Display, IsVariant, Serialize, Deserialize, PartialEq, Clone, Copy)]
 pub enum TaskType {
     Capture,
     Deploy,

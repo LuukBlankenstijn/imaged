@@ -28,3 +28,4 @@ bytes = "1.11.1"
 sha2 = "0.11.0"
 hex = "0.4.3"
 prost-types.workspace = true
+tower-http = { version = "0.6.8", features = ["trace"] }

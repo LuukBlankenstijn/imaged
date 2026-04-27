@@ -3,7 +3,7 @@ use bytes::Bytes;
 use derive_more::Constructor;
 use futures::Stream;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 
 #[derive(Constructor, Debug)]
@@ -41,6 +41,15 @@ impl ImageService {
         })?;
 
         Ok(relative_filepath)
+    }
+
+    pub async fn read_partition_table(&self, image_id: i64) -> Result<Vec<u8>> {
+        let path = format!("{}/img-{}/parttable.bin", self.images_path, image_id);
+        let data = tokio::fs::read(&path).await.map_err(|e| {
+            tracing::error!("failed to read partition table file {path}: {e}");
+            AppError::Internal(e.to_string())
+        })?;
+        Ok(data)
     }
 
     pub async fn save_partition_data<S>(

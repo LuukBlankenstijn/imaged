@@ -65,8 +65,8 @@ export function TasksView() {
         if (statusFilter === "active" && !active) return false;
         if (statusFilter === "completed" && active) return false;
         if (hostFilter !== "all") {
-          const key = t.hostId !== undefined ? t.hostId.toString() : "deleted";
-          if (key !== hostFilter) return false;
+          if (t.hostId === undefined) return false;
+          if (t.hostId.toString() !== hostFilter) return false;
         }
         return true;
       })
@@ -133,7 +133,6 @@ export function TasksView() {
             onChange={(e) => setHostFilter(e.target.value)}
           >
             <option value="all">All hosts</option>
-            <option value="deleted">(deleted)</option>
             {[...hostsById.values()].map((host) => (
               <option key={host.id.toString()} value={host.id.toString()}>
                 {host.name || host.macAddress || `host ${host.id}`}
@@ -283,8 +282,7 @@ function TaskRow({
         <tr className="row-error">
           <td />
           <td colSpan={7} className="cell-error">
-            <span className="error-label">Error</span>
-            <span className="error-message">{task.error}</span>
+            <div className="error-callout">{task.error}</div>
           </td>
         </tr>
       )}

@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Display, FromStr, IsVariant)]
+#[derive(Debug, Display, FromStr, IsVariant, PartialEq)]
 #[display(rename_all = "lowercase")]
 pub enum ImageStatus {
     Empty,
@@ -46,6 +46,7 @@ pub struct ImagePartition {
 
 #[async_trait::async_trait]
 pub trait ImageRepository: Send + Sync {
+    async fn get_status(&self, id: i64) -> Result<ImageStatus>;
     async fn create_image(&self, name: String) -> Result<Image>;
 
     async fn update_name(&self, id: i64, new_name: String) -> Result<Image>;

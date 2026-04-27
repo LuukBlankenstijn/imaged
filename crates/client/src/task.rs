@@ -1,4 +1,5 @@
 mod capture;
+mod deploy;
 use anyhow::Result;
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -20,6 +21,10 @@ impl ClientState {
             http: ApiClient::new(base_url, mac)?,
             current_task: Mutex::new(None),
         })
+    }
+
+    pub fn client(&self) -> &ApiClient {
+        &self.http
     }
 }
 
@@ -49,6 +54,7 @@ async fn start_task(state: Arc<ClientState>, task: Task) {
     let state_for_task = state.clone();
 
     let handle = tokio::spawn(async move {
+        tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
         if let Err(e) = run_task(state_for_task.clone(), task, cancel_for_task).await {
             tracing::error!(err=%e, task_id=%task.id, "task failed");
         }
@@ -79,7 +85,16 @@ async fn run_task(
             };
             result
         }
-        TaskType::Deploy => todo!(),
+        TaskType::Deploy => {
+            let result = deploy::run(state.clone(), task.image_id, cancel_for_task).await;
+            if let Err(ref e) = result {
+                let _ = state
+                    .http
+                    .mark_deploy_failed(task.image_id, format!("{}", e))
+                    .await;
+            };
+            result
+        }
     }
 }
 

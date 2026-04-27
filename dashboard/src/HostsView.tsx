@@ -11,6 +11,7 @@ export function HostsView() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["hosts"],
     queryFn: () => dashboardClient.getAllHosts({}),
+    refetchInterval: 4_000,
   });
 
   const hosts = data?.hosts ?? [];

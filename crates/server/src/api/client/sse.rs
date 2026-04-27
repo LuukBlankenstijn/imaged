@@ -37,7 +37,7 @@ pub async fn start_stream(
         && let Some(image_id) = task.image_id
     {
         let evt = ServerEvent::from(Task::new(task.id, task.task_type.into(), image_id));
-        let sse_event = match Event::default().json_data(&evt) {
+        let sse_event = match Event::default().json_data(evt) {
             Ok(e) => e,
             Err(e) => {
                 tracing::error!("failed to serialize sse event: {e}");
@@ -54,7 +54,7 @@ pub async fn start_stream(
                 maybe_event = registration.receiver.recv() => {
                     match maybe_event {
                         Some(event) => {
-                            let sse_event = match Event::default().json_data(&event) {
+                            let sse_event = match Event::default().json_data(event) {
                                 Ok(e) => e,
                                 Err(e) => {
                                     tracing::error!("failed to serialize sse event: {e}");

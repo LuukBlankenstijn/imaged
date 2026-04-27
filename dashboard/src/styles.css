@@ -458,43 +458,37 @@ input {
 
 /* error sub-row */
 
+.table tbody tr.row-with-error,
+.table tbody tr.row-error {
+  background: rgba(248, 113, 113, 0.025);
+}
+
+.table tbody tr.row-with-error:hover,
+.table tbody tr.row-with-error:has(+ tr.row-error:hover),
+.table tbody tr.row-with-error:hover + tr.row-error,
+.table tbody tr.row-error:hover {
+  background: rgba(248, 113, 113, 0.06);
+}
+
 .table tbody tr.row-with-error td {
   border-bottom: none;
-}
-
-.table tbody tr.row-error {
-  background: rgba(248, 113, 113, 0.04);
-}
-
-.table tbody tr.row-error:hover {
-  background: rgba(248, 113, 113, 0.08);
+  padding-bottom: 0.5rem;
 }
 
 .table tbody tr.row-error td {
   padding-top: 0;
-  padding-bottom: 0.7rem;
+  padding-bottom: 0.75rem;
 }
 
-.cell-error {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  font-size: 0.82rem;
-}
-
-.error-label {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--danger);
-  flex-shrink: 0;
-}
-
-.error-message {
-  color: var(--text-dim);
+.error-callout {
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  background: rgba(248, 113, 113, 0.08);
+  border-left: 2px solid var(--danger);
   font-family: var(--font-mono);
   font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
 }

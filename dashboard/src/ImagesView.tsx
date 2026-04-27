@@ -14,6 +14,7 @@ export function ImagesView() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["images"],
     queryFn: () => dashboardClient.getAllImages({}),
+    refetchInterval: 3_000,
   });
 
   const hostsQuery = useQuery({

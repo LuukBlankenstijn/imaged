@@ -69,7 +69,7 @@ pub trait TaskRepository: Send + Sync {
 
     async fn start(&self, task_id: i64) -> Result;
 
-    async fn finish(&self, task_id: i64) -> Result;
+    async fn mark_finished(&self, task_id: i64) -> Result;
 
     async fn mark_failed(&self, task_id: i64, error: &str) -> Result;
 

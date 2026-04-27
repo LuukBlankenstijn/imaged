@@ -1,5 +1,6 @@
-mod host;
-mod image;
+mod capture;
+mod deploy;
+mod sse;
 
 use std::sync::Arc;
 
@@ -17,18 +18,29 @@ pub fn router() -> Router<Arc<HandlerState>> {
     Router::new()
         .route(
             "/client/images/{image_id}/partitions/{partition_number}/data",
-            put(image::upload_partition_data).get(image::download_partition_data),
+            put(capture::upload_partition_data).get(deploy::download_partition_data),
         )
         .route(
             "/client/images/{image_id}/parttable",
-            put(image::upload_partition_table),
+            put(capture::upload_partition_table).get(deploy::download_partition_table),
         )
         .route(
-            "/client/images/{image_id}/finished",
-            post(image::mark_finished),
+            "/client/capture/{image_id}/finished",
+            post(capture::mark_finished),
         )
-        .route("/client/images/{image_id}/failed", post(image::mark_failed))
-        .route("/client/hosts/stream", get(host::start_stream))
+        .route(
+            "/client/capture/{image_id}/failed",
+            post(capture::mark_failed),
+        )
+        .route(
+            "/client/deploy/{image_id}/finished",
+            post(deploy::mark_finished),
+        )
+        .route(
+            "/client/deploy/{image_id}/failed",
+            post(deploy::mark_failed),
+        )
+        .route("/client/hosts/stream", get(sse::start_stream))
 }
 
 pub struct AgentMac(pub String);

@@ -6,7 +6,7 @@ use imaged_shared::{ServerEvent, Task};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::domain::task::TaskType;
-use crate::error::{AppError, Result};
+use crate::error::Result;
 
 #[derive(Constructor)]
 pub struct Registration<T> {
