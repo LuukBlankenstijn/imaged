@@ -1,12 +1,34 @@
 mod capture;
 use anyhow::Result;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use std::sync::Arc;
 
 use imaged_shared::{ServerEvent, Task, TaskType};
 use tokio_util::sync::CancellationToken;
 
-use crate::{ClientState, RunningTask};
+use crate::transport::ApiClient;
+
+pub struct ClientState {
+    http: crate::transport::ApiClient,
+    current_task: Mutex<Option<RunningTask>>,
+}
+
+impl ClientState {
+    pub fn new(base_url: String, mac: String) -> Result<Self> {
+        Ok(Self {
+            http: ApiClient::new(base_url, mac)?,
+            current_task: Mutex::new(None),
+        })
+    }
+}
+
+struct RunningTask {
+    task_id: i64,
+    // can be used for forcefully aborting the task
+    _handle: JoinHandle<()>,
+    cancel: tokio_util::sync::CancellationToken,
+}
 
 pub async fn handle_message(state: Arc<ClientState>, msg: ServerEvent) {
     match msg {

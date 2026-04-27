@@ -179,7 +179,8 @@
                 echo "$ROOTSERVER" > /run/imaging_server
             fi
 
-            exec /bin/sh
+            /bin/imaged-client http://10.0.2.2:8080 || true
+            exec /bin/imaged-client /bin/sh
             EOF
             chmod +x "$STAGING/init"
 

@@ -1,30 +1,15 @@
 mod error;
+mod shell;
 mod sys;
 mod task;
 mod transport;
 
 use std::sync::Arc;
 
+use crate::transport::sse::start_stream;
 use clap::Parser;
 use futures::StreamExt;
 use futures::pin_mut;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-
-use crate::transport::ApiClient;
-use crate::transport::sse::start_stream;
-
-struct ClientState {
-    http: ApiClient,
-    current_task: Mutex<Option<RunningTask>>,
-}
-
-struct RunningTask {
-    task_id: i64,
-    // can be used for forcefully aborting the task
-    _handle: JoinHandle<()>,
-    cancel: tokio_util::sync::CancellationToken,
-}
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -44,11 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = start_stream(server.clone(), mac.clone(), disk.size).await?;
     pin_mut!(stream);
 
-    let state = Arc::new(ClientState {
-        http: ApiClient::new(server, mac)?,
-        current_task: Mutex::new(None),
-    });
+    let state = Arc::new(task::ClientState::new(server, mac)?);
 
+    tokio::spawn(shell::watch_for_shell_hotkey());
     tracing::info!("starting imaged-client");
     while let Some(message) = stream.next().await {
         match message {

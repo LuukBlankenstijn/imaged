@@ -4,7 +4,8 @@ use anyhow::Result;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::{ClientState, sys::disk::BlockDevice, transport::ApiClient};
+use super::ClientState;
+use crate::{sys::disk::BlockDevice, transport::ApiClient};
 
 const PARTTABLE_TMP: &str = "/parttable.bin";
 
