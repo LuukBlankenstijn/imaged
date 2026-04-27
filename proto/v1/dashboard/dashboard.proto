@@ -109,4 +109,5 @@ service DashboardService {
 
   rpc GetAllTasks(google.protobuf.Empty) returns (GetAllTasksResponse) {}
   rpc CancelTask(Id) returns (google.protobuf.Empty) {}
+  rpc RetryTask(Id) returns (google.protobuf.Empty) {}
 }

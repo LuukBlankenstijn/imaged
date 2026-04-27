@@ -74,7 +74,7 @@ pub trait TaskRepository: Send + Sync {
     async fn mark_failed(&self, task_id: i64, error: &str) -> Result;
 
     // reset some running task to pending
-    async fn reset(&self, id: i64) -> Result;
+    async fn retry(&self, id: i64) -> Result;
 
     // cancel a running or pending task
     async fn cancel(&self, id: i64) -> Result;

@@ -239,9 +239,14 @@ impl ImageRepository for SqliteImageRepository {
 
     async fn mark_faulted(&self, id: i64, error: &str) -> Result {
         let status = ImageStatus::Faulted.to_string();
-        sqlx::query!("UPDATE images SET status = ? WHERE id = ?", status, id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query!(
+            "UPDATE images SET status = ?, error = ? WHERE id = ?",
+            status,
+            error,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }

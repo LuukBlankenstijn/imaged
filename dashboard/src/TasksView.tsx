@@ -17,6 +17,11 @@ const ACTIVE_STATES = new Set<TaskState>([
   TaskState.TASK_RUNNING,
 ]);
 
+const RETRYABLE_STATES = new Set<TaskState>([
+  TaskState.TASK_FAILED,
+  TaskState.TASK_CANCELLED,
+]);
+
 export function TasksView() {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
@@ -228,6 +233,14 @@ function TaskRow({
     meta: { errorTitle: "Cancel task failed" },
   });
 
+  const retryMutation = useMutation({
+    mutationFn: () => dashboardClient.retryTask({ id: task.id }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    meta: { errorTitle: "Retry task failed" },
+  });
+
   const updatedAt = task.finishedAt ?? task.startedAt ?? task.createdAt;
   const hostMissing = task.hostId === undefined;
   const imageMissing = task.imageId === undefined;
@@ -238,6 +251,9 @@ function TaskRow({
     ? "(deleted)"
     : image?.name || `image ${task.imageId!.toString()}`;
   const canCancel = ACTIVE_STATES.has(task.state);
+  const canRetry = RETRYABLE_STATES.has(task.state);
+  const retryDisabled = hostMissing || imageMissing;
+  const busy = cancelMutation.isPending || retryMutation.isPending;
   const showError = !!task.error;
 
   return (
@@ -266,11 +282,25 @@ function TaskRow({
         <td className="cell-captured">{formatRelative(updatedAt)}</td>
         <td className="cell-actions">
           <div className="action-group">
+            {canRetry && (
+              <button
+                className="ghost"
+                onClick={() => retryMutation.mutate()}
+                disabled={busy || retryDisabled}
+                title={
+                  retryDisabled
+                    ? "Cannot retry: host or image was deleted"
+                    : undefined
+                }
+              >
+                {retryMutation.isPending ? "Retrying…" : "Retry"}
+              </button>
+            )}
             {canCancel && (
               <button
                 className="ghost danger"
                 onClick={() => cancelMutation.mutate()}
-                disabled={cancelMutation.isPending}
+                disabled={busy}
               >
                 {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
               </button>

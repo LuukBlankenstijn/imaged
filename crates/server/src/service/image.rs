@@ -3,7 +3,7 @@ use bytes::Bytes;
 use derive_more::Constructor;
 use futures::Stream;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
 #[derive(Constructor, Debug)]

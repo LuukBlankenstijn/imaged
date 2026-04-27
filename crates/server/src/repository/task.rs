@@ -113,11 +113,11 @@ impl TaskRepository for SqliteTaskRepository {
         }
     }
 
-    async fn reset(&self, id: i64) -> Result {
+    async fn retry(&self, id: i64) -> Result {
         let pending_state = TaskState::Pending.to_string();
 
         sqlx::query!(
-            "UPDATE tasks SET state = ?, started_at = NULL, error = NULL WHERE id = ?",
+            "UPDATE tasks SET state = ?, started_at = NULL, finished_at = NULL, error = NULL WHERE id = ?",
             pending_state,
             id
         )

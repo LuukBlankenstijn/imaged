@@ -196,4 +196,38 @@ impl DashboardService for DashboardHandler {
         }
         Ok(Response::new(()))
     }
+
+    async fn retry_task(&self, req: Request<pb::Id>) -> TonicResult {
+        let request = req.into_inner();
+        let task = self.task_repo.get(request.id).await?;
+        if !(task.state.is_cancelled() || task.state.is_failed()) {
+            return Err(AppError::InvalidArgument(format!(
+                "cannot cancel task {}, task is not failed or cancelled",
+                request.id
+            ))
+            .into());
+        }
+        let Some(host_id) = task.host_id else {
+            return Err(AppError::InvalidArgument(format!(
+                "cannot retry task {}, host is deleted",
+                request.id
+            ))
+            .into());
+        };
+        let Some(image_id) = task.image_id else {
+            return Err(AppError::InvalidArgument(format!(
+                "cannot retry task {}, image is deleted",
+                request.id
+            ))
+            .into());
+        };
+        self.task_repo.retry(task.id).await?;
+        if let Some(next_task) = self.task_repo.get_next(host_id).await?
+            && next_task.id == task.id
+        {
+            self.host_registry
+                .send_task(host_id, task.id, image_id, task.task_type);
+        }
+        Ok(Response::new(()))
+    }
 }
