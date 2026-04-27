@@ -1,0 +1,10 @@
+[package]
+name = "imaged-shared"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+derive_more = { workspace = true, features = ["is_variant", "constructor", "from"] }
+serde.workspace = true
+serde_json.workspace = true

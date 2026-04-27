@@ -86,4 +86,23 @@ impl domain::host::HostRepository for SqliteHostRepository {
             .await?;
         Ok(())
     }
+
+    async fn get_by_mac(&self, mac: &str) -> Result<Host> {
+        Ok(sqlx::query_as!(
+            HostRow,
+            r#"
+            SELECT 
+                id AS "id!",
+                mac,
+                name,
+                disk_size_bytes
+            FROM hosts 
+            WHERE mac = ?
+            "#,
+            mac
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .into())
+    }
 }

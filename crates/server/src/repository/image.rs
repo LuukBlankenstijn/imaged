@@ -204,4 +204,38 @@ impl ImageRepository for SqliteImageRepository {
             .await?;
         Ok(())
     }
+
+    async fn start_capture(&self, id: i64) -> Result {
+        let status = ImageStatus::Capturing.to_string();
+        sqlx::query!("DELETE FROM image_partitions WHERE image_id = ?", id)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query!("UPDATE images SET status = ? WHERE id = ?", status, id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn mark_finished(&self, id: i64) -> Result {
+        let status = ImageStatus::Ready.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE images SET status = ?, captured_at = ? WHERE id = ?",
+            status,
+            now,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_faulted(&self, id: i64, error: &str) -> Result {
+        let status = ImageStatus::Faulted.to_string();
+        sqlx::query!("UPDATE images SET status = ? WHERE id = ?", status, id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }

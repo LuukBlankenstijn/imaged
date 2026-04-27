@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use derive_more::Constructor;
+use imaged_shared::{ServerEvent, Task};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::domain::task::Task;
+use crate::domain::task::TaskType;
 use crate::error::{AppError, Result};
 
 #[derive(Constructor)]
@@ -28,7 +29,7 @@ pub struct HostConnectionEvent {
 }
 
 pub struct HostRegistry {
-    hosts: RwLock<HashMap<i64, mpsc::UnboundedSender<Task>>>,
+    hosts: RwLock<HashMap<i64, mpsc::UnboundedSender<ServerEvent>>>,
 
     broadcast: broadcast::Sender<HostConnectionEvent>,
 }
@@ -44,7 +45,7 @@ impl HostRegistry {
 }
 
 impl HostRegistry {
-    pub fn register(self: &Arc<Self>, id: i64) -> Result<Registration<Task>> {
+    pub fn register(self: &Arc<Self>, id: i64) -> Result<Registration<ServerEvent>> {
         let mut admins = self.hosts.write().unwrap();
         if admins.contains_key(&id) {
             return Err(crate::error::AppError::FailedPrecondition(
@@ -68,12 +69,19 @@ impl HostRegistry {
         Ok(Registration::new(command_rx, Some(Box::new(cleanup))))
     }
 
-    pub fn send_task(&self, task: Task, id: i64) -> Result {
+    pub fn cancel_task(&self, host_id: i64, task_id: i64) {
         let hosts = self.hosts.read().unwrap();
-        if let Some(sender) = hosts.get(&id) {
-            let _ = sender.send(task);
+        if let Some(sender) = hosts.get(&host_id) {
+            let _ = sender.send(task_id.into());
         }
-        Err(AppError::NotFound("host not registered".to_string()))
+    }
+
+    pub fn send_task(&self, host_id: i64, task_id: i64, image_id: i64, task_type: TaskType) {
+        let hosts = self.hosts.read().unwrap();
+        if let Some(sender) = hosts.get(&host_id) {
+            let task = Task::new(task_id, task_type.into(), image_id);
+            let _ = sender.send(task.into());
+        }
     }
 
     pub fn subscribe_state(&self) -> broadcast::Receiver<HostConnectionEvent> {

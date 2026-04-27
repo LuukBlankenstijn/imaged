@@ -19,4 +19,6 @@ pub trait HostRepository: Send + Sync {
     async fn get_all(&self) -> Result<Vec<Host>>;
 
     async fn delete(&self, id: i64) -> Result;
+
+    async fn get_by_mac(&self, mac: &str) -> Result<Host>;
 }

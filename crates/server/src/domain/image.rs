@@ -59,4 +59,13 @@ pub trait ImageRepository: Send + Sync {
     ) -> Result<ImagePartition>;
 
     async fn delete_image(&self, id: i64) -> Result;
+
+    // clears all old data and marks the images as capturing
+    async fn start_capture(&self, id: i64) -> Result;
+
+    // marks the image as finished
+    async fn mark_finished(&self, id: i64) -> Result;
+
+    // marks the image as faulted
+    async fn mark_faulted(&self, id: i64, error: &str) -> Result;
 }

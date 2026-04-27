@@ -100,7 +100,8 @@ impl DashboardService for DashboardHandler {
             .task_repo
             .create(TaskType::Deploy, request.id, request.image_id)
             .await?;
-        // TODO: notify host of task
+        self.host_registry
+            .send_task(request.id, task.id, request.image_id, task.task_type);
         Ok(Response::new(task.into()))
     }
 
@@ -130,10 +131,12 @@ impl DashboardService for DashboardHandler {
         let request = req.into_inner();
         let image = self.image_repo.create_image(request.name).await?;
 
-        self.task_repo
+        let task = self
+            .task_repo
             .create(TaskType::Capture, request.host_id, image.id)
             .await?;
-        // TODO: notify host of task
+        self.host_registry
+            .send_task(request.host_id, task.id, image.id, task.task_type);
 
         Ok(Response::new(image.into()))
     }
@@ -180,7 +183,16 @@ impl DashboardService for DashboardHandler {
             .into());
         }
         self.task_repo.cancel(task.id).await?;
-        // TODO: notify host of cancelation
+        if let Some(image_id) = task.image_id
+            && task.task_type == TaskType::Capture
+        {
+            self.image_repo
+                .mark_faulted(image_id, "Capture task was cancelled by user")
+                .await?;
+        }
+        if let Some(host_id) = task.host_id {
+            self.host_registry.cancel_task(host_id, task.id);
+        }
         Ok(Response::new(()))
     }
 }

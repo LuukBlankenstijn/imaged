@@ -155,6 +155,8 @@
             mkdir -p "$STAGING"/{bin,proc,sys,dev,tmp,etc,run}
 
             cp ${pkgs.pkgsStatic.busybox}/bin/busybox "$STAGING/bin/busybox"
+            cp ${pkgs.pkgsStatic.libuuid}/bin/lsblk "$STAGING/bin/"
+            cp ${pkgs.pkgsStatic.gptfdisk}/bin/sgdisk "$STAGING/bin/"
             cp ${udpcast}/bin/udp-receiver "$STAGING/bin/"
             cp ${pkgs.pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
             cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"

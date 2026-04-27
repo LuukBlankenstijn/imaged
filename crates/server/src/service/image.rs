@@ -12,6 +12,37 @@ pub struct ImageService {
 }
 
 impl ImageService {
+    pub async fn clear_image_data(&self, image_id: i64) -> Result<()> {
+        let relative_dir = format!("img-{image_id}");
+        let dir = format!("{}/{}", self.images_path, relative_dir);
+        if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+            tokio::fs::remove_dir_all(&dir).await.map_err(|e| {
+                tracing::error!("failed to clean image dir: {e}");
+                AppError::Internal(e.to_string())
+            })?;
+        }
+
+        Ok(())
+    }
+    pub async fn save_partition_table(&self, image_id: i64, data: &[u8]) -> Result<String> {
+        let relative_dir = format!("img-{image_id}");
+        let dir = format!("{}/{}", self.images_path, relative_dir);
+        let relative_filepath = format!("{relative_dir}/parttable.bin");
+        let path = format!("{}/{}", self.images_path, relative_filepath);
+
+        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+            tracing::error!("failed to create image dir: {e}");
+            AppError::Internal(e.to_string())
+        })?;
+
+        tokio::fs::write(&path, data).await.map_err(|e| {
+            tracing::error!("failed to write parttable: {e}");
+            AppError::Internal(e.to_string())
+        })?;
+
+        Ok(relative_filepath)
+    }
+
     pub async fn save_partition_data<S>(
         &self,
         image_id: i64,

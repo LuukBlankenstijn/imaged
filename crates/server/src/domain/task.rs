@@ -3,11 +3,20 @@ use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
 use std::str::FromStr as _;
 
-#[derive(Debug, Display, FromStr, IsVariant)]
+#[derive(Debug, Clone, Copy, Display, FromStr, IsVariant, PartialEq)]
 #[display(rename_all = "lowercase")]
 pub enum TaskType {
     Capture,
     Deploy,
+}
+
+impl From<TaskType> for imaged_shared::TaskType {
+    fn from(value: TaskType) -> Self {
+        match value {
+            TaskType::Capture => imaged_shared::TaskType::Capture,
+            TaskType::Deploy => imaged_shared::TaskType::Deploy,
+        }
+    }
 }
 
 impl TaskType {
@@ -19,7 +28,7 @@ impl TaskType {
     }
 }
 
-#[derive(Debug, Display, FromStr, IsVariant)]
+#[derive(Debug, Display, FromStr, IsVariant, PartialEq)]
 #[display(rename_all = "lowercase")]
 pub enum TaskState {
     Pending,
@@ -57,6 +66,12 @@ pub trait TaskRepository: Send + Sync {
 
     // gets the next task for a host. This takes Pending and Running Tasks into account
     async fn get_next(&self, host_id: i64) -> Result<Option<Task>>;
+
+    async fn start(&self, task_id: i64) -> Result;
+
+    async fn finish(&self, task_id: i64) -> Result;
+
+    async fn mark_failed(&self, task_id: i64, error: &str) -> Result;
 
     // reset some running task to pending
     async fn reset(&self, id: i64) -> Result;

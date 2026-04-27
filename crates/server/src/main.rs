@@ -13,13 +13,12 @@ use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use tracing_subscriber::EnvFilter;
 
 use crate::api::dashboard::DashboardHandler;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    setup_logging();
+    imaged_shared::setup_logging();
 
     let pool = setup_database().await?;
     let host_repo = repository::host_repo(pool.clone());
@@ -55,22 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(interface = "0.0.0.0", port = 8080, "starting imaged-server");
     axum::serve(listener, service).await?;
     Ok(())
-}
-
-fn setup_logging() {
-    let target_level = "info";
-    let pkg_name = env!("CARGO_PKG_NAME");
-
-    let filter_str = format!("{},{}=debug", target_level, pkg_name).replace("-", "_");
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(filter_str.clone())),
-        )
-        .init();
-
-    tracing::info!(filter_str);
 }
 
 async fn setup_database() -> Result<SqlitePool, Box<dyn std::error::Error>> {

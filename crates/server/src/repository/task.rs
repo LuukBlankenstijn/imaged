@@ -127,6 +127,25 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(())
     }
 
+    async fn start(&self, id: i64) -> Result {
+        let running = TaskState::Running.to_string();
+        let pending = TaskState::Pending.to_string();
+        let now = Utc::now();
+
+        sqlx::query!(
+            "UPDATE tasks SET state = ?, started_at = ? WHERE id = ? AND (state = ? OR state = ?)",
+            running,
+            now,
+            id,
+            pending,
+            running,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn cancel(&self, id: i64) -> Result {
         let cancelled_state = TaskState::Cancelled.to_string();
         let pending_state = TaskState::Pending.to_string();
@@ -214,5 +233,35 @@ impl TaskRepository for SqliteTaskRepository {
         .await?;
 
         Ok(row.try_into()?)
+    }
+
+    async fn finish(&self, id: i64) -> Result {
+        let state = TaskState::Done.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE tasks SET state = ?, finished_at = ? WHERE id = ?",
+            state,
+            now,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn mark_failed(&self, id: i64, error: &str) -> Result {
+        let state = TaskState::Failed.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE tasks SET state = ?, finished_at = ?, error = ? WHERE id = ?",
+            state,
+            now,
+            error,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }

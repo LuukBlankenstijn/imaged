@@ -5,16 +5,18 @@ edition.workspace = true
 
 [dependencies]
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = [ "process"]}
 futures.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+imaged-shared.workspace = true
+tokio-util.workspace = true
 
 clap = { version = "4.6.1", features = ["derive"] }
 
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reqwest-eventsource = "0.6"
 
 mac_address = "1.1.8"
+anyhow = "1.0.102"

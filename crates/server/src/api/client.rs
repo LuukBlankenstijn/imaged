@@ -7,7 +7,7 @@ use axum::{
     Router,
     extract::{FromRequestParts, Query},
     http::request::Parts,
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use serde::Deserialize;
 
@@ -19,6 +19,15 @@ pub fn router() -> Router<Arc<HandlerState>> {
             "/client/images/{image_id}/partitions/{partition_number}/data",
             put(image::upload_partition_data).get(image::download_partition_data),
         )
+        .route(
+            "/client/images/{image_id}/parttable",
+            put(image::upload_partition_table),
+        )
+        .route(
+            "/client/images/{image_id}/finished",
+            post(image::mark_finished),
+        )
+        .route("/client/images/{image_id}/failed", post(image::mark_failed))
         .route("/client/hosts/stream", get(host::start_stream))
 }
 
