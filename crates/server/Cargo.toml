@@ -25,7 +25,7 @@ sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "mi
 chrono = "0.4.44"
 async-trait = "0.1.89"
 bytes = "1.11.1"
-sha2 = "0.11.0"
 hex = "0.4.3"
 prost-types.workspace = true
-tower-http = { version = "0.6.8", features = ["trace"] }
+tower-http = { version = "0.6.8", features = ["fs", "trace"] }
+async-tftp = "0.4.2"

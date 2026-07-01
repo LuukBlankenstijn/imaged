@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Host } from "@imaged/gen/v1/dashboard/dashboard_pb";
+import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
 import { dashboardClient } from "./transport";
 import { formatBytes } from "./format";
 import { useConnection } from "./connectionStore";

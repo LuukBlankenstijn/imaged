@@ -71,13 +71,18 @@ impl domain::host::HostRepository for SqliteHostRepository {
         Ok(host.into())
     }
 
-    async fn get_all(&self) -> Result<Vec<Host>> {
-        Ok(sqlx::query_as!(HostRow, "SELECT * FROM hosts")
-            .fetch_all(&self.pool)
-            .await?
-            .into_iter()
-            .map(|row| row.into())
-            .collect())
+    async fn get_all(&self, group_id: Option<i64>) -> Result<Vec<Host>> {
+        let host_rows = match group_id {
+            Some(group_id) => sqlx::query_as!(
+                HostRow,
+                r#"SELECT h.id as "id!", h.name, h.mac, h.disk_size_bytes FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?"#,
+                group_id
+            ).fetch_all(&self.pool)
+            .await?,
+            None => sqlx::query_as!(HostRow, "SELECT * FROM hosts").fetch_all(&self.pool)
+            .await?,
+        };
+        Ok(host_rows.into_iter().map(|row| row.into()).collect())
     }
 
     async fn delete(&self, id: i64) -> Result {

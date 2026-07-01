@@ -14,7 +14,5 @@ CREATE TABLE image_partitions (
   partition_number  INTEGER NOT NULL,
   fstype            TEXT    NOT NULL,
   size_bytes        INTEGER NOT NULL,
-  file_path         TEXT    NOT NULL,
-  sha256            TEXT    NOT NULL,
   UNIQUE (image_id, partition_number)
 ) STRICT;

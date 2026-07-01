@@ -40,8 +40,6 @@ pub struct ImagePartition {
     pub partition_number: i64,
     pub fstype: String,
     pub size_bytes: u64,
-    pub filepath: String,
-    pub sha256: String,
 }
 
 #[async_trait::async_trait]
@@ -56,7 +54,9 @@ pub trait ImageRepository: Send + Sync {
     async fn save_partition(
         &self,
         image_id: i64,
-        partition: ImagePartition,
+        partition_number: i64,
+        fstype: &str,
+        size_bytes: i64,
     ) -> Result<ImagePartition>;
 
     async fn delete_image(&self, id: i64) -> Result;
@@ -69,4 +69,7 @@ pub trait ImageRepository: Send + Sync {
 
     // marks the image as faulted
     async fn mark_faulted(&self, id: i64, error: &str) -> Result;
+
+    // get partitions
+    async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>>;
 }

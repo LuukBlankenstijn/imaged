@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE from group_hosts WHERE group_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e25cb4359693d841cf55ee6c8bb0867c041f0d4903106da0da824c5b9cf1a82b"
+}

@@ -1,15 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  Host,
-  Image,
-  Task,
-} from "@imaged/gen/v1/dashboard/dashboard_pb";
-import { TaskState, TaskType } from "@imaged/gen/v1/dashboard/dashboard_pb";
+import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
+import type { Image } from "@imaged/gen/v1/dashboard/image_pb";
+import type { Task } from "@imaged/gen/v1/dashboard/task_pb";
+import { TaskState, TaskType } from "@imaged/gen/v1/dashboard/task_pb";
 import { dashboardClient } from "./transport";
 import { formatRelative, timestampToDate } from "./format";
 
-type TypeFilter = "all" | "capture" | "deploy";
+type TypeFilter = "all" | "capture" | "deploy" | "multicast";
 type StatusFilter = "active" | "all" | "completed";
 
 const ACTIVE_STATES = new Set<TaskState>([
@@ -66,12 +64,16 @@ export function TasksView() {
         if (typeFilter === "deploy" && t.type !== TaskType.TYPE_DEPLOY) {
           return false;
         }
+        if (typeFilter === "multicast" && t.type !== TaskType.TYPE_MULTICAST) {
+          return false;
+        }
         const active = ACTIVE_STATES.has(t.state);
         if (statusFilter === "active" && !active) return false;
         if (statusFilter === "completed" && active) return false;
         if (hostFilter !== "all") {
-          if (t.hostId === undefined) return false;
-          if (t.hostId.toString() !== hostFilter) return false;
+          if (!t.hosts.some((id) => id.toString() === hostFilter)) {
+            return false;
+          }
         }
         return true;
       })
@@ -127,6 +129,7 @@ export function TasksView() {
             <option value="all">All</option>
             <option value="capture">Capture</option>
             <option value="deploy">Deploy</option>
+            <option value="multicast">Multicast</option>
           </select>
         </div>
 
@@ -194,11 +197,7 @@ export function TasksView() {
                 <TaskRow
                   key={task.id.toString()}
                   task={task}
-                  host={
-                    task.hostId !== undefined
-                      ? hostsById.get(task.hostId.toString())
-                      : undefined
-                  }
+                  hostsById={hostsById}
                   image={
                     task.imageId !== undefined
                       ? imagesById.get(task.imageId.toString())
@@ -216,11 +215,11 @@ export function TasksView() {
 
 function TaskRow({
   task,
-  host,
+  hostsById,
   image,
 }: {
   task: Task;
-  host?: Host;
+  hostsById: Map<string, Host>;
   image?: Image;
 }) {
   const queryClient = useQueryClient();
@@ -242,17 +241,18 @@ function TaskRow({
   });
 
   const updatedAt = task.finishedAt ?? task.startedAt ?? task.createdAt;
-  const hostMissing = task.hostId === undefined;
+  const hostNames = task.hosts.map((id) => {
+    const h = hostsById.get(id.toString());
+    return h?.name || h?.macAddress || `host ${id.toString()}`;
+  });
+  const hostsMissing = hostNames.length === 0;
   const imageMissing = task.imageId === undefined;
-  const hostLabel = hostMissing
-    ? "(deleted)"
-    : host?.name || host?.macAddress || `host ${task.hostId!.toString()}`;
   const imageLabel = imageMissing
     ? "(deleted)"
     : image?.name || `image ${task.imageId!.toString()}`;
   const canCancel = ACTIVE_STATES.has(task.state);
   const canRetry = RETRYABLE_STATES.has(task.state);
-  const retryDisabled = hostMissing || imageMissing;
+  const retryDisabled = hostsMissing || imageMissing;
   const busy = cancelMutation.isPending || retryMutation.isPending;
   const showError = !!task.error;
 
@@ -267,10 +267,10 @@ function TaskRow({
           <TypeBadge type={task.type} />
         </td>
         <td
-          className={`cell-name${hostMissing ? " cell-deleted" : ""}`}
-          title={host?.macAddress}
+          className={`cell-name${hostsMissing ? " cell-deleted" : ""}`}
+          title={hostNames.join(", ") || undefined}
         >
-          {hostLabel}
+          <HostsLabel names={hostNames} />
         </td>
         <td
           className={`cell-name${imageMissing ? " cell-deleted" : ""}`}
@@ -320,6 +320,17 @@ function TaskRow({
   );
 }
 
+function HostsLabel({ names }: { names: string[] }) {
+  if (names.length === 0) return <>(deleted)</>;
+  if (names.length === 1) return <>{names[0]}</>;
+  return (
+    <>
+      {names[0]}
+      <span className="host-extra-count">+{names.length - 1}</span>
+    </>
+  );
+}
+
 function StatusBadge({ state, error }: { state: TaskState; error?: string }) {
   const label = stateLabel(state);
   const tone = stateTone(state);
@@ -332,13 +343,83 @@ function StatusBadge({ state, error }: { state: TaskState; error?: string }) {
 }
 
 function TypeBadge({ type }: { type: TaskType }) {
-  const label =
-    type === TaskType.TYPE_CAPTURE
-      ? "capture"
-      : type === TaskType.TYPE_DEPLOY
-        ? "deploy"
-        : "unknown";
-  return <span className={`badge badge-neutral`}>{label}</span>;
+  const tone = typeTone(type);
+  const label = typeLabel(type);
+  return (
+    <span className={`badge badge-type-${tone}`}>
+      <TypeIcon type={type} />
+      {label}
+    </span>
+  );
+}
+
+function typeLabel(type: TaskType): string {
+  switch (type) {
+    case TaskType.TYPE_CAPTURE:
+      return "capture";
+    case TaskType.TYPE_DEPLOY:
+      return "deploy";
+    case TaskType.TYPE_MULTICAST:
+      return "multicast";
+    default:
+      return "unknown";
+  }
+}
+
+function typeTone(type: TaskType): string {
+  switch (type) {
+    case TaskType.TYPE_CAPTURE:
+      return "capture";
+    case TaskType.TYPE_DEPLOY:
+      return "deploy";
+    case TaskType.TYPE_MULTICAST:
+      return "multicast";
+    default:
+      return "neutral";
+  }
+}
+
+function TypeIcon({ type }: { type: TaskType }) {
+  const props = {
+    width: 12,
+    height: 12,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2.25,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  switch (type) {
+    case TaskType.TYPE_CAPTURE:
+      return (
+        <svg {...props} aria-hidden>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" x2="12" y1="15" y2="3" />
+        </svg>
+      );
+    case TaskType.TYPE_DEPLOY:
+      return (
+        <svg {...props} aria-hidden>
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" x2="12" y1="3" y2="15" />
+        </svg>
+      );
+    case TaskType.TYPE_MULTICAST:
+      return (
+        <svg {...props} aria-hidden>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+          <path d="M16 8a5.66 5.66 0 0 1 0 8" />
+          <path d="M8 16a5.66 5.66 0 0 1 0-8" />
+          <path d="M19 5a9.66 9.66 0 0 1 0 14" />
+          <path d="M5 19a9.66 9.66 0 0 1 0-14" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 }
 
 function stateLabel(state: TaskState): string {

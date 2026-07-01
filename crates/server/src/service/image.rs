@@ -2,7 +2,6 @@ use crate::error::{AppError, Result};
 use bytes::Bytes;
 use derive_more::Constructor;
 use futures::Stream;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
@@ -43,8 +42,19 @@ impl ImageService {
         Ok(relative_filepath)
     }
 
+    pub fn get_partition_table_path(&self, image_id: i64) -> String {
+        format!("{}/img-{}/parttable.bin", self.images_path, image_id)
+    }
+
+    pub fn get_partition_path(&self, image_id: i64, partition_number: i64) -> String {
+        format!(
+            "{}/img-{}/p-{}.pcl",
+            self.images_path, image_id, partition_number
+        )
+    }
+
     pub async fn read_partition_table(&self, image_id: i64) -> Result<Vec<u8>> {
-        let path = format!("{}/img-{}/parttable.bin", self.images_path, image_id);
+        let path = self.get_partition_table_path(image_id);
         let data = tokio::fs::read(&path).await.map_err(|e| {
             tracing::error!("failed to read partition table file {path}: {e}");
             AppError::Internal(e.to_string())
@@ -57,17 +67,15 @@ impl ImageService {
         image_id: i64,
         partition_number: i64,
         mut data_stream: S,
-    ) -> Result<(String, String)>
+    ) -> Result
     where
         S: Stream<Item = std::result::Result<Bytes, std::io::Error>> + Unpin + Send,
     {
-        let relative_filepath = format!("img-{}/p-{}.pcl", image_id, partition_number);
-        let file_path = format!("{}/{}", self.images_path, relative_filepath);
+        let file_path = self.get_partition_path(image_id, partition_number);
         let mut file = tokio::fs::File::create(&file_path).await.map_err(|e| {
             tracing::error!("failed to create partition file {file_path}: {e}");
             AppError::Internal(e.to_string())
         })?;
-        let mut hasher = Sha256::new();
         while let Some(chunk) = data_stream.next().await {
             let chunk = chunk.map_err(|e| {
                 tracing::error!(
@@ -75,14 +83,12 @@ impl ImageService {
                 );
                 AppError::InvalidArgument(format!("error reading stream: {e}"))
             })?;
-            hasher.update(&chunk);
             file.write_all(&chunk).await.map_err(|e| {
                 tracing::error!("failed to write chunk to {file_path}: {e}");
                 AppError::Internal("failed to write stream chunk to file".to_string())
             })?;
         }
-        let sha = hex::encode(hasher.finalize());
-        Ok((relative_filepath, sha))
+        Ok(())
     }
 
     pub async fn read_partition_data(

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Image } from "@imaged/gen/v1/dashboard/dashboard_pb";
+import type { Image } from "@imaged/gen/v1/dashboard/image_pb";
 import { dashboardClient } from "./transport";
 import { formatBytes, formatRelative } from "./format";
 

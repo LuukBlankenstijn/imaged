@@ -18,8 +18,10 @@ use super::HandlerState;
 
 pub async fn download_partition_data(
     State(state): State<Arc<HandlerState>>,
-    Path((image_id, partition_number)): Path<(i64, i64)>,
+    Path((task_id, partition_number)): Path<(i64, i64)>,
+    AgentMac(mac): AgentMac,
 ) -> Result<impl IntoResponse> {
+    let (_, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
@@ -35,10 +37,10 @@ pub async fn download_partition_data(
 
 pub async fn download_partition_table(
     State(state): State<Arc<HandlerState>>,
-    Path(image_id): Path<i64>,
+    Path(task_id): Path<i64>,
     AgentMac(mac): AgentMac,
 ) -> Result<impl IntoResponse> {
-    let task = get_deploy_task_and_verify(state.clone(), &mac, image_id).await?;
+    let (task, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
@@ -52,14 +54,20 @@ pub async fn download_partition_table(
 async fn get_deploy_task_and_verify(
     state: Arc<HandlerState>,
     mac: &str,
-    image_id: i64,
-) -> Result<Task> {
+    task_id: i64,
+) -> Result<(Task, i64)> {
     let task = get_next_task(state, mac).await?;
-    if task.image_id != Some(image_id) || task.task_type != TaskType::Deploy {
+    let Some(image_id) = task.image_id else {
+        return Err(AppError::InvalidArgument(format!(
+            "Task {task_id} is not valid"
+        )));
+    };
+
+    if task.id != task_id || task.task_type != TaskType::Deploy {
         Err(AppError::InvalidArgument(format!(
-            "No deploy task for image {image_id} found"
+            "No deploy task for task {task_id} found"
         )))
     } else {
-        Ok(task)
+        Ok((task, image_id))
     }
 }

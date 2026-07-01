@@ -94,9 +94,9 @@ pub mod dashboard_service_client {
         ///
         pub async fn get_all_hosts(
             &mut self,
-            request: impl tonic::IntoRequest<()>,
+            request: impl tonic::IntoRequest<super::GetAllHostsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllHostsResponse>,
+            tonic::Response<super::GetHostsResponse>,
             tonic::Status,
         > {
             self.inner
@@ -214,11 +214,33 @@ pub mod dashboard_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn multicast(
+            &mut self,
+            request: impl tonic::IntoRequest<super::MulticastHostsRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/Multicast",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "Multicast"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn get_all_images(
             &mut self,
             request: impl tonic::IntoRequest<()>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllImagesResponse>,
+            tonic::Response<super::GetImagesResponse>,
             tonic::Status,
         > {
             self.inner
@@ -315,7 +337,7 @@ pub mod dashboard_service_client {
             &mut self,
             request: impl tonic::IntoRequest<()>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllTasksResponse>,
+            tonic::Response<super::GetTasksResponse>,
             tonic::Status,
         > {
             self.inner
@@ -379,6 +401,128 @@ pub mod dashboard_service_client {
                 .insert(GrpcMethod::new("dashboard.v1.DashboardService", "RetryTask"));
             self.inner.unary(req, path, codec).await
         }
+        ///
+        pub async fn create_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/CreateGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "CreateGroup"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn update_group_name(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateNameRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/UpdateGroupName",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("dashboard.v1.DashboardService", "UpdateGroupName"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_all_groups(
+            &mut self,
+            request: impl tonic::IntoRequest<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetGroupsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/GetAllGroups",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("dashboard.v1.DashboardService", "GetAllGroups"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn update_group_memberships(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UpdateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/UpdateGroupMemberships",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "dashboard.v1.DashboardService",
+                        "UpdateGroupMemberships",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn delete_group(
+            &mut self,
+            request: impl tonic::IntoRequest<super::Id>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/DeleteGroup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "DeleteGroup"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -397,9 +541,9 @@ pub mod dashboard_service_server {
         ///
         async fn get_all_hosts(
             &self,
-            request: tonic::Request<()>,
+            request: tonic::Request<super::GetAllHostsRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllHostsResponse>,
+            tonic::Response<super::GetHostsResponse>,
             tonic::Status,
         >;
         ///
@@ -434,11 +578,16 @@ pub mod dashboard_service_server {
             request: tonic::Request<super::DeployHostRequest>,
         ) -> std::result::Result<tonic::Response<super::Task>, tonic::Status>;
         ///
+        async fn multicast(
+            &self,
+            request: tonic::Request<super::MulticastHostsRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
+        ///
         async fn get_all_images(
             &self,
             request: tonic::Request<()>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllImagesResponse>,
+            tonic::Response<super::GetImagesResponse>,
             tonic::Status,
         >;
         ///
@@ -463,7 +612,7 @@ pub mod dashboard_service_server {
             &self,
             request: tonic::Request<()>,
         ) -> std::result::Result<
-            tonic::Response<super::GetAllTasksResponse>,
+            tonic::Response<super::GetTasksResponse>,
             tonic::Status,
         >;
         ///
@@ -473,6 +622,34 @@ pub mod dashboard_service_server {
         ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
         ///
         async fn retry_task(
+            &self,
+            request: tonic::Request<super::Id>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
+        ///
+        async fn create_group(
+            &self,
+            request: tonic::Request<super::CreateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        ///
+        async fn update_group_name(
+            &self,
+            request: tonic::Request<super::UpdateNameRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        ///
+        async fn get_all_groups(
+            &self,
+            request: tonic::Request<()>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetGroupsResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn update_group_memberships(
+            &self,
+            request: tonic::Request<super::UpdateGroupRequest>,
+        ) -> std::result::Result<tonic::Response<super::Group>, tonic::Status>;
+        ///
+        async fn delete_group(
             &self,
             request: tonic::Request<super::Id>,
         ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
@@ -557,14 +734,19 @@ pub mod dashboard_service_server {
                 "/dashboard.v1.DashboardService/GetAllHosts" => {
                     #[allow(non_camel_case_types)]
                     struct GetAllHostsSvc<T: DashboardService>(pub Arc<T>);
-                    impl<T: DashboardService> tonic::server::UnaryService<()>
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::GetAllHostsRequest>
                     for GetAllHostsSvc<T> {
-                        type Response = super::GetAllHostsResponse;
+                        type Response = super::GetHostsResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
-                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetAllHostsRequest>,
+                        ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
                                 <T as DashboardService>::get_all_hosts(&inner, request)
@@ -771,12 +953,57 @@ pub mod dashboard_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/dashboard.v1.DashboardService/Multicast" => {
+                    #[allow(non_camel_case_types)]
+                    struct MulticastSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::MulticastHostsRequest>
+                    for MulticastSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::MulticastHostsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::multicast(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = MulticastSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/dashboard.v1.DashboardService/GetAllImages" => {
                     #[allow(non_camel_case_types)]
                     struct GetAllImagesSvc<T: DashboardService>(pub Arc<T>);
                     impl<T: DashboardService> tonic::server::UnaryService<()>
                     for GetAllImagesSvc<T> {
-                        type Response = super::GetAllImagesResponse;
+                        type Response = super::GetImagesResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -951,7 +1178,7 @@ pub mod dashboard_service_server {
                     struct GetAllTasksSvc<T: DashboardService>(pub Arc<T>);
                     impl<T: DashboardService> tonic::server::UnaryService<()>
                     for GetAllTasksSvc<T> {
-                        type Response = super::GetAllTasksResponse;
+                        type Response = super::GetTasksResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -1058,6 +1285,230 @@ pub mod dashboard_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RetryTaskSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/CreateGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateGroupSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::CreateGroupRequest>
+                    for CreateGroupSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::create_group(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateGroupSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/UpdateGroupName" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateGroupNameSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::UpdateNameRequest>
+                    for UpdateGroupNameSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpdateNameRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::update_group_name(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateGroupNameSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/GetAllGroups" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetAllGroupsSvc<T: DashboardService>(pub Arc<T>);
+                    impl<T: DashboardService> tonic::server::UnaryService<()>
+                    for GetAllGroupsSvc<T> {
+                        type Response = super::GetGroupsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(&mut self, request: tonic::Request<()>) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::get_all_groups(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetAllGroupsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/UpdateGroupMemberships" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateGroupMembershipsSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::UpdateGroupRequest>
+                    for UpdateGroupMembershipsSvc<T> {
+                        type Response = super::Group;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UpdateGroupRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::update_group_memberships(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateGroupMembershipsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/DeleteGroup" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteGroupSvc<T: DashboardService>(pub Arc<T>);
+                    impl<T: DashboardService> tonic::server::UnaryService<super::Id>
+                    for DeleteGroupSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::Id>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::delete_group(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteGroupSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

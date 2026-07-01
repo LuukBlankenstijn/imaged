@@ -18,15 +18,18 @@ use crate::{api::HandlerState, domain::task::Task, error::AppError};
 pub fn router() -> Router<Arc<HandlerState>> {
     Router::new()
         .route(
-            "/client/images/{image_id}/partitions/{partition_number}/data",
+            "/client/tasks/{task_id}/partitions/{partition_number}/data",
             put(capture::upload_partition_data).get(deploy::download_partition_data),
         )
         .route(
-            "/client/images/{image_id}/parttable",
+            "/client/tasks/{task_id}/parttable",
             put(capture::upload_partition_table).get(deploy::download_partition_table),
         )
-        .route("/client/task/{task_id}/finished", post(task::mark_finished))
-        .route("/client/task/{task_id}/faulted", post(task::mark_faulted))
+        .route(
+            "/client/tasks/{task_id}/finished",
+            post(task::mark_finished),
+        )
+        .route("/client/tasks/{task_id}/faulted", post(task::mark_faulted))
         .route("/client/hosts/stream", get(sse::start_stream))
 }
 

@@ -9,3 +9,4 @@ imaged.db
 node_modules
 *.qcow2
 images
+.claude

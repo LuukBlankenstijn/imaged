@@ -1,12 +1,13 @@
 use derive_more::Constructor;
-use tokio::process::Command;
+use tokio::{io::BufReader, process::Command};
 use tracing::{debug, info};
+use async_compression::tokio::bufread::ZstdDecoder;
 
 use super::{PARTTABLE_TMP, types::ClientTask};
 
 #[derive(Constructor, Clone)]
 pub struct DeployTask {
-    image_id: i64,
+    task_id: i64,
 }
 
 impl ClientTask for DeployTask {
@@ -23,7 +24,7 @@ impl ClientTask for DeployTask {
             anyhow::bail!("sgdisk --zap-all failed");
         }
 
-        let data = api.download_parttable(self.image_id).await?;
+        let data = api.download_parttable(self.task_id).await?;
         tokio::fs::write(PARTTABLE_TMP, data).await?;
         let status = Command::new("sgdisk")
             .args([&format!("--load-backup={PARTTABLE_TMP}"), device])
@@ -53,9 +54,10 @@ impl ClientTask for DeployTask {
         };
 
         debug!(partition_number=%partition.find_partition_number()?, "starting partition download");
-        let mut stream = api
-            .download_partition_data(self.image_id, partition.find_partition_number()?)
+        let stream = api
+            .download_partition_data(self.task_id, partition.find_partition_number()?)
             .await?;
+        let mut decoder = ZstdDecoder::new(BufReader::new(stream));
 
         info!(partition_number=%partition.find_partition_number()?, "restoring partition");
         let partclone_bin = partition
@@ -78,12 +80,15 @@ impl ClientTask for DeployTask {
 
         let mut child_stdin = child.stdin.take().expect("stdin piped");
 
-        let copy_task = tokio::io::copy(&mut stream, &mut child_stdin);
+        tokio::io::copy(&mut decoder, &mut child_stdin)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed piping partition data into partclone: {e}"))?;
 
-        let (copy_result, status_result) = tokio::join!(copy_task, child.wait());
+        // Close partclone's stdin so it observes EOF and can finish; otherwise
+        // the still-open pipe and child.wait() deadlock each other.
+        drop(child_stdin);
 
-        copy_result?;
-        let status = status_result?;
+        let status = child.wait().await?;
         if !status.success() {
             anyhow::bail!("partclone exited with error: {}", status);
         }

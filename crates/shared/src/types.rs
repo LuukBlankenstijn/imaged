@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum TaskType {
     Capture,
     Deploy,
+    Multicast,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, Clone, Copy)]

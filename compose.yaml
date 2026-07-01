@@ -7,26 +7,14 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      - ./tftp:/var/lib/tftpboot
       - ./dnsmasq.conf:/etc/dnsmasq.conf:ro
-    restart: unless-stopped
-
-  http:
-    image: python:3.12-alpine
-    networks:
-      pxenet:
-        ipv4_address: 192.168.100.3
-    volumes:
-      - ./http-root:/srv:ro
-    working_dir: /srv
-    command: python3 -m http.server 80
     restart: unless-stopped
 
 networks:
   pxenet:
     driver: bridge
     driver_opts:
-      com.docker.network.bridge.name: dev-br-imaged
+      com.docker.network.bridge.name: br-netboot
     ipam:
       config:
         - subnet: 192.168.100.0/24

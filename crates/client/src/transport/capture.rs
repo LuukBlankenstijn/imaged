@@ -5,8 +5,8 @@ use tokio_util::io::ReaderStream;
 use crate::transport::ApiClient;
 
 impl ApiClient {
-    pub async fn upload_parttable(&self, image_id: i64, data: Vec<u8>) -> anyhow::Result<()> {
-        let url = self.url(&format!("client/images/{}/parttable", image_id))?;
+    pub async fn upload_parttable(&self, task_id: i64, data: Vec<u8>) -> anyhow::Result<()> {
+        let url = self.url(&format!("client/tasks/{}/parttable", task_id))?;
         self.send(self.client.put(url).body(data), "upload_parttable")
             .await?;
         Ok(())
@@ -14,18 +14,18 @@ impl ApiClient {
 
     pub async fn upload_partition_data<R>(
         &self,
-        image_id: i64,
+        task_id: i64,
         partition_number: i64,
         fstype: &str,
         part_size: u64,
         reader: R,
     ) -> anyhow::Result<()>
     where
-        R: AsyncRead + Send + Sync + 'static,
+        R: AsyncRead + Send + 'static,
     {
         let url = self.url(&format!(
-            "client/images/{}/partitions/{}/data",
-            image_id, partition_number
+            "client/tasks/{}/partitions/{}/data",
+            task_id, partition_number
         ))?;
         let stream = ReaderStream::new(reader);
 

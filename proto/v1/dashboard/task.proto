@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package dashboard.v1;
+
+import "google/protobuf/timestamp.proto";
+
+enum TaskType {
+  TYPE_UNSPECIFIED = 0;
+  TYPE_CAPTURE = 1;
+  TYPE_DEPLOY = 2;
+  TYPE_MULTICAST = 3;
+}
+
+enum TaskState {
+  TASK_UNSPECIFIED = 0;
+  TASK_PENDING = 1;
+  TASK_RUNNING = 2;
+  TASK_DONE = 3;
+  TASK_CANCELLED = 4;
+  TASK_FAILED = 5;
+}
+
+message Task {
+  int64 id = 1;
+  TaskType type = 2;
+  repeated int64 hosts = 3;
+  optional int64 image_id = 4;
+  TaskState state = 5;
+  google.protobuf.Timestamp created_at = 6;
+  optional google.protobuf.Timestamp started_at = 7;
+  optional google.protobuf.Timestamp finished_at = 8;
+  optional string error = 9;
+}
+
+message GetTasksResponse {
+  repeated Task tasks = 1;
+}

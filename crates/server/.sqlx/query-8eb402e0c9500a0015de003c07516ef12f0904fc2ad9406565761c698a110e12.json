@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                id as \"id!: i64\",\n                partition_number,\n                fstype,\n                size_bytes\n            FROM image_partitions WHERE image_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "partition_number",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "fstype",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "size_bytes",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8eb402e0c9500a0015de003c07516ef12f0904fc2ad9406565761c698a110e12"
+}

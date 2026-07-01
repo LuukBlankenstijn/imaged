@@ -5,6 +5,7 @@ use prost_types::Timestamp;
 
 use crate::{
     domain::{
+        group::Group,
         host::Host,
         image::{Image, ImagePartition},
         task::{Task, TaskState, TaskType},
@@ -72,7 +73,7 @@ impl From<Task> for pb::Task {
         Self {
             id: value.id,
             r#type: value.task_type.into(),
-            host_id: value.host_id,
+            hosts: value.hosts,
             image_id: value.image_id,
             state: value.state.into(),
             created_at: Some(Timestamp::from(SystemTime::from(value.created_at))),
@@ -92,6 +93,7 @@ impl From<TaskType> for i32 {
         match value {
             TaskType::Capture => pb::TaskType::TypeCapture.into(),
             TaskType::Deploy => pb::TaskType::TypeDeploy.into(),
+            TaskType::Multicast => pb::TaskType::TypeMulticast.into(),
         }
     }
 }
@@ -106,5 +108,14 @@ impl From<TaskState> for i32 {
             TaskState::Cancelled => pb::TaskState::TaskCancelled,
         };
         state.into()
+    }
+}
+
+impl From<Group> for pb::Group {
+    fn from(value: Group) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+        }
     }
 }

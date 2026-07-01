@@ -2,8 +2,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use derive_more::Constructor;
+use imaged_rpc::dashboard::v1 as pb;
 use imaged_rpc::dashboard::v1::dashboard_service_server::DashboardService;
-use imaged_rpc::dashboard::v1::{self as pb, GetAllHostsResponse};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response};
@@ -29,16 +29,19 @@ impl Deref for DashboardHandler {
 
 #[tonic::async_trait]
 impl DashboardService for DashboardHandler {
-    async fn get_all_hosts(&self, _: Request<()>) -> TonicResult<pb::GetAllHostsResponse> {
+    async fn get_all_hosts(
+        &self,
+        req: Request<pb::GetAllHostsRequest>,
+    ) -> TonicResult<pb::GetHostsResponse> {
+        let request = req.into_inner();
         let hosts = self
             .host_repo
-            .get_all()
+            .get_all(request.group_id)
             .await?
             .into_iter()
             .map(Into::into)
             .collect();
-        let response = GetAllHostsResponse { hosts };
-        Ok(response.into())
+        Ok(Response::new(pb::GetHostsResponse { hosts }))
     }
 
     async fn update_host_name(&self, req: Request<pb::UpdateNameRequest>) -> TonicResult<pb::Host> {
@@ -98,17 +101,35 @@ impl DashboardService for DashboardHandler {
         let request = req.into_inner();
         let task = self
             .task_repo
-            .create(TaskType::Deploy, request.id, request.image_id)
+            .create(TaskType::Deploy, vec![request.id], request.image_id)
             .await?;
         self.host_registry
             .send_task(request.id, task.id, request.image_id, task.task_type);
         Ok(Response::new(task.into()))
     }
 
-    async fn get_all_images(&self, _: Request<()>) -> TonicResult<pb::GetAllImagesResponse> {
+    async fn multicast(&self, req: Request<pb::MulticastHostsRequest>) -> TonicResult {
+        let request = req.into_inner();
+        let task = self
+            .task_repo
+            .create(
+                TaskType::Multicast,
+                request.host_ids.clone(),
+                request.image_id,
+            )
+            .await?;
+        self.multicast_manager.notify_new(task.id)?;
+        for id in request.host_ids.into_iter() {
+            self.host_registry
+                .send_task(id, task.id, task.image_id.unwrap(), task.task_type);
+        }
+        Ok(().into())
+    }
+
+    async fn get_all_images(&self, _: Request<()>) -> TonicResult<pb::GetImagesResponse> {
         let images = self.image_repo.get_all().await?;
 
-        let resp = pb::GetAllImagesResponse {
+        let resp = pb::GetImagesResponse {
             images: images.into_iter().map(Into::into).collect(),
         };
 
@@ -133,7 +154,7 @@ impl DashboardService for DashboardHandler {
 
         let task = self
             .task_repo
-            .create(TaskType::Capture, request.host_id, image.id)
+            .create(TaskType::Capture, vec![request.host_id], image.id)
             .await?;
         self.host_registry
             .send_task(request.host_id, task.id, image.id, task.task_type);
@@ -161,8 +182,8 @@ impl DashboardService for DashboardHandler {
         Ok(Response::new(()))
     }
 
-    async fn get_all_tasks(&self, _: Request<()>) -> TonicResult<pb::GetAllTasksResponse> {
-        Ok(Response::new(pb::GetAllTasksResponse {
+    async fn get_all_tasks(&self, _: Request<()>) -> TonicResult<pb::GetTasksResponse> {
+        Ok(Response::new(pb::GetTasksResponse {
             tasks: self
                 .task_repo
                 .get_all()
@@ -191,7 +212,7 @@ impl DashboardService for DashboardHandler {
                 .mark_faulted(image_id, "Capture task was cancelled by user")
                 .await?;
         }
-        if let Some(host_id) = task.host_id {
+        if let Some(&host_id) = task.hosts.first() {
             self.host_registry.cancel_task(host_id, task.id);
         }
         Ok(Response::new(()))
@@ -207,7 +228,7 @@ impl DashboardService for DashboardHandler {
             ))
             .into());
         }
-        let Some(host_id) = task.host_id else {
+        let Some(&host_id) = task.hosts.first() else {
             return Err(AppError::InvalidArgument(format!(
                 "cannot retry task {}, host is deleted",
                 request.id
@@ -222,6 +243,9 @@ impl DashboardService for DashboardHandler {
             .into());
         };
         self.task_repo.retry(task.id).await?;
+        if task.task_type == TaskType::Multicast {
+            self.multicast_manager.notify_new(task.id)?;
+        }
         if let Some(next_task) = self.task_repo.get_next(host_id).await?
             && next_task.id == task.id
         {
@@ -229,5 +253,59 @@ impl DashboardService for DashboardHandler {
                 .send_task(host_id, task.id, image_id, task.task_type);
         }
         Ok(Response::new(()))
+    }
+
+    async fn create_group(&self, req: Request<pb::CreateGroupRequest>) -> TonicResult<pb::Group> {
+        let request = req.into_inner();
+        Ok(Response::new(
+            self.group_repo
+                .create_group(&request.name, &request.host_ids)
+                .await?
+                .into(),
+        ))
+    }
+
+    async fn update_group_name(
+        &self,
+        req: Request<pb::UpdateNameRequest>,
+    ) -> TonicResult<pb::Group> {
+        let request = req.into_inner();
+        Ok(Response::new(
+            self.group_repo
+                .update_name(request.id, &request.new_name)
+                .await?
+                .into(),
+        ))
+    }
+
+    async fn get_all_groups(&self, _: Request<()>) -> TonicResult<pb::GetGroupsResponse> {
+        Ok(Response::new(pb::GetGroupsResponse {
+            groups: self
+                .group_repo
+                .get_all()
+                .await?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }))
+    }
+
+    async fn update_group_memberships(
+        &self,
+        req: Request<pb::UpdateGroupRequest>,
+    ) -> TonicResult<pb::Group> {
+        let request = req.into_inner();
+        Ok(Response::new(
+            self.group_repo
+                .update_group_members(request.id, &request.host_ids)
+                .await?
+                .into(),
+        ))
+    }
+
+    async fn delete_group(&self, req: Request<pb::Id>) -> TonicResult {
+        let request = req.into_inner();
+        self.group_repo.delete(request.id).await?;
+        Ok(().into())
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM image_partitions WHERE image_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "1ea10eb7cb388379e6a74a8c37f06b906d25fce1704633cdebb561e4868ee0ea"
+}

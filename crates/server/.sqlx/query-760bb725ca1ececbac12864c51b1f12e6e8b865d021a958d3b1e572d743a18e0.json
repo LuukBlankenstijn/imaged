@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO group_hosts (host_id, group_id) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "760bb725ca1ececbac12864c51b1f12e6e8b865d021a958d3b1e572d743a18e0"
+}

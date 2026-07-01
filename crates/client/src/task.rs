@@ -1,5 +1,6 @@
 mod capture;
 mod deploy;
+mod multicast;
 mod types;
 
 use std::sync::Arc;
@@ -48,17 +49,23 @@ async fn start_task(state: Arc<ClientState>, task: Task) {
 async fn run_task(state: Arc<ClientState>, task: Task, cancel_for_task: CancellationToken) {
     let result = match task.task_type {
         TaskType::Capture => {
-            let task = capture::CaptureTask::new(task.image_id);
+            let task = capture::CaptureTask::new(task.id);
             task.run(state.clone(), cancel_for_task).await
         }
         TaskType::Deploy => {
-            let task = deploy::DeployTask::new(task.image_id);
+            let task = deploy::DeployTask::new(task.id);
+            task.run(state.clone(), cancel_for_task).await
+        }
+        TaskType::Multicast => {
+            let task = multicast::MulticastTask;
             task.run(state.clone(), cancel_for_task).await
         }
     };
     match result {
         Ok(_) => {
-            let _ = state.http.mark_task_finished(task.id).await;
+            if !task.task_type.is_multicast() {
+                let _ = state.http.mark_task_finished(task.id).await;
+            }
             tracing::info!(task_id=%task.id, task_type=%task.task_type, "task completed");
         }
         Err(e) => {

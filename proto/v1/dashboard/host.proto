@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package dashboard.v1;
+
+message Host {
+  int64 id = 1;
+  string mac_address = 2;
+  string name = 3;
+  uint64 disk_size_bytes = 4;
+}
+
+message GetAllHostsRequest {
+  optional int64 group_id = 1;
+}
+
+message GetHostsResponse {
+  repeated Host hosts = 1;
+}
+
+message HostConnectionEvent {
+  int64 id = 1;
+  bool connected = 2;
+}
+
+message DeployHostRequest {
+  int64 id = 1;
+  int64 image_id = 2;
+}
+
+message MulticastHostsRequest {
+  repeated int64 host_ids = 1;
+  int64 image_id = 2;
+}

@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     api::client::{AgentMac, get_next_task},
-    domain::{
-        image::ImagePartition,
-        task::{Task, TaskType},
-    },
+    domain::task::{Task, TaskState, TaskType},
     error::{AppError, Result},
 };
 use axum::{
@@ -21,36 +18,37 @@ use futures::TryStreamExt;
 use super::HandlerState;
 pub async fn upload_partition_data(
     State(state): State<Arc<HandlerState>>,
-    Path((image_id, partition_number)): Path<(i64, i64)>,
+    Path((task_id, partition_number)): Path<(i64, i64)>,
     AgentMac(mac): AgentMac,
     headers: HeaderMap,
     body: Body,
 ) -> Result<impl IntoResponse> {
-    // verify this actually needs uploading
-    let _ = get_capture_task_and_verify(state.clone(), &mac, image_id).await?;
+    let (task, image_id) = get_capture_task_and_verify(state.clone(), &mac, task_id).await?;
+    if task.state != TaskState::Running {
+        return Err(AppError::InvalidArgument(
+            "Task has not yet started".to_string(),
+        ));
+    }
     let fstype = headers
         .get("X-Fstype")
         .and_then(|v| v.to_str().ok())
         .ok_or(AppError::InvalidArgument("missing X-Fstype".into()))?
         .to_string();
-    let size: u64 = headers
+    let size: i64 = headers
         .get("X-Partition-Size")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
         .ok_or(AppError::InvalidArgument("missing X-Partition-Size".into()))?;
     let stream = body.into_data_stream().map_err(std::io::Error::other);
 
-    let (path, sha) = state
+    state
         .image_service
         .save_partition_data(image_id, partition_number, stream)
         .await?;
 
     let partition = state
         .image_repo
-        .save_partition(
-            image_id,
-            ImagePartition::new(-1, partition_number, fstype, size, path, sha),
-        )
+        .save_partition(image_id, partition_number, &fstype, size)
         .await?;
 
     Ok((StatusCode::CREATED, Json(partition)))
@@ -58,11 +56,16 @@ pub async fn upload_partition_data(
 
 pub async fn upload_partition_table(
     State(state): State<Arc<HandlerState>>,
-    Path(image_id): Path<i64>,
+    Path(task_id): Path<i64>,
     AgentMac(mac): AgentMac,
     body: Bytes,
 ) -> Result<impl IntoResponse> {
-    let task = get_capture_task_and_verify(state.clone(), &mac, image_id).await?;
+    let (task, image_id) = get_capture_task_and_verify(state.clone(), &mac, task_id).await?;
+    if task.state != TaskState::Pending {
+        return Err(AppError::InvalidArgument(
+            "Task has already stared".to_string(),
+        ));
+    }
 
     // remove old data
     state.image_service.clear_image_data(image_id).await?;
@@ -78,17 +81,23 @@ pub async fn upload_partition_table(
     Ok(StatusCode::CREATED)
 }
 
+// verifies the task is the next task for the host and checks if the task is in the correct state
 async fn get_capture_task_and_verify(
     state: Arc<HandlerState>,
     mac: &str,
-    image_id: i64,
-) -> Result<Task> {
+    task_id: i64,
+) -> Result<(Task, i64)> {
     let task = get_next_task(state, mac).await?;
-    if task.image_id != Some(image_id) || task.task_type != TaskType::Capture {
+    let Some(image_id) = task.image_id else {
+        return Err(AppError::InvalidArgument(format!(
+            "Task {task_id} is not valid"
+        )));
+    };
+    if task.id != task_id || task.task_type != TaskType::Capture {
         Err(AppError::InvalidArgument(format!(
-            "No capture task for image {image_id} found"
+            "No capture task for task {task_id} found"
         )))
     } else {
-        Ok(task)
+        Ok((task, image_id))
     }
 }

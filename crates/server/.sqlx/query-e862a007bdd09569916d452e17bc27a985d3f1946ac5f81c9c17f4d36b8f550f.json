@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE images SET name = ? WHERE id = ?\n               RETURNING\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "captured_at: DateTime<Utc>",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "error",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "e862a007bdd09569916d452e17bc27a985d3f1946ac5f81c9c17f4d36b8f550f"
+}

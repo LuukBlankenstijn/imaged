@@ -10,14 +10,19 @@ use serde_json::json;
 use tonic::Status;
 
 use crate::{
-    domain::{host::HostRepository, image::ImageRepository, task::TaskRepository},
+    domain::{
+        group::GroupRepository, host::HostRepository, image::ImageRepository, task::TaskRepository,
+    },
     error::AppError,
+    multicast::MulticastManager,
     registry::HostRegistry,
     service::image::ImageService,
 };
 
 pub mod client;
 pub mod dashboard;
+pub mod pxe;
+pub mod tftp;
 
 #[derive(Clone, Constructor)]
 pub struct HandlerState {
@@ -25,7 +30,9 @@ pub struct HandlerState {
     host_registry: Arc<HostRegistry>,
     image_repo: Arc<dyn ImageRepository>,
     task_repo: Arc<dyn TaskRepository>,
+    group_repo: Arc<dyn GroupRepository>,
     image_service: Arc<ImageService>,
+    multicast_manager: Arc<MulticastManager>,
 }
 
 impl From<AppError> for Status {

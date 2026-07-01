@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use tracing::error;
 
 use derive_more::Constructor;
 use imaged_shared::{ServerEvent, Task};
@@ -48,6 +49,7 @@ impl HostRegistry {
     pub fn register(self: &Arc<Self>, id: i64) -> Result<Registration<ServerEvent>> {
         let mut admins = self.hosts.write().unwrap();
         if admins.contains_key(&id) {
+            error!("host {id} tried to register but was already registered");
             return Err(crate::error::AppError::FailedPrecondition(
                 "host already connected".into(),
             ));

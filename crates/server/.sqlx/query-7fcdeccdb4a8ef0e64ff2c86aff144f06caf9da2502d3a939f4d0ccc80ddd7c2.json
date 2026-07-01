@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT \n                id as \"id!\", type as task_type, image_id, state, \n                created_at as \"created_at: DateTime<Utc>\", \n                started_at as \"started_at: DateTime<Utc>\", \n                finished_at as \"finished_at: DateTime<Utc>\", \n                host_ids as \"host_ids!: sqlx::types::Json<Vec<i64>>\",\n                error\n            FROM tasks_with_hosts\n            WHERE type = ? AND state = ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "task_type",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "state",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at: DateTime<Utc>",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "started_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "finished_at: DateTime<Utc>",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "host_ids!: sqlx::types::Json<Vec<i64>>",
+        "ordinal": 7,
+        "type_info": "Null"
+      },
+      {
+        "name": "error",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      null,
+      true
+    ]
+  },
+  "hash": "7fcdeccdb4a8ef0e64ff2c86aff144f06caf9da2502d3a939f4d0ccc80ddd7c2"
+}

@@ -3,10 +3,13 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::{
-    domain::{host::HostRepository, image::ImageRepository, task::TaskRepository},
+    domain::{
+        group::GroupRepository, host::HostRepository, image::ImageRepository, task::TaskRepository,
+    },
     error::AppError,
 };
 
+mod group;
 mod host;
 mod image;
 mod task;
@@ -21,6 +24,10 @@ pub fn image_repo(pool: SqlitePool) -> Arc<dyn ImageRepository> {
 
 pub fn task_repo(pool: SqlitePool) -> Arc<dyn TaskRepository> {
     Arc::new(task::SqliteTaskRepository::new(pool))
+}
+
+pub fn group_repo(pool: SqlitePool) -> Arc<dyn GroupRepository> {
+    Arc::new(group::SqliteGroupRepository::new(pool))
 }
 
 impl From<sqlx::Error> for AppError {

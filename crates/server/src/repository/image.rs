@@ -60,9 +60,7 @@ impl ImageRepository for SqliteImageRepository {
                 id as "id!: i64",
                 partition_number,
                 fstype,
-                size_bytes,
-                file_path,
-                sha256
+                size_bytes
             FROM image_partitions WHERE image_id = ?"#,
             id
         )
@@ -75,8 +73,6 @@ impl ImageRepository for SqliteImageRepository {
                 record.partition_number,
                 record.fstype,
                 record.size_bytes as u64,
-                record.file_path,
-                record.sha256,
             )
         })
         .collect();
@@ -105,9 +101,7 @@ impl ImageRepository for SqliteImageRepository {
                 p.id AS "p_id?: i64",
                 p.partition_number AS "p_num?: i64",
                 p.fstype AS "p_fstype?",
-                p.size_bytes AS "p_size?: i64",
-                p.file_path AS "p_path?",
-                p.sha256 AS "p_sha?"
+                p.size_bytes AS "p_size?: i64"
             FROM images i
             LEFT JOIN image_partitions p ON i.id = p.image_id
             ORDER BY i.id, p.partition_number
@@ -135,29 +129,12 @@ impl ImageRepository for SqliteImageRepository {
             });
 
             // 3. Add partition if it exists (the LEFT JOIN will yield nulls for p_* if empty)
-            if let (
-                Some(p_id),
-                Some(p_num),
-                Some(p_fstype),
-                Some(p_size),
-                Some(p_path),
-                Some(p_sha),
-            ) = (
-                row.p_id,
-                row.p_num,
-                row.p_fstype,
-                row.p_size,
-                row.p_path,
-                row.p_sha,
-            ) {
-                entry.partitions.push(ImagePartition::new(
-                    p_id,
-                    p_num,
-                    p_fstype,
-                    p_size as u64,
-                    p_path,
-                    p_sha,
-                ));
+            if let (Some(p_id), Some(p_num), Some(p_fstype), Some(p_size)) =
+                (row.p_id, row.p_num, row.p_fstype, row.p_size)
+            {
+                entry
+                    .partitions
+                    .push(ImagePartition::new(p_id, p_num, p_fstype, p_size as u64));
             }
         }
 
@@ -173,23 +150,22 @@ impl ImageRepository for SqliteImageRepository {
     async fn save_partition(
         &self,
         image_id: i64,
-        partition: ImagePartition,
+        partition_number: i64,
+        fstype: &str,
+        size_bytes: i64,
     ) -> Result<ImagePartition> {
-        let size = partition.size_bytes as i64;
         let partition = sqlx::query!(
             r#"
                 INSERT INTO image_partitions 
-                    (image_id, partition_number, fstype, size_bytes, file_path, sha256) 
+                    (image_id, partition_number, fstype, size_bytes) 
                 VALUES 
-                    (?,?,?,?,?,?)
+                    (?,?,?,?)
                 RETURNING *
             "#,
             image_id,
-            partition.partition_number,
-            partition.fstype,
-            size,
-            partition.filepath,
-            partition.sha256
+            partition_number,
+            fstype,
+            size_bytes,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -199,8 +175,6 @@ impl ImageRepository for SqliteImageRepository {
             partition.image_id,
             partition.fstype,
             partition.size_bytes as u64,
-            partition.file_path,
-            partition.sha256,
         ))
     }
 
@@ -248,5 +222,24 @@ impl ImageRepository for SqliteImageRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>> {
+        Ok(
+            sqlx::query!("SELECT * FROM image_partitions WHERE image_id = ? ORDER BY partition_number", id)
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .map(|partition| {
+                    ImagePartition::new(
+                        // for some reason id is an option
+                        partition.id.unwrap(),
+                        partition.partition_number,
+                        partition.fstype,
+                        partition.size_bytes as u64,
+                    )
+                })
+                .collect(),
+        )
     }
 }

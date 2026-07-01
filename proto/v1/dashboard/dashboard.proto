@@ -3,21 +3,13 @@ syntax = "proto3";
 package dashboard.v1;
 
 import "google/protobuf/empty.proto";
-import "google/protobuf/timestamp.proto";
+import "v1/dashboard/group.proto";
+import "v1/dashboard/host.proto";
+import "v1/dashboard/image.proto";
+import "v1/dashboard/task.proto";
 
 message Id {
   int64 id = 1;
-}
-
-message Host {
-  int64 id = 1;
-  string mac_address = 2;
-  string name = 3;
-  uint64 disk_size_bytes = 4;
-}
-
-message GetAllHostsResponse {
-  repeated Host hosts = 1;
 }
 
 message UpdateNameRequest {
@@ -25,89 +17,30 @@ message UpdateNameRequest {
   string new_name = 2;
 }
 
-message HostConnectionEvent {
-  int64 id = 1;
-  bool connected = 2;
-}
-
-message DeployHostRequest {
-  int64 id = 1;
-  int64 image_id = 2;
-}
-
-message Image {
-  int64 id = 1;
-  string name = 2;
-  google.protobuf.Timestamp captured_at = 3;
-  string status = 4;
-  optional string error_message = 5;
-  repeated ImagePartition partitions = 6;
-}
-
-message ImagePartition {
-  int64 id = 1;
-  int64 partition_number = 2;
-  string fstype = 3;
-  uint64 size_bytes = 4;
-}
-
-message GetAllImagesResponse {
-  repeated Image images = 1;
-}
-
-message CreateImageRequest {
-  string name = 1;
-  int64 host_id = 2;
-}
-
-enum TaskType {
-  TYPE_UNSPECIFIED = 0;
-  TYPE_CAPTURE = 1;
-  TYPE_DEPLOY = 2;
-}
-
-enum TaskState {
-  TASK_UNSPECIFIED = 0;
-  TASK_PENDING = 1;
-  TASK_RUNNING = 2;
-  TASK_DONE = 3;
-  TASK_CANCELLED = 4;
-  TASK_FAILED = 5;
-}
-
-message Task {
-  int64 id = 1;
-  TaskType type = 2;
-  optional int64 host_id = 3;
-  optional int64 image_id = 4;
-  TaskState state = 5;
-  google.protobuf.Timestamp created_at = 6;
-  optional google.protobuf.Timestamp started_at = 7;
-  optional google.protobuf.Timestamp finished_at = 8;
-  optional string error = 9;
-}
-
-message GetAllTasksResponse {
-  repeated Task tasks = 1;
-}
-
 service DashboardService {
-  rpc GetAllHosts(google.protobuf.Empty) returns (GetAllHostsResponse) {}
+  rpc GetAllHosts(GetAllHostsRequest) returns (GetHostsResponse) {}
   rpc UpdateHostName(UpdateNameRequest) returns (Host) {}
   rpc DeleteHost(Id) returns (google.protobuf.Empty) {}
   // sends updates on the host connection status. On first connect receives the current state will be send
   // as a bunch of connected = true messages
   rpc ConnectionState(google.protobuf.Empty) returns (stream HostConnectionEvent) {}
   rpc Deploy(DeployHostRequest) returns (Task) {}
+  rpc Multicast(MulticastHostsRequest) returns (google.protobuf.Empty) {}
 
-  rpc GetAllImages(google.protobuf.Empty) returns (GetAllImagesResponse) {}
+  rpc GetAllImages(google.protobuf.Empty) returns (GetImagesResponse) {}
   rpc UpdateImageName(UpdateNameRequest) returns (Image) {}
   // Creates an image and captures it from the specified host.
   // If this host is not online, there will be a task put in the queue
   rpc CreateImage(CreateImageRequest) returns (Image) {}
   rpc DeleteImage(Id) returns (google.protobuf.Empty) {}
 
-  rpc GetAllTasks(google.protobuf.Empty) returns (GetAllTasksResponse) {}
+  rpc GetAllTasks(google.protobuf.Empty) returns (GetTasksResponse) {}
   rpc CancelTask(Id) returns (google.protobuf.Empty) {}
   rpc RetryTask(Id) returns (google.protobuf.Empty) {}
+
+  rpc CreateGroup(CreateGroupRequest) returns (Group) {}
+  rpc UpdateGroupName(UpdateNameRequest) returns (Group) {}
+  rpc GetAllGroups(google.protobuf.Empty) returns (GetGroupsResponse) {}
+  rpc UpdateGroupMemberships(UpdateGroupRequest) returns (Group) {}
+  rpc DeleteGroup(Id) returns (google.protobuf.Empty) {}
 }

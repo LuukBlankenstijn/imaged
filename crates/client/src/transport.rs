@@ -1,5 +1,6 @@
 mod capture;
 mod deploy;
+pub mod multicast;
 pub mod sse;
 mod task;
 

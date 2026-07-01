@@ -2,17 +2,25 @@
 // @generated from file v1/dashboard/dashboard.proto (package dashboard.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
-import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
-import type { EmptySchema, Timestamp } from "@bufbuild/protobuf/wkt";
-import { file_google_protobuf_empty, file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
+import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
+import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { EmptySchema } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_empty } from "@bufbuild/protobuf/wkt";
+import type { CreateGroupRequestSchema, GetGroupsResponseSchema, GroupSchema, UpdateGroupRequestSchema } from "./group_pb";
+import { file_v1_dashboard_group } from "./group_pb";
+import type { DeployHostRequestSchema, GetAllHostsRequestSchema, GetHostsResponseSchema, HostConnectionEventSchema, HostSchema, MulticastHostsRequestSchema } from "./host_pb";
+import { file_v1_dashboard_host } from "./host_pb";
+import type { CreateImageRequestSchema, GetImagesResponseSchema, ImageSchema } from "./image_pb";
+import { file_v1_dashboard_image } from "./image_pb";
+import type { GetTasksResponseSchema, TaskSchema } from "./task_pb";
+import { file_v1_dashboard_task } from "./task_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file v1/dashboard/dashboard.proto.
  */
 export const file_v1_dashboard_dashboard: GenFile = /*@__PURE__*/
-  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiEAoCSWQSCgoCaWQYASABKAMiTgoESG9zdBIKCgJpZBgBIAEoAxITCgttYWNfYWRkcmVzcxgCIAEoCRIMCgRuYW1lGAMgASgJEhcKD2Rpc2tfc2l6ZV9ieXRlcxgEIAEoBCI4ChNHZXRBbGxIb3N0c1Jlc3BvbnNlEiEKBWhvc3RzGAEgAygLMhIuZGFzaGJvYXJkLnYxLkhvc3QiMQoRVXBkYXRlTmFtZVJlcXVlc3QSCgoCaWQYASABKAMSEAoIbmV3X25hbWUYAiABKAkiNAoTSG9zdENvbm5lY3Rpb25FdmVudBIKCgJpZBgBIAEoAxIRCgljb25uZWN0ZWQYAiABKAgiMQoRRGVwbG95SG9zdFJlcXVlc3QSCgoCaWQYASABKAMSEAoIaW1hZ2VfaWQYAiABKAMiwgEKBUltYWdlEgoKAmlkGAEgASgDEgwKBG5hbWUYAiABKAkSLwoLY2FwdHVyZWRfYXQYAyABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEg4KBnN0YXR1cxgEIAEoCRIaCg1lcnJvcl9tZXNzYWdlGAUgASgJSACIAQESMAoKcGFydGl0aW9ucxgGIAMoCzIcLmRhc2hib2FyZC52MS5JbWFnZVBhcnRpdGlvbkIQCg5fZXJyb3JfbWVzc2FnZSJaCg5JbWFnZVBhcnRpdGlvbhIKCgJpZBgBIAEoAxIYChBwYXJ0aXRpb25fbnVtYmVyGAIgASgDEg4KBmZzdHlwZRgDIAEoCRISCgpzaXplX2J5dGVzGAQgASgEIjsKFEdldEFsbEltYWdlc1Jlc3BvbnNlEiMKBmltYWdlcxgBIAMoCzITLmRhc2hib2FyZC52MS5JbWFnZSIzChJDcmVhdGVJbWFnZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIPCgdob3N0X2lkGAIgASgDIv4CCgRUYXNrEgoKAmlkGAEgASgDEiQKBHR5cGUYAiABKA4yFi5kYXNoYm9hcmQudjEuVGFza1R5cGUSFAoHaG9zdF9pZBgDIAEoA0gAiAEBEhUKCGltYWdlX2lkGAQgASgDSAGIAQESJgoFc3RhdGUYBSABKA4yFy5kYXNoYm9hcmQudjEuVGFza1N0YXRlEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjMKCnN0YXJ0ZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAKIAQESNAoLZmluaXNoZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAOIAQESEgoFZXJyb3IYCSABKAlIBIgBAUIKCghfaG9zdF9pZEILCglfaW1hZ2VfaWRCDQoLX3N0YXJ0ZWRfYXRCDgoMX2ZpbmlzaGVkX2F0QggKBl9lcnJvciI4ChNHZXRBbGxUYXNrc1Jlc3BvbnNlEiEKBXRhc2tzGAEgAygLMhIuZGFzaGJvYXJkLnYxLlRhc2sqQwoIVGFza1R5cGUSFAoQVFlQRV9VTlNQRUNJRklFRBAAEhAKDFRZUEVfQ0FQVFVSRRABEg8KC1RZUEVfREVQTE9ZEAIqeQoJVGFza1N0YXRlEhQKEFRBU0tfVU5TUEVDSUZJRUQQABIQCgxUQVNLX1BFTkRJTkcQARIQCgxUQVNLX1JVTk5JTkcQAhINCglUQVNLX0RPTkUQAxISCg5UQVNLX0NBTkNFTExFRBAEEg8KC1RBU0tfRkFJTEVEEAUyzwYKEERhc2hib2FyZFNlcnZpY2USSgoLR2V0QWxsSG9zdHMSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaIS5kYXNoYm9hcmQudjEuR2V0QWxsSG9zdHNSZXNwb25zZSIAEkcKDlVwZGF0ZUhvc3ROYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhIuZGFzaGJvYXJkLnYxLkhvc3QiABI4CgpEZWxldGVIb3N0EhAuZGFzaGJvYXJkLnYxLklkGhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5IgASUAoPQ29ubmVjdGlvblN0YXRlEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiEuZGFzaGJvYXJkLnYxLkhvc3RDb25uZWN0aW9uRXZlbnQiADABEj8KBkRlcGxveRIfLmRhc2hib2FyZC52MS5EZXBsb3lIb3N0UmVxdWVzdBoSLmRhc2hib2FyZC52MS5UYXNrIgASTAoMR2V0QWxsSW1hZ2VzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5GiIuZGFzaGJvYXJkLnYxLkdldEFsbEltYWdlc1Jlc3BvbnNlIgASSQoPVXBkYXRlSW1hZ2VOYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASRgoLQ3JlYXRlSW1hZ2USIC5kYXNoYm9hcmQudjEuQ3JlYXRlSW1hZ2VSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkltYWdlIgASOQoLRGVsZXRlSW1hZ2USEC5kYXNoYm9hcmQudjEuSWQaFi5nb29nbGUucHJvdG9idWYuRW1wdHkiABJKCgtHZXRBbGxUYXNrcxIWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eRohLmRhc2hib2FyZC52MS5HZXRBbGxUYXNrc1Jlc3BvbnNlIgASOAoKQ2FuY2VsVGFzaxIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAEjcKCVJldHJ5VGFzaxIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAQnMKEGNvbS5kYXNoYm9hcmQudjFCDkRhc2hib2FyZFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_empty, file_google_protobuf_timestamp]);
+  fileDesc("Chx2MS9kYXNoYm9hcmQvZGFzaGJvYXJkLnByb3RvEgxkYXNoYm9hcmQudjEiEAoCSWQSCgoCaWQYASABKAMiMQoRVXBkYXRlTmFtZVJlcXVlc3QSCgoCaWQYASABKAMSEAoIbmV3X25hbWUYAiABKAkyiAoKEERhc2hib2FyZFNlcnZpY2USUQoLR2V0QWxsSG9zdHMSIC5kYXNoYm9hcmQudjEuR2V0QWxsSG9zdHNSZXF1ZXN0Gh4uZGFzaGJvYXJkLnYxLkdldEhvc3RzUmVzcG9uc2UiABJHCg5VcGRhdGVIb3N0TmFtZRIfLmRhc2hib2FyZC52MS5VcGRhdGVOYW1lUmVxdWVzdBoSLmRhc2hib2FyZC52MS5Ib3N0IgASOAoKRGVsZXRlSG9zdBIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAElAKD0Nvbm5lY3Rpb25TdGF0ZRIWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eRohLmRhc2hib2FyZC52MS5Ib3N0Q29ubmVjdGlvbkV2ZW50IgAwARI/CgZEZXBsb3kSHy5kYXNoYm9hcmQudjEuRGVwbG95SG9zdFJlcXVlc3QaEi5kYXNoYm9hcmQudjEuVGFzayIAEkoKCU11bHRpY2FzdBIjLmRhc2hib2FyZC52MS5NdWx0aWNhc3RIb3N0c1JlcXVlc3QaFi5nb29nbGUucHJvdG9idWYuRW1wdHkiABJJCgxHZXRBbGxJbWFnZXMSFi5nb29nbGUucHJvdG9idWYuRW1wdHkaHy5kYXNoYm9hcmQudjEuR2V0SW1hZ2VzUmVzcG9uc2UiABJJCg9VcGRhdGVJbWFnZU5hbWUSHy5kYXNoYm9hcmQudjEuVXBkYXRlTmFtZVJlcXVlc3QaEy5kYXNoYm9hcmQudjEuSW1hZ2UiABJGCgtDcmVhdGVJbWFnZRIgLmRhc2hib2FyZC52MS5DcmVhdGVJbWFnZVJlcXVlc3QaEy5kYXNoYm9hcmQudjEuSW1hZ2UiABI5CgtEZWxldGVJbWFnZRIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAEkcKC0dldEFsbFRhc2tzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5Gh4uZGFzaGJvYXJkLnYxLkdldFRhc2tzUmVzcG9uc2UiABI4CgpDYW5jZWxUYXNrEhAuZGFzaGJvYXJkLnYxLklkGhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5IgASNwoJUmV0cnlUYXNrEhAuZGFzaGJvYXJkLnYxLklkGhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5IgASRgoLQ3JlYXRlR3JvdXASIC5kYXNoYm9hcmQudjEuQ3JlYXRlR3JvdXBSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkdyb3VwIgASSQoPVXBkYXRlR3JvdXBOYW1lEh8uZGFzaGJvYXJkLnYxLlVwZGF0ZU5hbWVSZXF1ZXN0GhMuZGFzaGJvYXJkLnYxLkdyb3VwIgASSQoMR2V0QWxsR3JvdXBzEhYuZ29vZ2xlLnByb3RvYnVmLkVtcHR5Gh8uZGFzaGJvYXJkLnYxLkdldEdyb3Vwc1Jlc3BvbnNlIgASUQoWVXBkYXRlR3JvdXBNZW1iZXJzaGlwcxIgLmRhc2hib2FyZC52MS5VcGRhdGVHcm91cFJlcXVlc3QaEy5kYXNoYm9hcmQudjEuR3JvdXAiABI5CgtEZWxldGVHcm91cBIQLmRhc2hib2FyZC52MS5JZBoWLmdvb2dsZS5wcm90b2J1Zi5FbXB0eSIAQnMKEGNvbS5kYXNoYm9hcmQudjFCDkRhc2hib2FyZFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_empty, file_v1_dashboard_group, file_v1_dashboard_host, file_v1_dashboard_image, file_v1_dashboard_task]);
 
 /**
  * @generated from message dashboard.v1.Id
@@ -30,55 +38,6 @@ export type Id = Message<"dashboard.v1.Id"> & {
  */
 export const IdSchema: GenMessage<Id> = /*@__PURE__*/
   messageDesc(file_v1_dashboard_dashboard, 0);
-
-/**
- * @generated from message dashboard.v1.Host
- */
-export type Host = Message<"dashboard.v1.Host"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: string mac_address = 2;
-   */
-  macAddress: string;
-
-  /**
-   * @generated from field: string name = 3;
-   */
-  name: string;
-
-  /**
-   * @generated from field: uint64 disk_size_bytes = 4;
-   */
-  diskSizeBytes: bigint;
-};
-
-/**
- * Describes the message dashboard.v1.Host.
- * Use `create(HostSchema)` to create a new message.
- */
-export const HostSchema: GenMessage<Host> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 1);
-
-/**
- * @generated from message dashboard.v1.GetAllHostsResponse
- */
-export type GetAllHostsResponse = Message<"dashboard.v1.GetAllHostsResponse"> & {
-  /**
-   * @generated from field: repeated dashboard.v1.Host hosts = 1;
-   */
-  hosts: Host[];
-};
-
-/**
- * Describes the message dashboard.v1.GetAllHostsResponse.
- * Use `create(GetAllHostsResponseSchema)` to create a new message.
- */
-export const GetAllHostsResponseSchema: GenMessage<GetAllHostsResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 2);
 
 /**
  * @generated from message dashboard.v1.UpdateNameRequest
@@ -100,305 +59,7 @@ export type UpdateNameRequest = Message<"dashboard.v1.UpdateNameRequest"> & {
  * Use `create(UpdateNameRequestSchema)` to create a new message.
  */
 export const UpdateNameRequestSchema: GenMessage<UpdateNameRequest> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 3);
-
-/**
- * @generated from message dashboard.v1.HostConnectionEvent
- */
-export type HostConnectionEvent = Message<"dashboard.v1.HostConnectionEvent"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: bool connected = 2;
-   */
-  connected: boolean;
-};
-
-/**
- * Describes the message dashboard.v1.HostConnectionEvent.
- * Use `create(HostConnectionEventSchema)` to create a new message.
- */
-export const HostConnectionEventSchema: GenMessage<HostConnectionEvent> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 4);
-
-/**
- * @generated from message dashboard.v1.DeployHostRequest
- */
-export type DeployHostRequest = Message<"dashboard.v1.DeployHostRequest"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: int64 image_id = 2;
-   */
-  imageId: bigint;
-};
-
-/**
- * Describes the message dashboard.v1.DeployHostRequest.
- * Use `create(DeployHostRequestSchema)` to create a new message.
- */
-export const DeployHostRequestSchema: GenMessage<DeployHostRequest> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 5);
-
-/**
- * @generated from message dashboard.v1.Image
- */
-export type Image = Message<"dashboard.v1.Image"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: string name = 2;
-   */
-  name: string;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp captured_at = 3;
-   */
-  capturedAt?: Timestamp;
-
-  /**
-   * @generated from field: string status = 4;
-   */
-  status: string;
-
-  /**
-   * @generated from field: optional string error_message = 5;
-   */
-  errorMessage?: string;
-
-  /**
-   * @generated from field: repeated dashboard.v1.ImagePartition partitions = 6;
-   */
-  partitions: ImagePartition[];
-};
-
-/**
- * Describes the message dashboard.v1.Image.
- * Use `create(ImageSchema)` to create a new message.
- */
-export const ImageSchema: GenMessage<Image> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 6);
-
-/**
- * @generated from message dashboard.v1.ImagePartition
- */
-export type ImagePartition = Message<"dashboard.v1.ImagePartition"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: int64 partition_number = 2;
-   */
-  partitionNumber: bigint;
-
-  /**
-   * @generated from field: string fstype = 3;
-   */
-  fstype: string;
-
-  /**
-   * @generated from field: uint64 size_bytes = 4;
-   */
-  sizeBytes: bigint;
-};
-
-/**
- * Describes the message dashboard.v1.ImagePartition.
- * Use `create(ImagePartitionSchema)` to create a new message.
- */
-export const ImagePartitionSchema: GenMessage<ImagePartition> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 7);
-
-/**
- * @generated from message dashboard.v1.GetAllImagesResponse
- */
-export type GetAllImagesResponse = Message<"dashboard.v1.GetAllImagesResponse"> & {
-  /**
-   * @generated from field: repeated dashboard.v1.Image images = 1;
-   */
-  images: Image[];
-};
-
-/**
- * Describes the message dashboard.v1.GetAllImagesResponse.
- * Use `create(GetAllImagesResponseSchema)` to create a new message.
- */
-export const GetAllImagesResponseSchema: GenMessage<GetAllImagesResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 8);
-
-/**
- * @generated from message dashboard.v1.CreateImageRequest
- */
-export type CreateImageRequest = Message<"dashboard.v1.CreateImageRequest"> & {
-  /**
-   * @generated from field: string name = 1;
-   */
-  name: string;
-
-  /**
-   * @generated from field: int64 host_id = 2;
-   */
-  hostId: bigint;
-};
-
-/**
- * Describes the message dashboard.v1.CreateImageRequest.
- * Use `create(CreateImageRequestSchema)` to create a new message.
- */
-export const CreateImageRequestSchema: GenMessage<CreateImageRequest> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 9);
-
-/**
- * @generated from message dashboard.v1.Task
- */
-export type Task = Message<"dashboard.v1.Task"> & {
-  /**
-   * @generated from field: int64 id = 1;
-   */
-  id: bigint;
-
-  /**
-   * @generated from field: dashboard.v1.TaskType type = 2;
-   */
-  type: TaskType;
-
-  /**
-   * @generated from field: optional int64 host_id = 3;
-   */
-  hostId?: bigint;
-
-  /**
-   * @generated from field: optional int64 image_id = 4;
-   */
-  imageId?: bigint;
-
-  /**
-   * @generated from field: dashboard.v1.TaskState state = 5;
-   */
-  state: TaskState;
-
-  /**
-   * @generated from field: google.protobuf.Timestamp created_at = 6;
-   */
-  createdAt?: Timestamp;
-
-  /**
-   * @generated from field: optional google.protobuf.Timestamp started_at = 7;
-   */
-  startedAt?: Timestamp;
-
-  /**
-   * @generated from field: optional google.protobuf.Timestamp finished_at = 8;
-   */
-  finishedAt?: Timestamp;
-
-  /**
-   * @generated from field: optional string error = 9;
-   */
-  error?: string;
-};
-
-/**
- * Describes the message dashboard.v1.Task.
- * Use `create(TaskSchema)` to create a new message.
- */
-export const TaskSchema: GenMessage<Task> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 10);
-
-/**
- * @generated from message dashboard.v1.GetAllTasksResponse
- */
-export type GetAllTasksResponse = Message<"dashboard.v1.GetAllTasksResponse"> & {
-  /**
-   * @generated from field: repeated dashboard.v1.Task tasks = 1;
-   */
-  tasks: Task[];
-};
-
-/**
- * Describes the message dashboard.v1.GetAllTasksResponse.
- * Use `create(GetAllTasksResponseSchema)` to create a new message.
- */
-export const GetAllTasksResponseSchema: GenMessage<GetAllTasksResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_dashboard, 11);
-
-/**
- * @generated from enum dashboard.v1.TaskType
- */
-export enum TaskType {
-  /**
-   * @generated from enum value: TYPE_UNSPECIFIED = 0;
-   */
-  TYPE_UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: TYPE_CAPTURE = 1;
-   */
-  TYPE_CAPTURE = 1,
-
-  /**
-   * @generated from enum value: TYPE_DEPLOY = 2;
-   */
-  TYPE_DEPLOY = 2,
-}
-
-/**
- * Describes the enum dashboard.v1.TaskType.
- */
-export const TaskTypeSchema: GenEnum<TaskType> = /*@__PURE__*/
-  enumDesc(file_v1_dashboard_dashboard, 0);
-
-/**
- * @generated from enum dashboard.v1.TaskState
- */
-export enum TaskState {
-  /**
-   * @generated from enum value: TASK_UNSPECIFIED = 0;
-   */
-  TASK_UNSPECIFIED = 0,
-
-  /**
-   * @generated from enum value: TASK_PENDING = 1;
-   */
-  TASK_PENDING = 1,
-
-  /**
-   * @generated from enum value: TASK_RUNNING = 2;
-   */
-  TASK_RUNNING = 2,
-
-  /**
-   * @generated from enum value: TASK_DONE = 3;
-   */
-  TASK_DONE = 3,
-
-  /**
-   * @generated from enum value: TASK_CANCELLED = 4;
-   */
-  TASK_CANCELLED = 4,
-
-  /**
-   * @generated from enum value: TASK_FAILED = 5;
-   */
-  TASK_FAILED = 5,
-}
-
-/**
- * Describes the enum dashboard.v1.TaskState.
- */
-export const TaskStateSchema: GenEnum<TaskState> = /*@__PURE__*/
-  enumDesc(file_v1_dashboard_dashboard, 1);
+  messageDesc(file_v1_dashboard_dashboard, 1);
 
 /**
  * @generated from service dashboard.v1.DashboardService
@@ -409,8 +70,8 @@ export const DashboardService: GenService<{
    */
   getAllHosts: {
     methodKind: "unary";
-    input: typeof EmptySchema;
-    output: typeof GetAllHostsResponseSchema;
+    input: typeof GetAllHostsRequestSchema;
+    output: typeof GetHostsResponseSchema;
   },
   /**
    * @generated from rpc dashboard.v1.DashboardService.UpdateHostName
@@ -448,12 +109,20 @@ export const DashboardService: GenService<{
     output: typeof TaskSchema;
   },
   /**
+   * @generated from rpc dashboard.v1.DashboardService.Multicast
+   */
+  multicast: {
+    methodKind: "unary";
+    input: typeof MulticastHostsRequestSchema;
+    output: typeof EmptySchema;
+  },
+  /**
    * @generated from rpc dashboard.v1.DashboardService.GetAllImages
    */
   getAllImages: {
     methodKind: "unary";
     input: typeof EmptySchema;
-    output: typeof GetAllImagesResponseSchema;
+    output: typeof GetImagesResponseSchema;
   },
   /**
    * @generated from rpc dashboard.v1.DashboardService.UpdateImageName
@@ -488,7 +157,7 @@ export const DashboardService: GenService<{
   getAllTasks: {
     methodKind: "unary";
     input: typeof EmptySchema;
-    output: typeof GetAllTasksResponseSchema;
+    output: typeof GetTasksResponseSchema;
   },
   /**
    * @generated from rpc dashboard.v1.DashboardService.CancelTask
@@ -502,6 +171,46 @@ export const DashboardService: GenService<{
    * @generated from rpc dashboard.v1.DashboardService.RetryTask
    */
   retryTask: {
+    methodKind: "unary";
+    input: typeof IdSchema;
+    output: typeof EmptySchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.CreateGroup
+   */
+  createGroup: {
+    methodKind: "unary";
+    input: typeof CreateGroupRequestSchema;
+    output: typeof GroupSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.UpdateGroupName
+   */
+  updateGroupName: {
+    methodKind: "unary";
+    input: typeof UpdateNameRequestSchema;
+    output: typeof GroupSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.GetAllGroups
+   */
+  getAllGroups: {
+    methodKind: "unary";
+    input: typeof EmptySchema;
+    output: typeof GetGroupsResponseSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.UpdateGroupMemberships
+   */
+  updateGroupMemberships: {
+    methodKind: "unary";
+    input: typeof UpdateGroupRequestSchema;
+    output: typeof GroupSchema;
+  },
+  /**
+   * @generated from rpc dashboard.v1.DashboardService.DeleteGroup
+   */
+  deleteGroup: {
     methodKind: "unary";
     input: typeof IdSchema;
     output: typeof EmptySchema;

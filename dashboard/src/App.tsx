@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Sidebar, type Tab } from "./Sidebar";
 import { HostsView } from "./HostsView";
+import { GroupsView } from "./GroupsView";
 import { ImagesView } from "./ImagesView";
 import { TasksView } from "./TasksView";
 import { Toaster } from "./Toaster";
@@ -38,6 +39,7 @@ export default function App() {
       <Sidebar active={tab} onSelect={selectTab} />
       <main className="main">
         {tab === "hosts" && <HostsView />}
+        {tab === "groups" && <GroupsView />}
         {tab === "images" && <ImagesView />}
         {tab === "tasks" && <TasksView />}
       </main>

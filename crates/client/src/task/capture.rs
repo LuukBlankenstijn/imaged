@@ -1,11 +1,12 @@
 use derive_more::Constructor;
-use tokio::process::Command;
+use tokio::{io::BufReader, process::Command};
+use async_compression::tokio::bufread::ZstdEncoder;
 
 use super::{PARTTABLE_TMP, types::ClientTask};
 
 #[derive(Constructor, Clone)]
 pub struct CaptureTask {
-    image_id: i64,
+    task_id: i64,
 }
 
 impl ClientTask for CaptureTask {
@@ -23,7 +24,7 @@ impl ClientTask for CaptureTask {
         }
 
         let bytes = tokio::fs::read(PARTTABLE_TMP).await?;
-        api.upload_parttable(self.image_id, bytes).await?;
+        api.upload_parttable(self.task_id, bytes).await?;
 
         let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
         Ok(())
@@ -56,13 +57,14 @@ impl ClientTask for CaptureTask {
             .spawn()?;
 
         let stdout = child.stdout.take().expect("stdout piped");
+        let compressed = ZstdEncoder::new(BufReader::new(stdout));
 
         api.upload_partition_data(
-            self.image_id,
+            self.task_id,
             partition.find_partition_number()?,
             fstype,
             partition.size,
-            stdout,
+            compressed,
         )
         .await?;
 

@@ -7,8 +7,8 @@ use tokio_util::io::StreamReader;
 use crate::transport::ApiClient;
 
 impl ApiClient {
-    pub async fn download_parttable(&self, image_id: i64) -> anyhow::Result<Vec<u8>> {
-        let url = self.url(&format!("client/images/{}/parttable", image_id))?;
+    pub async fn download_parttable(&self, task_id: i64) -> anyhow::Result<Vec<u8>> {
+        let url = self.url(&format!("client/tasks/{}/parttable", task_id))?;
         let response = self
             .send(self.client.get(url), "download_parttable")
             .await?;
@@ -18,12 +18,12 @@ impl ApiClient {
 
     pub async fn download_partition_data(
         &self,
-        image_id: i64,
+        task_id: i64,
         partition_number: i64,
     ) -> anyhow::Result<impl AsyncRead + Send + Sync + 'static> {
         let url = self.url(&format!(
-            "client/images/{}/partitions/{}/data",
-            image_id, partition_number
+            "client/tasks/{}/partitions/{}/data",
+            task_id, partition_number
         ))?;
 
         let req = self.client.get(url);

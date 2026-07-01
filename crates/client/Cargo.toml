@@ -18,6 +18,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 reqwest-eventsource = "0.6"
+async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 
 mac_address = "1.1.8"
 anyhow = "1.0.102"
