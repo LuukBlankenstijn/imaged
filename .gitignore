@@ -5,7 +5,7 @@ result
 vmlinuz
 initramfs.cpio.gz
 target
-imaged.db
+imaged.db*
 node_modules
 *.qcow2
 images

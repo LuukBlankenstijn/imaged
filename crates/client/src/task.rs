@@ -47,7 +47,16 @@ async fn start_task(state: Arc<ClientState>, task: imaged_shared::Task) {
 }
 
 async fn run_task(state: Arc<ClientState>, task: Task, cancel_for_task: CancellationToken) {
-    let result = task.run(state.clone(), cancel_for_task).await;
+    let result = match tokio::select! {
+        r = task.run(state.clone()) => Some(r),
+        _ = cancel_for_task.cancelled() => None,
+    } {
+        Some(result) => result,
+        None => {
+            tracing::error!("task cancelled");
+            return;
+        }
+    };
     match result {
         Ok(_) => {
             if let Err(e) = task.finalize(&state.http).await {

@@ -2,29 +2,22 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::{sync::Mutex, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
 
 use crate::task::implementations::ClientTaskExt;
 use crate::transport::ApiClient;
 
 pub trait RunnableClientTask: ClientTaskExt {
-    async fn run(&self, state: Arc<ClientState>, cancel: CancellationToken) -> Result<()> {
+    async fn run(&self, state: Arc<ClientState>) -> Result<()> {
         let disk = crate::sys::disk::find_target_disk().await?;
         let device = format!("/dev/{}", disk.name);
 
         self.handle_partition_table(&state.http, &device).await?;
-        if cancel.is_cancelled() {
-            anyhow::bail!("cancelled");
-        }
 
         // update all partitions just in case the partitions were changed
         let disk = crate::sys::disk::find_target_disk().await?;
 
         for partition in disk.children.into_iter() {
             self.handle_partition(&state.http, partition).await?;
-            if cancel.is_cancelled() {
-                anyhow::bail!("cancelled");
-            }
         }
 
         Ok(())

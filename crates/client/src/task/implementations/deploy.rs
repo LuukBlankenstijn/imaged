@@ -20,6 +20,7 @@ impl ClientTaskExt for DeployTask {
     ) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--zap-all", device])
+            .kill_on_drop(true)
             .status()
             .await?;
         if !status.success() {
@@ -30,13 +31,14 @@ impl ClientTaskExt for DeployTask {
         tokio::fs::write(PARTTABLE_TMP, data).await?;
         let status = Command::new("sgdisk")
             .args([&format!("--load-backup={PARTTABLE_TMP}"), device])
+            .kill_on_drop(true)
             .status()
             .await?;
         if !status.success() {
             anyhow::bail!("sgdisk --load-backup failed");
         }
 
-        let status = Command::new("partprobe").status().await?;
+        let status = Command::new("partprobe").kill_on_drop(true).status().await?;
         if !status.success() {
             anyhow::bail!("partprobe failed");
         }
@@ -78,6 +80,7 @@ impl ClientTaskExt for DeployTask {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()?;
 
         let mut child_stdin = child.stdin.take().expect("stdin piped");

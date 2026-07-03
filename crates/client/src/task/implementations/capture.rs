@@ -19,6 +19,7 @@ impl ClientTaskExt for CaptureTask {
     ) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--backup", PARTTABLE_TMP, device])
+            .kill_on_drop(true)
             .status()
             .await?;
         if !status.success() {
@@ -56,6 +57,7 @@ impl ClientTaskExt for CaptureTask {
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
             .spawn()?;
 
         let stdout = child.stdout.take().expect("stdout piped");

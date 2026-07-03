@@ -256,6 +256,25 @@ function TaskRow({
   const busy = cancelMutation.isPending || retryMutation.isPending;
   const showError = !!task.error;
 
+  // Deploy and multicast write to the disk; cancelling interrupts that write
+  // and can leave the disk in an inconsistent state. Capture only reads.
+  const cancelWarns =
+    task.type === TaskType.TYPE_DEPLOY ||
+    task.type === TaskType.TYPE_MULTICAST;
+
+  function handleCancel() {
+    if (
+      cancelWarns &&
+      !window.confirm(
+        `Cancelling a ${typeLabel(task.type)} task interrupts the disk write ` +
+          `and can leave the disk in an inconsistent state. Cancel anyway?`,
+      )
+    ) {
+      return;
+    }
+    cancelMutation.mutate();
+  }
+
   return (
     <>
       <tr className={showError ? "row-with-error" : undefined}>
@@ -299,7 +318,7 @@ function TaskRow({
             {canCancel && (
               <button
                 className="ghost danger"
-                onClick={() => cancelMutation.mutate()}
+                onClick={handleCancel}
                 disabled={busy}
               >
                 {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
