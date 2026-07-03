@@ -4,16 +4,10 @@ use anyhow::Result;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{sys::disk::BlockDevice, transport::ApiClient};
+use crate::task::implementations::ClientTaskExt;
+use crate::transport::ApiClient;
 
-pub trait ClientTask {
-    async fn handle_partition_table(&self, api: &ApiClient, device: &str) -> anyhow::Result<()>;
-
-    async fn handle_partition(&self, api: &ApiClient, partition: BlockDevice)
-    -> anyhow::Result<()>;
-}
-
-pub trait ClientTaskExt: ClientTask {
+pub trait RunnableClientTask: ClientTaskExt {
     async fn run(&self, state: Arc<ClientState>, cancel: CancellationToken) -> Result<()> {
         let disk = crate::sys::disk::find_target_disk().await?;
         let device = format!("/dev/{}", disk.name);
@@ -36,7 +30,7 @@ pub trait ClientTaskExt: ClientTask {
         Ok(())
     }
 }
-impl<T: ClientTask + ?Sized> ClientTaskExt for T {}
+impl<T: ClientTaskExt + ?Sized> RunnableClientTask for T {}
 
 pub struct ClientState {
     pub http: crate::transport::ApiClient,

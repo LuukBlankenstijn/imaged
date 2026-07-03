@@ -1,16 +1,18 @@
-use derive_more::Constructor;
+use async_compression::tokio::bufread::ZstdDecoder;
+use derive_more::{Constructor, Display};
 use tokio::{io::BufReader, process::Command};
 use tracing::{debug, info};
-use async_compression::tokio::bufread::ZstdDecoder;
 
-use super::{PARTTABLE_TMP, types::ClientTask};
+use super::ClientTaskExt;
+use crate::{sys, task::PARTTABLE_TMP};
 
-#[derive(Constructor, Clone)]
-pub struct DeployTask {
+#[derive(Constructor, Clone, Display)]
+#[display("deploy task {task_id}")]
+pub(crate) struct DeployTask {
     task_id: i64,
 }
 
-impl ClientTask for DeployTask {
+impl ClientTaskExt for DeployTask {
     async fn handle_partition_table(
         &self,
         api: &crate::transport::ApiClient,
@@ -93,6 +95,22 @@ impl ClientTask for DeployTask {
             anyhow::bail!("partclone exited with error: {}", status);
         }
 
+        Ok(())
+    }
+
+    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
+        api.mark_task_finished(self.task_id).await?;
+        tracing::info!(task=%self, "finished task successfully");
+        sys::reboot()
+    }
+
+    async fn finalize_error(
+        &self,
+        api: &crate::transport::ApiClient,
+        err: &str,
+    ) -> anyhow::Result<()> {
+        tracing::error!(task=%self, error=%err, "did not finish task successfully");
+        api.mark_task_failed(self.task_id, err).await?;
         Ok(())
     }
 }

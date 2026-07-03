@@ -1,17 +1,20 @@
-use imaged_shared::get_multicast_port;
-use tokio::{io::{AsyncReadExt, BufReader}, process::Command};
-use tracing::{debug, info};
 use async_compression::tokio::bufread::ZstdDecoder;
-
-use crate::{
-    task::{PARTTABLE_TMP, types::ClientTask},
-    transport::multicast::udp_receiver_stream,
+use derive_more::Display;
+use imaged_shared::get_multicast_port;
+use tokio::{
+    io::{AsyncReadExt, BufReader},
+    process::Command,
 };
+use tracing::{debug, info};
 
-#[derive(Clone)]
-pub struct MulticastTask;
+use super::ClientTaskExt;
+use crate::{sys, task::PARTTABLE_TMP, transport::multicast::udp_receiver_stream};
 
-impl ClientTask for MulticastTask {
+#[derive(Clone, Display)]
+#[display("multicast task")]
+pub(crate) struct MulticastTask;
+
+impl ClientTaskExt for MulticastTask {
     async fn handle_partition_table(
         &self,
         _: &crate::transport::ApiClient,
@@ -99,5 +102,10 @@ impl ClientTask for MulticastTask {
         }
 
         Ok(())
+    }
+
+    async fn finalize(&self, _: &crate::transport::ApiClient) -> anyhow::Result<()> {
+        tracing::info!(task=%self, "finished task successfully");
+        sys::reboot()
     }
 }

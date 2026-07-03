@@ -1,4 +1,3 @@
-mod error;
 mod shell;
 mod sys;
 mod task;
@@ -18,12 +17,12 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     setup_logging!("debug");
 
     let args = Args::parse();
     let server = args.server;
-    let mac = sys::mac::get_mac()?;
+    let mac = sys::get_mac()?;
     let disk = sys::disk::find_target_disk().await?;
 
     // create the state

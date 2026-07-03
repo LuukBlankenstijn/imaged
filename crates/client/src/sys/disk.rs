@@ -1,4 +1,4 @@
-use crate::error::Error;
+use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -23,7 +23,7 @@ impl BlockDevice {
         format!("/dev/{}", self.name)
     }
 
-    pub fn find_partition_number(&self) -> Result<i64, Error> {
+    pub fn find_partition_number(&self) -> Result<i64> {
         let digits: String = self
             .name
             .chars()
@@ -32,7 +32,7 @@ impl BlockDevice {
             .collect();
         digits
             .parse()
-            .map_err(|e| Error::NoPartitionNumber(format!("{e}")))
+            .with_context(|| format!("could not find partition number in {}", self.name))
     }
 
     pub fn get_partclone_binary(&self) -> Option<&'static str> {
@@ -53,7 +53,7 @@ struct LsblkOutput {
     blockdevices: Vec<BlockDevice>,
 }
 
-pub async fn find_target_disk() -> Result<BlockDevice, Error> {
+pub async fn find_target_disk() -> Result<BlockDevice> {
     let devices = lsblk(None).await?;
 
     let candidates: Vec<&BlockDevice> = devices
@@ -62,36 +62,38 @@ pub async fn find_target_disk() -> Result<BlockDevice, Error> {
         .collect();
 
     let disk = match candidates.as_slice() {
-        [] => return Err(Error::NoDisk),
+        [] => bail!("no suitable disk found"),
         [d] => *d,
-        many => {
-            return Err(Error::MultipleDisks(
-                many.iter().map(|d| d.name.clone()).collect(),
-            ));
-        }
+        many => bail!(
+            "multiple disks found: {:?}",
+            many.iter().map(|d| d.name.clone()).collect::<Vec<_>>()
+        ),
     };
 
     if contains_root(disk) {
-        return Err(Error::WouldImageRoot(disk.name.clone()));
+        bail!(
+            "refusing to image disk {}: contains the running root filesystem",
+            disk.name
+        );
     }
 
     Ok(disk.clone())
 }
 
-async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>, Error> {
+async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
     let mut cmd = Command::new("lsblk");
     cmd.args(["-J", "-b", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN"]);
     if let Some(d) = device {
         cmd.arg(d);
     }
 
-    let output = cmd.output().await?;
+    let output = cmd.output().await.context("running lsblk")?;
     if !output.status.success() {
-        return Err(Error::Lsblk(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        bail!("lsblk failed: {}", String::from_utf8_lossy(&output.stderr));
     }
-    Ok(serde_json::from_slice::<LsblkOutput>(&output.stdout)?.blockdevices)
+    Ok(serde_json::from_slice::<LsblkOutput>(&output.stdout)
+        .context("parsing lsblk output")?
+        .blockdevices)
 }
 
 fn contains_root(dev: &BlockDevice) -> bool {

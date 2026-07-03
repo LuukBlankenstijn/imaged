@@ -1,15 +1,17 @@
-use derive_more::Constructor;
-use tokio::{io::BufReader, process::Command};
 use async_compression::tokio::bufread::ZstdEncoder;
+use derive_more::{Constructor, Display};
+use tokio::{io::BufReader, process::Command};
 
-use super::{PARTTABLE_TMP, types::ClientTask};
+use super::ClientTaskExt;
+use crate::task::PARTTABLE_TMP;
 
-#[derive(Constructor, Clone)]
-pub struct CaptureTask {
+#[derive(Constructor, Clone, Display)]
+#[display("capture task {task_id}")]
+pub(crate) struct CaptureTask {
     task_id: i64,
 }
 
-impl ClientTask for CaptureTask {
+impl ClientTaskExt for CaptureTask {
     async fn handle_partition_table(
         &self,
         api: &crate::transport::ApiClient,
@@ -72,6 +74,22 @@ impl ClientTask for CaptureTask {
         if !status.success() {
             anyhow::bail!("partclone exited with {}", status);
         }
+        Ok(())
+    }
+
+    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
+        api.mark_task_finished(self.task_id).await?;
+        tracing::info!(task=%self, "finished task successfully");
+        Ok(())
+    }
+
+    async fn finalize_error(
+        &self,
+        api: &crate::transport::ApiClient,
+        err: &str,
+    ) -> anyhow::Result<()> {
+        tracing::error!(task=%self, error=%err, "did not finish task successfully");
+        api.mark_task_failed(self.task_id, err).await?;
         Ok(())
     }
 }
