@@ -6,7 +6,7 @@ use derive_more::Constructor;
 use imaged_shared::{ServerEvent, Task};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::domain::task::TaskType;
+use crate::domain::task::Task as DomainTask;
 use crate::error::Result;
 
 #[derive(Constructor)]
@@ -78,11 +78,11 @@ impl HostRegistry {
         }
     }
 
-    pub fn send_task(&self, host_id: i64, task_id: i64, image_id: i64, task_type: TaskType) {
+    pub fn send_task(&self, host_id: i64, task: &DomainTask) {
         let hosts = self.hosts.read().unwrap();
         if let Some(sender) = hosts.get(&host_id) {
-            let task = Task::new(task_id, task_type.into(), image_id);
-            let _ = sender.send(task.into());
+            let msg = Task::new(task.id, task.task_type.into(), task.image_id);
+            let _ = sender.send(msg.into());
         }
     }
 

@@ -94,6 +94,7 @@ impl From<TaskType> for i32 {
             TaskType::Capture => pb::TaskType::TypeCapture.into(),
             TaskType::Deploy => pb::TaskType::TypeDeploy.into(),
             TaskType::Multicast => pb::TaskType::TypeMulticast.into(),
+            TaskType::Reboot => pb::TaskType::TypeReboot.into(),
         }
     }
 }

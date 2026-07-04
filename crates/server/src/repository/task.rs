@@ -42,7 +42,12 @@ impl TryFrom<TaskRow> for Task {
 
 #[async_trait::async_trait]
 impl TaskRepository for SqliteTaskRepository {
-    async fn create(&self, task_type: TaskType, host_ids: Vec<i64>, image_id: i64) -> Result<Task> {
+    async fn create(
+        &self,
+        task_type: TaskType,
+        host_ids: Vec<i64>,
+        image_id: Option<i64>,
+    ) -> Result<Task> {
         let type_str = task_type.to_string();
         let state_str = TaskState::Pending.to_string();
         let now = Utc::now();

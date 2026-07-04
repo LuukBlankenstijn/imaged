@@ -6,13 +6,14 @@ pub enum TaskType {
     Capture,
     Deploy,
     Multicast,
+    Reboot,
 }
 
 #[derive(Debug, Serialize, Deserialize, Constructor, Clone, Copy)]
 pub struct Task {
     pub id: i64,
     pub task_type: TaskType,
-    pub image_id: i64,
+    pub image_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, From, Clone, Copy)]

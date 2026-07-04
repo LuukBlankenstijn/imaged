@@ -68,6 +68,11 @@ pub struct MulticastHostsRequest {
     #[prost(int64, tag="2")]
     pub image_id: i64,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RebootHostsRequest {
+    #[prost(int64, repeated, tag="1")]
+    pub host_ids: ::prost::alloc::vec::Vec<i64>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Image {
     #[prost(int64, tag="1")]
@@ -139,6 +144,7 @@ pub enum TaskType {
     TypeCapture = 1,
     TypeDeploy = 2,
     TypeMulticast = 3,
+    TypeReboot = 4,
 }
 impl TaskType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -151,6 +157,7 @@ impl TaskType {
             Self::TypeCapture => "TYPE_CAPTURE",
             Self::TypeDeploy => "TYPE_DEPLOY",
             Self::TypeMulticast => "TYPE_MULTICAST",
+            Self::TypeReboot => "TYPE_REBOOT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -160,6 +167,7 @@ impl TaskType {
             "TYPE_CAPTURE" => Some(Self::TypeCapture),
             "TYPE_DEPLOY" => Some(Self::TypeDeploy),
             "TYPE_MULTICAST" => Some(Self::TypeMulticast),
+            "TYPE_REBOOT" => Some(Self::TypeReboot),
             _ => None,
         }
     }

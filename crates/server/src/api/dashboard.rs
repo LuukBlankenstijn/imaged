@@ -101,10 +101,9 @@ impl DashboardService for DashboardHandler {
         let request = req.into_inner();
         let task = self
             .task_repo
-            .create(TaskType::Deploy, vec![request.id], request.image_id)
+            .create(TaskType::Deploy, vec![request.id], Some(request.image_id))
             .await?;
-        self.host_registry
-            .send_task(request.id, task.id, request.image_id, task.task_type);
+        self.host_registry.send_task(request.id, &task);
         Ok(Response::new(task.into()))
     }
 
@@ -115,14 +114,26 @@ impl DashboardService for DashboardHandler {
             .create(
                 TaskType::Multicast,
                 request.host_ids.clone(),
-                request.image_id,
+                Some(request.image_id),
             )
             .await?;
         self.multicast_manager.notify_new(task.id)?;
         for id in request.host_ids.into_iter() {
-            self.host_registry
-                .send_task(id, task.id, task.image_id.unwrap(), task.task_type);
+            self.host_registry.send_task(id, &task);
         }
+        Ok(().into())
+    }
+
+    async fn reboot(&self, req: Request<pb::RebootHostsRequest>) -> TonicResult {
+        let request = req.into_inner();
+        let task = self
+            .task_repo
+            .create(TaskType::Reboot, request.host_ids.clone(), None)
+            .await?;
+        for id in request.host_ids.into_iter() {
+            self.host_registry.send_task(id, &task);
+        }
+
         Ok(().into())
     }
 
@@ -154,10 +165,9 @@ impl DashboardService for DashboardHandler {
 
         let task = self
             .task_repo
-            .create(TaskType::Capture, vec![request.host_id], image.id)
+            .create(TaskType::Capture, vec![request.host_id], Some(image.id))
             .await?;
-        self.host_registry
-            .send_task(request.host_id, task.id, image.id, task.task_type);
+        self.host_registry.send_task(request.host_id, &task);
 
         Ok(Response::new(image.into()))
     }
@@ -223,19 +233,19 @@ impl DashboardService for DashboardHandler {
         let task = self.task_repo.get(request.id).await?;
         if !(task.state.is_cancelled() || task.state.is_failed()) {
             return Err(AppError::InvalidArgument(format!(
-                "cannot cancel task {}, task is not failed or cancelled",
+                "cannot retry task {}, task is not failed or cancelled",
                 request.id
             ))
             .into());
         }
-        let Some(&host_id) = task.hosts.first() else {
+        if task.hosts.len() == 0 {
             return Err(AppError::InvalidArgument(format!(
-                "cannot retry task {}, host is deleted",
+                "cannot retry task {}, hosts are deleted",
                 request.id
             ))
             .into());
         };
-        let Some(image_id) = task.image_id else {
+        if task.image_id.is_none() {
             return Err(AppError::InvalidArgument(format!(
                 "cannot retry task {}, image is deleted",
                 request.id
@@ -246,11 +256,12 @@ impl DashboardService for DashboardHandler {
         if task.task_type == TaskType::Multicast {
             self.multicast_manager.notify_new(task.id)?;
         }
-        if let Some(next_task) = self.task_repo.get_next(host_id).await?
-            && next_task.id == task.id
-        {
-            self.host_registry
-                .send_task(host_id, task.id, image_id, task.task_type);
+        for host_id in &task.hosts {
+            if let Some(next_task) = self.task_repo.get_next(*host_id).await?
+                && next_task.id == task.id
+            {
+                self.host_registry.send_task(*host_id, &task);
+            }
         }
         Ok(Response::new(()))
     }

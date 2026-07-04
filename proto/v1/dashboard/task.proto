@@ -9,6 +9,7 @@ enum TaskType {
   TYPE_CAPTURE = 1;
   TYPE_DEPLOY = 2;
   TYPE_MULTICAST = 3;
+  TYPE_REBOOT = 4;
 }
 
 enum TaskState {

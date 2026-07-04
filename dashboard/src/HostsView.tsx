@@ -4,6 +4,7 @@ import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
 import { dashboardClient } from "./transport";
 import { formatBytes } from "./format";
 import { useConnection } from "./connectionStore";
+import { ActionMenu } from "./ActionMenu";
 
 type RowMode = "view" | "renaming" | "deploying";
 
@@ -123,11 +124,20 @@ function HostRow({ host }: { host: Host }) {
     meta: { errorTitle: "Deploy failed" },
   });
 
+  const rebootMutation = useMutation({
+    mutationFn: () => dashboardClient.reboot({ hostIds: [host.id] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    meta: { errorTitle: "Reboot failed" },
+  });
+
   const dirty = draft !== host.name;
   const busy =
     renameMutation.isPending ||
     deleteMutation.isPending ||
-    deployMutation.isPending;
+    deployMutation.isPending ||
+    rebootMutation.isPending;
 
   function commitRename() {
     if (dirty) renameMutation.mutate(draft);
@@ -152,6 +162,11 @@ function HostRow({ host }: { host: Host }) {
   function remove() {
     const label = host.name || `host ${host.id}`;
     if (window.confirm(`Delete ${label}?`)) deleteMutation.mutate();
+  }
+
+  function reboot() {
+    const label = host.name || `host ${host.id}`;
+    if (window.confirm(`Reboot ${label}?`)) rebootMutation.mutate();
   }
 
   return (
@@ -220,17 +235,53 @@ function HostRow({ host }: { host: Host }) {
           )}
 
           {mode === "view" && (
-            <>
-              <button className="ghost" onClick={startDeploy} disabled={busy}>
-                Deploy
-              </button>
-              <button className="ghost" onClick={() => setMode("renaming")} disabled={busy}>
-                Rename
-              </button>
-              <button className="ghost danger" onClick={remove} disabled={busy}>
-                {deleteMutation.isPending ? "Deleting…" : "Delete"}
-              </button>
-            </>
+            <ActionMenu disabled={busy}>
+              {(close) => (
+                <>
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      startDeploy();
+                    }}
+                  >
+                    Deploy
+                  </button>
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      setMode("renaming");
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      reboot();
+                    }}
+                  >
+                    Reboot
+                  </button>
+                  <div className="menu-sep" />
+                  <button
+                    className="menu-item danger"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      remove();
+                    }}
+                  >
+                    Delete
+                  </button>
+                </>
+              )}
+            </ActionMenu>
           )}
         </div>
       </td>

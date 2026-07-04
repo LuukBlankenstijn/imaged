@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Group } from "@imaged/gen/v1/dashboard/group_pb";
 import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
 import { dashboardClient } from "./transport";
+import { ActionMenu } from "./ActionMenu";
+
+type DetailIntent = "multicast" | null;
 
 export function GroupsView() {
   const queryClient = useQueryClient();
@@ -183,6 +186,7 @@ function GroupRow({
   const queryClient = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(group.name);
+  const [detailIntent, setDetailIntent] = useState<DetailIntent>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -211,8 +215,24 @@ function GroupRow({
     meta: { errorTitle: "Delete group failed" },
   });
 
+  const rebootMutation = useMutation({
+    mutationFn: async () => {
+      const res = await dashboardClient.getAllHosts({ groupId: group.id });
+      const hostIds = res.hosts.map((h) => h.id);
+      if (hostIds.length === 0) throw new Error("Group has no members");
+      await dashboardClient.reboot({ hostIds });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    meta: { errorTitle: "Reboot failed" },
+  });
+
   const dirty = draftName !== group.name;
-  const busy = renameMutation.isPending || deleteMutation.isPending;
+  const busy =
+    renameMutation.isPending ||
+    deleteMutation.isPending ||
+    rebootMutation.isPending;
 
   function commitRename() {
     if (dirty) renameMutation.mutate(draftName);
@@ -229,15 +249,39 @@ function GroupRow({
     if (window.confirm(`Delete ${label}?`)) deleteMutation.mutate();
   }
 
+  function reboot() {
+    const label = group.name || `group ${group.id}`;
+    if (window.confirm(`Reboot all members of ${label}?`)) {
+      rebootMutation.mutate();
+    }
+  }
+
+  function startMulticast() {
+    if (!expanded) onToggleExpand();
+    setDetailIntent("multicast");
+  }
+
+  // The whole row toggles the members detail, except while renaming (the
+  // inline input owns clicks then).
+  function handleRowClick() {
+    if (!renaming) onToggleExpand();
+  }
+
   return (
     <>
-      <tr className={expanded ? "row-expanded" : undefined}>
+      <tr
+        className={`${expanded ? "row-expanded" : ""}${
+          renaming ? "" : " row-clickable"
+        }`}
+        onClick={handleRowClick}
+      >
         <td className="cell-mono cell-id">{group.id.toString()}</td>
         <td className="cell-name">
           {renaming ? (
             <input
               ref={inputRef}
               value={draftName}
+              onClick={(e) => e.stopPropagation()}
               onChange={(e) => setDraftName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") commitRename();
@@ -252,7 +296,7 @@ function GroupRow({
             <span className="name-empty">unnamed</span>
           )}
         </td>
-        <td className="cell-actions">
+        <td className="cell-actions" onClick={(e) => e.stopPropagation()}>
           <div className="action-group">
             {renaming ? (
               <>
@@ -268,29 +312,53 @@ function GroupRow({
                 </button>
               </>
             ) : (
-              <>
-                <button
-                  className="ghost"
-                  onClick={onToggleExpand}
-                  disabled={busy}
-                >
-                  {expanded ? "Hide" : "View"}
-                </button>
-                <button
-                  className="ghost"
-                  onClick={() => setRenaming(true)}
-                  disabled={busy}
-                >
-                  Rename
-                </button>
-                <button
-                  className="ghost danger"
-                  onClick={remove}
-                  disabled={busy}
-                >
-                  {deleteMutation.isPending ? "Deleting…" : "Delete"}
-                </button>
-              </>
+              <ActionMenu disabled={busy}>
+                {(close) => (
+                  <>
+                    <button
+                      className="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        startMulticast();
+                      }}
+                    >
+                      Multicast
+                    </button>
+                    <button
+                      className="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        setRenaming(true);
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        reboot();
+                      }}
+                    >
+                      Reboot
+                    </button>
+                    <div className="menu-sep" />
+                    <button
+                      className="menu-item danger"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        remove();
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+              </ActionMenu>
             )}
           </div>
         </td>
@@ -299,7 +367,11 @@ function GroupRow({
         <tr className="row-detail">
           <td />
           <td colSpan={2} className="cell-detail">
-            <GroupDetail group={group} />
+            <GroupDetail
+              group={group}
+              intent={detailIntent}
+              onIntentHandled={() => setDetailIntent(null)}
+            />
           </td>
         </tr>
       )}
@@ -307,11 +379,28 @@ function GroupRow({
   );
 }
 
-function GroupDetail({ group }: { group: Group }) {
+function GroupDetail({
+  group,
+  intent,
+  onIntentHandled,
+}: {
+  group: Group;
+  intent?: DetailIntent;
+  onIntentHandled?: () => void;
+}) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"view" | "editing" | "multicasting">("view");
   const [editSelected, setEditSelected] = useState<Set<string>>(new Set());
   const [multicastImageId, setMulticastImageId] = useState<string>("");
+
+  // The row's kebab "Multicast" action expands the detail and asks it to open
+  // straight into multicasting mode.
+  useEffect(() => {
+    if (intent === "multicast") {
+      setMode("multicasting");
+      onIntentHandled?.();
+    }
+  }, [intent, onIntentHandled]);
 
   const membersQuery = useQuery({
     queryKey: ["hosts", "group", group.id.toString()],
@@ -396,7 +485,6 @@ function GroupDetail({ group }: { group: Group }) {
   }
 
   const busy = updateMutation.isPending || multicastMutation.isPending;
-  const canMulticast = members.length > 0 && images.length > 0;
 
   if (mode === "editing") {
     return (
@@ -485,7 +573,8 @@ function GroupDetail({ group }: { group: Group }) {
             <button
               className="primary"
               onClick={submitMulticast}
-              disabled={busy || !multicastImageId}
+              disabled={busy || !multicastImageId || members.length === 0}
+              title={members.length === 0 ? "Group has no members" : undefined}
             >
               {multicastMutation.isPending ? "Sending…" : "Send"}
             </button>
@@ -506,20 +595,6 @@ function GroupDetail({ group }: { group: Group }) {
           <span className="group-detail-count">{members.length}</span>
         </span>
         <div className="action-group">
-          <button
-            className="ghost"
-            onClick={() => setMode("multicasting")}
-            disabled={busy || !canMulticast}
-            title={
-              !canMulticast
-                ? members.length === 0
-                  ? "Group has no members"
-                  : "No images available"
-                : undefined
-            }
-          >
-            Multicast
-          </button>
           <button className="ghost" onClick={startEdit} disabled={busy}>
             Edit members
           </button>

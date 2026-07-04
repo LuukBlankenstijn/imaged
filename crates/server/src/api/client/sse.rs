@@ -33,10 +33,8 @@ pub async fn start_stream(
     let (tx, rx) = mpsc::channel::<Result<Event>>(8);
     let mut registration = state.host_registry.register(host.id)?;
     let task = state.task_repo.get_next(host.id).await?;
-    if let Some(task) = task
-        && let Some(image_id) = task.image_id
-    {
-        let evt = ServerEvent::from(Task::new(task.id, task.task_type.into(), image_id));
+    if let Some(task) = task {
+        let evt = ServerEvent::from(Task::new(task.id, task.task_type.into(), task.image_id));
         let sse_event = match Event::default().json_data(evt) {
             Ok(e) => e,
             Err(e) => {

@@ -7,7 +7,7 @@ import { TaskState, TaskType } from "@imaged/gen/v1/dashboard/task_pb";
 import { dashboardClient } from "./transport";
 import { formatRelative, timestampToDate } from "./format";
 
-type TypeFilter = "all" | "capture" | "deploy" | "multicast";
+type TypeFilter = "all" | "capture" | "deploy" | "multicast" | "reboot";
 type StatusFilter = "active" | "all" | "completed";
 
 const ACTIVE_STATES = new Set<TaskState>([
@@ -65,6 +65,9 @@ export function TasksView() {
           return false;
         }
         if (typeFilter === "multicast" && t.type !== TaskType.TYPE_MULTICAST) {
+          return false;
+        }
+        if (typeFilter === "reboot" && t.type !== TaskType.TYPE_REBOOT) {
           return false;
         }
         const active = ACTIVE_STATES.has(t.state);
@@ -130,6 +133,7 @@ export function TasksView() {
             <option value="capture">Capture</option>
             <option value="deploy">Deploy</option>
             <option value="multicast">Multicast</option>
+            <option value="reboot">Reboot</option>
           </select>
         </div>
 
@@ -246,13 +250,20 @@ function TaskRow({
     return h?.name || h?.macAddress || `host ${id.toString()}`;
   });
   const hostsMissing = hostNames.length === 0;
-  const imageMissing = task.imageId === undefined;
-  const imageLabel = imageMissing
-    ? "(deleted)"
-    : image?.name || `image ${task.imageId!.toString()}`;
+  // Reboot tasks have no associated image, so a missing image is expected
+  // rather than a deleted one.
+  const imageless = task.type === TaskType.TYPE_REBOOT;
+  const imageMissing = !imageless && task.imageId === undefined;
+  const imageLabel = imageless
+    ? "—"
+    : imageMissing
+      ? "(deleted)"
+      : image?.name || `image ${task.imageId!.toString()}`;
   const canCancel = ACTIVE_STATES.has(task.state);
   const canRetry = RETRYABLE_STATES.has(task.state);
-  const retryDisabled = hostsMissing || imageMissing;
+  // The server rejects retrying a task with no image, so imageless tasks stay
+  // non-retryable here too.
+  const retryDisabled = hostsMissing || imageMissing || imageless;
   const busy = cancelMutation.isPending || retryMutation.isPending;
   const showError = !!task.error;
 
@@ -380,6 +391,8 @@ function typeLabel(type: TaskType): string {
       return "deploy";
     case TaskType.TYPE_MULTICAST:
       return "multicast";
+    case TaskType.TYPE_REBOOT:
+      return "reboot";
     default:
       return "unknown";
   }
@@ -393,6 +406,8 @@ function typeTone(type: TaskType): string {
       return "deploy";
     case TaskType.TYPE_MULTICAST:
       return "multicast";
+    case TaskType.TYPE_REBOOT:
+      return "reboot";
     default:
       return "neutral";
   }
@@ -434,6 +449,13 @@ function TypeIcon({ type }: { type: TaskType }) {
           <path d="M8 16a5.66 5.66 0 0 1 0-8" />
           <path d="M19 5a9.66 9.66 0 0 1 0 14" />
           <path d="M5 19a9.66 9.66 0 0 1 0-14" />
+        </svg>
+      );
+    case TaskType.TYPE_REBOOT:
+      return (
+        <svg {...props} aria-hidden>
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <polyline points="3 3 3 8 8 8" />
         </svg>
       );
     default:

@@ -9,6 +9,7 @@ pub enum TaskType {
     Capture,
     Deploy,
     Multicast,
+    Reboot,
 }
 
 impl From<TaskType> for imaged_shared::TaskType {
@@ -17,6 +18,7 @@ impl From<TaskType> for imaged_shared::TaskType {
             TaskType::Capture => imaged_shared::TaskType::Capture,
             TaskType::Deploy => imaged_shared::TaskType::Deploy,
             TaskType::Multicast => imaged_shared::TaskType::Multicast,
+            TaskType::Reboot => imaged_shared::TaskType::Reboot,
         }
     }
 }
@@ -65,7 +67,12 @@ pub struct Task {
 #[async_trait::async_trait]
 pub trait TaskRepository: Send + Sync {
     // create a new task
-    async fn create(&self, task_type: TaskType, host_ids: Vec<i64>, image_id: i64) -> Result<Task>;
+    async fn create(
+        &self,
+        task_type: TaskType,
+        host_ids: Vec<i64>,
+        image_id: Option<i64>,
+    ) -> Result<Task>;
 
     // gets the next task for a host. This takes Pending and Running Tasks into account
     async fn get_next(&self, host_id: i64) -> Result<Option<Task>>;
@@ -85,7 +92,7 @@ pub trait TaskRepository: Send + Sync {
     // gets all active tasks for some image
     async fn get_active_by_image(&self, image_id: i64) -> Result<Vec<Task>>;
 
-    // gets all tasks, optionally filtering by image_id
+    // gets all tasks
     async fn get_all(&self) -> Result<Vec<Task>>;
 
     async fn get(&self, id: i64) -> Result<Task>;
