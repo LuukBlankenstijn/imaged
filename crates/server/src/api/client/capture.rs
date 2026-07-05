@@ -24,7 +24,8 @@ pub async fn upload_partition_data(
     body: Body,
 ) -> Result<impl IntoResponse> {
     let (task, image_id) = get_capture_task_and_verify(state.clone(), &mac, task_id).await?;
-    if task.state != TaskState::Running {
+    // Capture is single-host, so the aggregate equals that host's state.
+    if task.aggregate_state() != TaskState::Running {
         return Err(AppError::InvalidArgument(
             "Task has not yet started".to_string(),
         ));
@@ -61,7 +62,7 @@ pub async fn upload_partition_table(
     body: Bytes,
 ) -> Result<impl IntoResponse> {
     let (task, image_id) = get_capture_task_and_verify(state.clone(), &mac, task_id).await?;
-    if task.state != TaskState::Pending {
+    if task.aggregate_state() != TaskState::Pending {
         return Err(AppError::InvalidArgument(
             "Task has already stared".to_string(),
         ));
@@ -76,8 +77,9 @@ pub async fn upload_partition_table(
         .image_service
         .save_partition_table(image_id, &body)
         .await?;
-    // update task state
-    state.task_repo.start(task.id).await?;
+    // mark this host's row running
+    let host_id = state.host_repo.get_by_mac(&mac).await?.id;
+    state.task_repo.start(task.id, host_id).await?;
     Ok(StatusCode::CREATED)
 }
 

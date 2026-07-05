@@ -8,7 +8,7 @@ use crate::{
         group::Group,
         host::Host,
         image::{Image, ImagePartition},
-        task::{Task, TaskState, TaskType},
+        task::{Task, TaskHost, TaskState, TaskType},
     },
     registry::HostConnectionEvent,
 };
@@ -70,20 +70,32 @@ impl From<ImagePartition> for pb::ImagePartition {
 
 impl From<Task> for pb::Task {
     fn from(value: Task) -> Self {
+        let state = value.aggregate_state().into();
         Self {
             id: value.id,
             r#type: value.task_type.into(),
-            hosts: value.hosts,
+            hosts: value.hosts.into_iter().map(Into::into).collect(),
             image_id: value.image_id,
-            state: value.state.into(),
+            state,
             created_at: Some(Timestamp::from(SystemTime::from(value.created_at))),
+            image_name: value.image_name,
+            image_deleted: value.image_deleted,
+        }
+    }
+}
+
+impl From<TaskHost> for pb::TaskHost {
+    fn from(value: TaskHost) -> Self {
+        Self {
+            host_id: value.host_id,
+            state: value.state.into(),
+            error: value.error,
             started_at: value
                 .started_at
                 .map(|v| Timestamp::from(SystemTime::from(v))),
             finished_at: value
                 .finished_at
                 .map(|v| Timestamp::from(SystemTime::from(v))),
-            error: value.error,
         }
     }
 }
@@ -107,6 +119,7 @@ impl From<TaskState> for i32 {
             TaskState::Done => pb::TaskState::TaskDone,
             TaskState::Failed => pb::TaskState::TaskFailed,
             TaskState::Cancelled => pb::TaskState::TaskCancelled,
+            TaskState::Partial => pb::TaskState::TaskPartial,
         };
         state.into()
     }

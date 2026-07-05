@@ -22,7 +22,7 @@ tonic-web = "0.14.5"
 
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
 
-chrono = "0.4.44"
+chrono = { version = "0.4.44", features = ["serde"] }
 async-trait = "0.1.89"
 bytes = "1.11.1"
 hex = "0.4.3"

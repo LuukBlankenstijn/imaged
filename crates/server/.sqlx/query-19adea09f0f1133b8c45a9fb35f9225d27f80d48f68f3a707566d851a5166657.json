@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            WHERE twh.type = ?\n            AND EXISTS (\n                SELECT 1 FROM task_hosts th\n                WHERE th.task_id = twh.id AND th.state = ?\n            )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "task_type",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_name",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_deleted!: i64",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "created_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "hosts!: sqlx::types::Json<Vec<TaskHost>>",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "19adea09f0f1133b8c45a9fb35f9225d27f80d48f68f3a707566d851a5166657"
+}

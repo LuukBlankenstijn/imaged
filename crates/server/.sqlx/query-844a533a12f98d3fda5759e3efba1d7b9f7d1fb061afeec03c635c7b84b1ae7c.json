@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            JOIN task_hosts th ON th.task_id = twh.id\n            WHERE th.host_id = ?\n            AND (th.state = ? OR th.state = ?)\n            ORDER BY\n                CASE th.state\n                    WHEN ? THEN 1\n                    WHEN ? THEN 2\n                END ASC,\n                twh.created_at ASC\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "task_type",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_name",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_deleted!: i64",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "created_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "hosts!: sqlx::types::Json<Vec<TaskHost>>",
+        "ordinal": 6,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "844a533a12f98d3fda5759e3efba1d7b9f7d1fb061afeec03c635c7b84b1ae7c"
+}

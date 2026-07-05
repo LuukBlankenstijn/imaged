@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::AgentMac;
 use super::HandlerState;
 use crate::api::client::get_next_task;
-use crate::domain::task::TaskState;
 use crate::domain::task::TaskType;
 use crate::error::AppError;
 use crate::error::Result;
@@ -23,17 +22,13 @@ pub async fn mark_finished(
             "Task {task_id} is not the next task for host {mac}",
         )));
     }
-    if task.state == TaskState::Pending {
-        return Err(AppError::InvalidArgument(
-            "Task has not yet started".to_string(),
-        ));
-    }
+    let host_id = state.host_repo.get_by_mac(&mac).await?.id;
     if task.task_type == TaskType::Capture
         && let Some(image_id) = task.image_id
     {
         state.image_repo.mark_finished(image_id).await?;
     }
-    state.task_repo.mark_finished(task.id).await?;
+    state.task_repo.mark_finished(task.id, host_id).await?;
 
     Ok(())
 }
@@ -55,17 +50,16 @@ pub async fn mark_faulted(
             "Task {task_id} is not the next task for host {mac}",
         )));
     }
-    if task.state == TaskState::Pending {
-        return Err(AppError::InvalidArgument(
-            "Task has not yet started".to_string(),
-        ));
-    }
+    let host_id = state.host_repo.get_by_mac(&mac).await?.id;
     if task.task_type == TaskType::Capture
         && let Some(image_id) = task.image_id
     {
         state.image_repo.mark_faulted(image_id, &body.error).await?;
     }
-    state.task_repo.mark_failed(task.id, &body.error).await?;
+    state
+        .task_repo
+        .mark_failed(task.id, host_id, &body.error)
+        .await?;
 
     Ok(())
 }

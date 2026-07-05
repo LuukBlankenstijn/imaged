@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO tasks (type, image_id, created_at)\n            VALUES (?, ?, ?)\n            RETURNING id as \"id!\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "944750c92437bfc61c4dda03bb559000ecb4836cfdc167c4b6cf50e262e4b274"
+}

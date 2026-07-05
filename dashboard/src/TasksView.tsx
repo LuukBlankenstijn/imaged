@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
-import type { Image } from "@imaged/gen/v1/dashboard/image_pb";
 import type { Task } from "@imaged/gen/v1/dashboard/task_pb";
 import { TaskState, TaskType } from "@imaged/gen/v1/dashboard/task_pb";
 import { dashboardClient } from "./transport";
@@ -18,6 +17,7 @@ const ACTIVE_STATES = new Set<TaskState>([
 const RETRYABLE_STATES = new Set<TaskState>([
   TaskState.TASK_FAILED,
   TaskState.TASK_CANCELLED,
+  TaskState.TASK_PARTIAL,
 ]);
 
 export function TasksView() {
@@ -36,22 +36,11 @@ export function TasksView() {
     queryFn: () => dashboardClient.getAllHosts({}),
   });
 
-  const imagesQuery = useQuery({
-    queryKey: ["images"],
-    queryFn: () => dashboardClient.getAllImages({}),
-  });
-
   const hostsById = useMemo(() => {
     const map = new Map<string, Host>();
     for (const h of hostsQuery.data?.hosts ?? []) map.set(h.id.toString(), h);
     return map;
   }, [hostsQuery.data]);
-
-  const imagesById = useMemo(() => {
-    const map = new Map<string, Image>();
-    for (const i of imagesQuery.data?.images ?? []) map.set(i.id.toString(), i);
-    return map;
-  }, [imagesQuery.data]);
 
   const tasks = tasksQuery.data?.tasks ?? [];
 
@@ -74,7 +63,7 @@ export function TasksView() {
         if (statusFilter === "active" && !active) return false;
         if (statusFilter === "completed" && active) return false;
         if (hostFilter !== "all") {
-          if (!t.hosts.some((id) => id.toString() === hostFilter)) {
+          if (!t.hosts.some((h) => h.hostId.toString() === hostFilter)) {
             return false;
           }
         }
@@ -202,11 +191,6 @@ export function TasksView() {
                   key={task.id.toString()}
                   task={task}
                   hostsById={hostsById}
-                  image={
-                    task.imageId !== undefined
-                      ? imagesById.get(task.imageId.toString())
-                      : undefined
-                  }
                 />
               ))}
             </tbody>
@@ -220,13 +204,12 @@ export function TasksView() {
 function TaskRow({
   task,
   hostsById,
-  image,
 }: {
   task: Task;
   hostsById: Map<string, Host>;
-  image?: Image;
 }) {
   const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
 
   const cancelMutation = useMutation({
     mutationFn: () => dashboardClient.cancelTask({ id: task.id }),
@@ -244,28 +227,27 @@ function TaskRow({
     meta: { errorTitle: "Retry task failed" },
   });
 
-  const updatedAt = task.finishedAt ?? task.startedAt ?? task.createdAt;
-  const hostNames = task.hosts.map((id) => {
-    const h = hostsById.get(id.toString());
-    return h?.name || h?.macAddress || `host ${id.toString()}`;
-  });
-  const hostsMissing = hostNames.length === 0;
-  // Reboot tasks have no associated image, so a missing image is expected
-  // rather than a deleted one.
-  const imageless = task.type === TaskType.TYPE_REBOOT;
-  const imageMissing = !imageless && task.imageId === undefined;
-  const imageLabel = imageless
-    ? "—"
-    : imageMissing
-      ? "(deleted)"
-      : image?.name || `image ${task.imageId!.toString()}`;
+  const hostName = (hostId: bigint) => {
+    const h = hostsById.get(hostId.toString());
+    return h?.name || h?.macAddress || `host ${hostId.toString()}`;
+  };
+  const hostNames = task.hosts.map((h) => hostName(h.hostId));
+  const hostsMissing = task.hosts.length === 0;
+  const updatedAt = latestActivity(task);
+
+  // image_id NULL means "no image" (reboot); a set id with image_deleted means
+  // the image was soft-deleted (name still resolved for display).
+  const imageLabel =
+    task.imageId === undefined
+      ? "—"
+      : (task.imageName ?? `image ${task.imageId.toString()}`) +
+        (task.imageDeleted ? " (deleted)" : "");
   const canCancel = ACTIVE_STATES.has(task.state);
   const canRetry = RETRYABLE_STATES.has(task.state);
-  // The server rejects retrying a task with no image, so imageless tasks stay
-  // non-retryable here too.
-  const retryDisabled = hostsMissing || imageMissing || imageless;
+  // A soft-deleted image can't be re-run (blobs cleared); the server rejects it.
+  const retryDisabled = hostsMissing || task.imageDeleted;
   const busy = cancelMutation.isPending || retryMutation.isPending;
-  const showError = !!task.error;
+  const hasError = task.hosts.some((h) => !!h.error);
 
   // Deploy and multicast write to the disk; cancelling interrupts that write
   // and can leave the disk in an inconsistent state. Capture only reads.
@@ -288,10 +270,15 @@ function TaskRow({
 
   return (
     <>
-      <tr className={showError ? "row-with-error" : undefined}>
+      <tr
+        className={`row-clickable${hasError ? " row-with-error" : ""}${
+          expanded ? " row-expanded" : ""
+        }`}
+        onClick={() => setExpanded((v) => !v)}
+      >
         <td className="cell-mono cell-id">{task.id.toString()}</td>
         <td>
-          <StatusBadge state={task.state} error={task.error} />
+          <StatusBadge state={task.state} />
         </td>
         <td>
           <TypeBadge type={task.type} />
@@ -300,17 +287,17 @@ function TaskRow({
           className={`cell-name${hostsMissing ? " cell-deleted" : ""}`}
           title={hostNames.join(", ") || undefined}
         >
-          <HostsLabel names={hostNames} />
+          <HostsLabel count={task.hosts.length} first={hostNames[0]} />
         </td>
         <td
-          className={`cell-name${imageMissing ? " cell-deleted" : ""}`}
+          className={`cell-name${task.imageDeleted ? " cell-deleted" : ""}`}
           title={imageLabel}
         >
           {imageLabel}
         </td>
         <td className="cell-captured">{formatRelative(task.createdAt)}</td>
         <td className="cell-captured">{formatRelative(updatedAt)}</td>
-        <td className="cell-actions">
+        <td className="cell-actions" onClick={(e) => e.stopPropagation()}>
           <div className="action-group">
             {canRetry && (
               <button
@@ -319,7 +306,7 @@ function TaskRow({
                 disabled={busy || retryDisabled}
                 title={
                   retryDisabled
-                    ? "Cannot retry: host or image was deleted"
+                    ? "Cannot retry: hosts or image were deleted"
                     : undefined
                 }
               >
@@ -338,11 +325,32 @@ function TaskRow({
           </div>
         </td>
       </tr>
-      {showError && (
-        <tr className="row-error">
+      {expanded && (
+        <tr className="row-detail">
           <td />
-          <td colSpan={7} className="cell-error">
-            <div className="error-callout">{task.error}</div>
+          <td colSpan={7} className="cell-detail">
+            <div className="task-hosts">
+              {task.hosts.length === 0 && (
+                <span className="name-empty">no hosts (deleted)</span>
+              )}
+              {task.hosts.map((h) => {
+                const when = h.finishedAt ?? h.startedAt;
+                return (
+                  <div key={h.hostId.toString()} className="task-host-row">
+                    <span className="task-host-name">{hostName(h.hostId)}</span>
+                    <StatusBadge state={h.state} error={h.error} />
+                    {h.error && (
+                      <span className="task-host-error" title={h.error}>
+                        {h.error}
+                      </span>
+                    )}
+                    <span className="task-host-time">
+                      {when ? formatRelative(when) : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </td>
         </tr>
       )}
@@ -350,15 +358,32 @@ function TaskRow({
   );
 }
 
-function HostsLabel({ names }: { names: string[] }) {
-  if (names.length === 0) return <>(deleted)</>;
-  if (names.length === 1) return <>{names[0]}</>;
+function HostsLabel({ count, first }: { count: number; first?: string }) {
+  if (count === 0) return <>(deleted)</>;
+  if (count === 1) return <>{first}</>;
   return (
     <>
-      {names[0]}
-      <span className="host-extra-count">+{names.length - 1}</span>
+      {first}
+      <span className="host-extra-count">+{count - 1}</span>
     </>
   );
+}
+
+// Most recent per-host started/finished time, falling back to creation.
+function latestActivity(task: Task) {
+  let latest = task.createdAt;
+  let latestMs = latest ? (timestampToDate(latest)?.getTime() ?? 0) : 0;
+  for (const h of task.hosts) {
+    for (const t of [h.startedAt, h.finishedAt]) {
+      if (!t) continue;
+      const ms = timestampToDate(t)?.getTime() ?? 0;
+      if (ms >= latestMs) {
+        latest = t;
+        latestMs = ms;
+      }
+    }
+  }
+  return latest;
 }
 
 function StatusBadge({ state, error }: { state: TaskState; error?: string }) {
@@ -475,6 +500,8 @@ function stateLabel(state: TaskState): string {
       return "cancelled";
     case TaskState.TASK_FAILED:
       return "failed";
+    case TaskState.TASK_PARTIAL:
+      return "partial";
     default:
       return "unknown";
   }
@@ -482,7 +509,7 @@ function stateLabel(state: TaskState): string {
 
 function stateTone(
   state: TaskState,
-): "ok" | "progress" | "error" | "neutral" | "pending" | "cancelled" {
+): "ok" | "progress" | "error" | "neutral" | "pending" | "cancelled" | "partial" {
   switch (state) {
     case TaskState.TASK_DONE:
       return "ok";
@@ -494,6 +521,8 @@ function stateTone(
       return "pending";
     case TaskState.TASK_CANCELLED:
       return "cancelled";
+    case TaskState.TASK_PARTIAL:
+      return "partial";
     default:
       return "neutral";
   }

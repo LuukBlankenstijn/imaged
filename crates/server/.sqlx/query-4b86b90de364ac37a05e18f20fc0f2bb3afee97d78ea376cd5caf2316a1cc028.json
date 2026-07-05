@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            ORDER BY i.id, p.partition_number\n            ",
+  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
   "describe": {
     "columns": [
       {
@@ -64,5 +64,5 @@
       true
     ]
   },
-  "hash": "277a54a247137d93f3054c70a2fa453df4eaf145eb32bf77fd55c1c969d39f6b"
+  "hash": "4b86b90de364ac37a05e18f20fc0f2bb3afee97d78ea376cd5caf2316a1cc028"
 }

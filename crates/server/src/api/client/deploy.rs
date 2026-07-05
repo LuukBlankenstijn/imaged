@@ -46,7 +46,8 @@ pub async fn download_partition_table(
             "Image {image_id} is not ready"
         )));
     };
-    state.task_repo.start(task.id).await?;
+    let host_id = state.host_repo.get_by_mac(&mac).await?.id;
+    state.task_repo.start(task.id, host_id).await?;
     let data = state.image_service.read_partition_table(image_id).await?;
     Ok(Body::from(data))
 }

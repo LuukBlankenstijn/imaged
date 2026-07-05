@@ -19,18 +19,27 @@ enum TaskState {
   TASK_DONE = 3;
   TASK_CANCELLED = 4;
   TASK_FAILED = 5;
+  TASK_PARTIAL = 6;
+}
+
+message TaskHost {
+  int64 host_id = 1;
+  TaskState state = 2;
+  optional string error = 3;
+  optional google.protobuf.Timestamp started_at = 4;
+  optional google.protobuf.Timestamp finished_at = 5;
 }
 
 message Task {
   int64 id = 1;
   TaskType type = 2;
-  repeated int64 hosts = 3;
+  repeated TaskHost hosts = 3;
   optional int64 image_id = 4;
+  // Derived rollup of the per-host states (may be TASK_PARTIAL).
   TaskState state = 5;
   google.protobuf.Timestamp created_at = 6;
-  optional google.protobuf.Timestamp started_at = 7;
-  optional google.protobuf.Timestamp finished_at = 8;
-  optional string error = 9;
+  optional string image_name = 10;
+  bool image_deleted = 11;
 }
 
 message GetTasksResponse {

@@ -590,6 +590,40 @@ input {
   padding-left: 0.5rem;
 }
 
+.task-hosts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-top: 1px solid var(--line-strong);
+  margin-top: 0.25rem;
+  padding: 0.6rem 0.5rem 0.25rem 0;
+}
+
+.task-host-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.task-host-name {
+  min-width: 10rem;
+  font-weight: 500;
+}
+
+.task-host-error {
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 28rem;
+}
+
+.task-host-time {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .group-detail {
   display: flex;
   flex-direction: column;
@@ -814,6 +848,12 @@ input {
   background: rgba(148, 163, 184, 0.10);
   border-color: rgba(148, 163, 184, 0.35);
   text-decoration: line-through;
+}
+
+.badge-partial {
+  color: #fb923c;
+  background: rgba(251, 146, 60, 0.10);
+  border-color: rgba(251, 146, 60, 0.35);
 }
 
 .badge-empty {

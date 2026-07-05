@@ -27,6 +27,11 @@
         "name": "error",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "deleted_at",
+        "ordinal": 5,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -37,6 +42,7 @@
       false,
       true,
       false,
+      true,
       true
     ]
   },

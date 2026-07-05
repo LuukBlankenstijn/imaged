@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_hosts SET state = ?, finished_at = ?, error = ? WHERE task_id = ? AND host_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b3dafc145afbeeb83ebb0d7f7f72c4895c3ed2c96c5c32724ac2d5d6ec3058ec"
+}

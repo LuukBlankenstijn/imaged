@@ -104,6 +104,7 @@ impl ImageRepository for SqliteImageRepository {
                 p.size_bytes AS "p_size?: i64"
             FROM images i
             LEFT JOIN image_partitions p ON i.id = p.image_id
+            WHERE i.deleted_at IS NULL
             ORDER BY i.id, p.partition_number
             "#
         )
@@ -179,7 +180,12 @@ impl ImageRepository for SqliteImageRepository {
     }
 
     async fn delete_image(&self, id: i64) -> Result {
-        sqlx::query!("DELETE FROM images WHERE id = ?", id)
+        // Soft delete: keep the row as a tombstone so tasks referencing this
+        // image still resolve its name (and can distinguish "deleted" from
+        // "no image"). The heavy partition blobs are reclaimed separately by
+        // `image_service.clear_image_data`.
+        let now = Utc::now();
+        sqlx::query!("UPDATE images SET deleted_at = ? WHERE id = ?", now, id)
             .execute(&self.pool)
             .await?;
         Ok(())

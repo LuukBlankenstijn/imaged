@@ -207,7 +207,8 @@ impl DashboardService for DashboardHandler {
     async fn cancel_task(&self, req: Request<pb::Id>) -> TonicResult {
         let request = req.into_inner();
         let task = self.task_repo.get(request.id).await?;
-        if !(task.state.is_pending() || task.state.is_running()) {
+        let state = task.aggregate_state();
+        if !(state.is_pending() || state.is_running()) {
             return Err(AppError::InvalidArgument(format!(
                 "cannot cancel task {}, task is not pending or running",
                 request.id
@@ -222,8 +223,12 @@ impl DashboardService for DashboardHandler {
                 .mark_faulted(image_id, "Capture task was cancelled by user")
                 .await?;
         }
-        if let Some(&host_id) = task.hosts.first() {
-            self.host_registry.cancel_task(host_id, task.id);
+        for host in task
+            .hosts
+            .iter()
+            .filter(|h| h.state.is_pending() || h.state.is_running())
+        {
+            self.host_registry.cancel_task(host.host_id, task.id);
         }
         Ok(Response::new(()))
     }
@@ -231,21 +236,24 @@ impl DashboardService for DashboardHandler {
     async fn retry_task(&self, req: Request<pb::Id>) -> TonicResult {
         let request = req.into_inner();
         let task = self.task_repo.get(request.id).await?;
-        if !(task.state.is_cancelled() || task.state.is_failed()) {
+        let state = task.aggregate_state();
+        if !(state.is_cancelled() || state.is_failed() || state.is_partial()) {
             return Err(AppError::InvalidArgument(format!(
-                "cannot retry task {}, task is not failed or cancelled",
+                "cannot retry task {}, task has no failed or cancelled hosts",
                 request.id
             ))
             .into());
         }
-        if task.hosts.len() == 0 {
+        if task.hosts.is_empty() {
             return Err(AppError::InvalidArgument(format!(
                 "cannot retry task {}, hosts are deleted",
                 request.id
             ))
             .into());
         };
-        if task.image_id.is_none() {
+        // A soft-deleted image has had its blobs cleared, so an image-backed
+        // task genuinely can't re-run. "No image" (reboot) is fine.
+        if task.image_id.is_some() && task.image_deleted {
             return Err(AppError::InvalidArgument(format!(
                 "cannot retry task {}, image is deleted",
                 request.id
@@ -256,11 +264,11 @@ impl DashboardService for DashboardHandler {
         if task.task_type == TaskType::Multicast {
             self.multicast_manager.notify_new(task.id)?;
         }
-        for host_id in &task.hosts {
-            if let Some(next_task) = self.task_repo.get_next(*host_id).await?
+        for host in &task.hosts {
+            if let Some(next_task) = self.task_repo.get_next(host.host_id).await?
                 && next_task.id == task.id
             {
-                self.host_registry.send_task(*host_id, &task);
+                self.host_registry.send_task(host.host_id, &task);
             }
         }
         Ok(Response::new(()))

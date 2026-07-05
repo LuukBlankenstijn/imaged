@@ -112,25 +112,37 @@ pub struct CreateImageRequest {
     pub host_id: i64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TaskHost {
+    #[prost(int64, tag="1")]
+    pub host_id: i64,
+    #[prost(enumeration="TaskState", tag="2")]
+    pub state: i32,
+    #[prost(string, optional, tag="3")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub started_at: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag="5")]
+    pub finished_at: ::core::option::Option<::prost_types::Timestamp>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Task {
     #[prost(int64, tag="1")]
     pub id: i64,
     #[prost(enumeration="TaskType", tag="2")]
     pub r#type: i32,
-    #[prost(int64, repeated, tag="3")]
-    pub hosts: ::prost::alloc::vec::Vec<i64>,
+    #[prost(message, repeated, tag="3")]
+    pub hosts: ::prost::alloc::vec::Vec<TaskHost>,
     #[prost(int64, optional, tag="4")]
     pub image_id: ::core::option::Option<i64>,
+    /// Derived rollup of the per-host states (may be TASK_PARTIAL).
     #[prost(enumeration="TaskState", tag="5")]
     pub state: i32,
     #[prost(message, optional, tag="6")]
     pub created_at: ::core::option::Option<::prost_types::Timestamp>,
-    #[prost(message, optional, tag="7")]
-    pub started_at: ::core::option::Option<::prost_types::Timestamp>,
-    #[prost(message, optional, tag="8")]
-    pub finished_at: ::core::option::Option<::prost_types::Timestamp>,
-    #[prost(string, optional, tag="9")]
-    pub error: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="10")]
+    pub image_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag="11")]
+    pub image_deleted: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetTasksResponse {
@@ -181,6 +193,7 @@ pub enum TaskState {
     TaskDone = 3,
     TaskCancelled = 4,
     TaskFailed = 5,
+    TaskPartial = 6,
 }
 impl TaskState {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -195,6 +208,7 @@ impl TaskState {
             Self::TaskDone => "TASK_DONE",
             Self::TaskCancelled => "TASK_CANCELLED",
             Self::TaskFailed => "TASK_FAILED",
+            Self::TaskPartial => "TASK_PARTIAL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -206,6 +220,7 @@ impl TaskState {
             "TASK_DONE" => Some(Self::TaskDone),
             "TASK_CANCELLED" => Some(Self::TaskCancelled),
             "TASK_FAILED" => Some(Self::TaskFailed),
+            "TASK_PARTIAL" => Some(Self::TaskPartial),
             _ => None,
         }
     }

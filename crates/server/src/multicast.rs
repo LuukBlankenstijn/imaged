@@ -59,9 +59,12 @@ impl MulticastManager {
             .get_all()
             .await?
             .iter()
-            .filter(|t| t.task_type == TaskType::Multicast && t.state == TaskState::Running)
+            .filter(|t| {
+                t.task_type == TaskType::Multicast
+                    && t.aggregate_state() == TaskState::Running
+            })
         {
-            task_repo.mark_failed(task.id, &error).await?;
+            task_repo.mark_all_failed(task.id, &error).await?;
         }
         if let Some(task) = task_repo.get_next_multicast().await? {
             new.notify_new(task.id)?;
@@ -116,10 +119,10 @@ impl MulticastManager {
                 }
             }
             if let Err(e) = self.do_work(t.clone()).await {
-                let _ = self.task_repo.mark_failed(t.id, &e.to_string()).await;
+                let _ = self.task_repo.mark_all_failed(t.id, &e.to_string()).await;
                 error!(err=%e, "task failed: {:?}", t)
             } else {
-                let _ = self.task_repo.mark_finished(t.id).await;
+                let _ = self.task_repo.mark_all_finished(t.id).await;
                 debug!(id=%t.id, "multicast task finished");
             }
         }
@@ -128,7 +131,7 @@ impl MulticastManager {
     }
 
     async fn do_work(&self, task: Task) -> Result {
-        if task.task_type != TaskType::Multicast || task.state != TaskState::Pending {
+        if task.task_type != TaskType::Multicast || task.aggregate_state() != TaskState::Pending {
             return Err(AppError::FailedPrecondition(
                 "tasktype or state is wrong".to_string(),
             ));
@@ -138,7 +141,9 @@ impl MulticastManager {
                 "image id is not set".to_string(),
             ));
         };
-        self.task_repo.start(task.id).await?;
+        for h in &task.hosts {
+            self.task_repo.start(task.id, h.host_id).await?;
+        }
 
         let num_receivers = task.hosts.len();
 

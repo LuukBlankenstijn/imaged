@@ -12,7 +12,44 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file v1/dashboard/task.proto.
  */
 export const file_v1_dashboard_task: GenFile = /*@__PURE__*/
-  fileDesc("Chd2MS9kYXNoYm9hcmQvdGFzay5wcm90bxIMZGFzaGJvYXJkLnYxIusCCgRUYXNrEgoKAmlkGAEgASgDEiQKBHR5cGUYAiABKA4yFi5kYXNoYm9hcmQudjEuVGFza1R5cGUSDQoFaG9zdHMYAyADKAMSFQoIaW1hZ2VfaWQYBCABKANIAIgBARImCgVzdGF0ZRgFIAEoDjIXLmRhc2hib2FyZC52MS5UYXNrU3RhdGUSLgoKY3JlYXRlZF9hdBgGIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASMwoKc3RhcnRlZF9hdBgHIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAYgBARI0CgtmaW5pc2hlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBIAogBARISCgVlcnJvchgJIAEoCUgDiAEBQgsKCV9pbWFnZV9pZEINCgtfc3RhcnRlZF9hdEIOCgxfZmluaXNoZWRfYXRCCAoGX2Vycm9yIjUKEEdldFRhc2tzUmVzcG9uc2USIQoFdGFza3MYASADKAsyEi5kYXNoYm9hcmQudjEuVGFzaypoCghUYXNrVHlwZRIUChBUWVBFX1VOU1BFQ0lGSUVEEAASEAoMVFlQRV9DQVBUVVJFEAESDwoLVFlQRV9ERVBMT1kQAhISCg5UWVBFX01VTFRJQ0FTVBADEg8KC1RZUEVfUkVCT09UEAQqeQoJVGFza1N0YXRlEhQKEFRBU0tfVU5TUEVDSUZJRUQQABIQCgxUQVNLX1BFTkRJTkcQARIQCgxUQVNLX1JVTk5JTkcQAhINCglUQVNLX0RPTkUQAxISCg5UQVNLX0NBTkNFTExFRBAEEg8KC1RBU0tfRkFJTEVEEAVCbgoQY29tLmRhc2hib2FyZC52MUIJVGFza1Byb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("Chd2MS9kYXNoYm9hcmQvdGFzay5wcm90bxIMZGFzaGJvYXJkLnYxIusBCghUYXNrSG9zdBIPCgdob3N0X2lkGAEgASgDEiYKBXN0YXRlGAIgASgOMhcuZGFzaGJvYXJkLnYxLlRhc2tTdGF0ZRISCgVlcnJvchgDIAEoCUgAiAEBEjMKCnN0YXJ0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAGIAQESNAoLZmluaXNoZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wSAKIAQFCCAoGX2Vycm9yQg0KC19zdGFydGVkX2F0Qg4KDF9maW5pc2hlZF9hdCKaAgoEVGFzaxIKCgJpZBgBIAEoAxIkCgR0eXBlGAIgASgOMhYuZGFzaGJvYXJkLnYxLlRhc2tUeXBlEiUKBWhvc3RzGAMgAygLMhYuZGFzaGJvYXJkLnYxLlRhc2tIb3N0EhUKCGltYWdlX2lkGAQgASgDSACIAQESJgoFc3RhdGUYBSABKA4yFy5kYXNoYm9hcmQudjEuVGFza1N0YXRlEi4KCmNyZWF0ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhcKCmltYWdlX25hbWUYCiABKAlIAYgBARIVCg1pbWFnZV9kZWxldGVkGAsgASgIQgsKCV9pbWFnZV9pZEINCgtfaW1hZ2VfbmFtZSI1ChBHZXRUYXNrc1Jlc3BvbnNlEiEKBXRhc2tzGAEgAygLMhIuZGFzaGJvYXJkLnYxLlRhc2sqaAoIVGFza1R5cGUSFAoQVFlQRV9VTlNQRUNJRklFRBAAEhAKDFRZUEVfQ0FQVFVSRRABEg8KC1RZUEVfREVQTE9ZEAISEgoOVFlQRV9NVUxUSUNBU1QQAxIPCgtUWVBFX1JFQk9PVBAEKosBCglUYXNrU3RhdGUSFAoQVEFTS19VTlNQRUNJRklFRBAAEhAKDFRBU0tfUEVORElORxABEhAKDFRBU0tfUlVOTklORxACEg0KCVRBU0tfRE9ORRADEhIKDlRBU0tfQ0FOQ0VMTEVEEAQSDwoLVEFTS19GQUlMRUQQBRIQCgxUQVNLX1BBUlRJQUwQBkJuChBjb20uZGFzaGJvYXJkLnYxQglUYXNrUHJvdG9QAaICA0RYWKoCDERhc2hib2FyZC5WMcoCDERhc2hib2FyZFxWMeICGERhc2hib2FyZFxWMVxHUEJNZXRhZGF0YeoCDURhc2hib2FyZDo6VjFiBnByb3RvMw", [file_google_protobuf_timestamp]);
+
+/**
+ * @generated from message dashboard.v1.TaskHost
+ */
+export type TaskHost = Message<"dashboard.v1.TaskHost"> & {
+  /**
+   * @generated from field: int64 host_id = 1;
+   */
+  hostId: bigint;
+
+  /**
+   * @generated from field: dashboard.v1.TaskState state = 2;
+   */
+  state: TaskState;
+
+  /**
+   * @generated from field: optional string error = 3;
+   */
+  error?: string;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp started_at = 4;
+   */
+  startedAt?: Timestamp;
+
+  /**
+   * @generated from field: optional google.protobuf.Timestamp finished_at = 5;
+   */
+  finishedAt?: Timestamp;
+};
+
+/**
+ * Describes the message dashboard.v1.TaskHost.
+ * Use `create(TaskHostSchema)` to create a new message.
+ */
+export const TaskHostSchema: GenMessage<TaskHost> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_task, 0);
 
 /**
  * @generated from message dashboard.v1.Task
@@ -29,9 +66,9 @@ export type Task = Message<"dashboard.v1.Task"> & {
   type: TaskType;
 
   /**
-   * @generated from field: repeated int64 hosts = 3;
+   * @generated from field: repeated dashboard.v1.TaskHost hosts = 3;
    */
-  hosts: bigint[];
+  hosts: TaskHost[];
 
   /**
    * @generated from field: optional int64 image_id = 4;
@@ -39,6 +76,8 @@ export type Task = Message<"dashboard.v1.Task"> & {
   imageId?: bigint;
 
   /**
+   * Derived rollup of the per-host states (may be TASK_PARTIAL).
+   *
    * @generated from field: dashboard.v1.TaskState state = 5;
    */
   state: TaskState;
@@ -49,19 +88,14 @@ export type Task = Message<"dashboard.v1.Task"> & {
   createdAt?: Timestamp;
 
   /**
-   * @generated from field: optional google.protobuf.Timestamp started_at = 7;
+   * @generated from field: optional string image_name = 10;
    */
-  startedAt?: Timestamp;
+  imageName?: string;
 
   /**
-   * @generated from field: optional google.protobuf.Timestamp finished_at = 8;
+   * @generated from field: bool image_deleted = 11;
    */
-  finishedAt?: Timestamp;
-
-  /**
-   * @generated from field: optional string error = 9;
-   */
-  error?: string;
+  imageDeleted: boolean;
 };
 
 /**
@@ -69,7 +103,7 @@ export type Task = Message<"dashboard.v1.Task"> & {
  * Use `create(TaskSchema)` to create a new message.
  */
 export const TaskSchema: GenMessage<Task> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_task, 0);
+  messageDesc(file_v1_dashboard_task, 1);
 
 /**
  * @generated from message dashboard.v1.GetTasksResponse
@@ -86,7 +120,7 @@ export type GetTasksResponse = Message<"dashboard.v1.GetTasksResponse"> & {
  * Use `create(GetTasksResponseSchema)` to create a new message.
  */
 export const GetTasksResponseSchema: GenMessage<GetTasksResponse> = /*@__PURE__*/
-  messageDesc(file_v1_dashboard_task, 1);
+  messageDesc(file_v1_dashboard_task, 2);
 
 /**
  * @generated from enum dashboard.v1.TaskType
@@ -157,6 +191,11 @@ export enum TaskState {
    * @generated from enum value: TASK_FAILED = 5;
    */
   TASK_FAILED = 5,
+
+  /**
+   * @generated from enum value: TASK_PARTIAL = 6;
+   */
+  TASK_PARTIAL = 6,
 }
 
 /**

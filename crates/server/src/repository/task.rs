@@ -1,4 +1,4 @@
-use crate::domain::task::{Task, TaskRepository, TaskState, TaskType};
+use crate::domain::task::{Task, TaskHost, TaskRepository, TaskState, TaskType};
 use crate::error::Result;
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
@@ -14,12 +14,10 @@ struct TaskRow {
     id: i64,
     task_type: String,
     image_id: Option<i64>,
-    host_ids: sqlx::types::Json<Vec<i64>>,
-    state: String,
+    image_name: Option<String>,
+    image_deleted: i64,
     created_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-    finished_at: Option<DateTime<Utc>>,
-    error: Option<String>,
+    hosts: sqlx::types::Json<Vec<TaskHost>>,
 }
 
 impl TryFrom<TaskRow> for Task {
@@ -29,13 +27,11 @@ impl TryFrom<TaskRow> for Task {
         Ok(Self {
             id: row.id,
             task_type: TaskType::from_string(row.task_type)?,
-            hosts: row.host_ids.0,
+            hosts: row.hosts.0,
             image_id: row.image_id,
-            state: TaskState::from_string(row.state)?,
+            image_name: row.image_name,
+            image_deleted: row.image_deleted != 0,
             created_at: row.created_at,
-            started_at: row.started_at,
-            finished_at: row.finished_at,
-            error: row.error,
         })
     }
 }
@@ -49,26 +45,17 @@ impl TaskRepository for SqliteTaskRepository {
         image_id: Option<i64>,
     ) -> Result<Task> {
         let type_str = task_type.to_string();
-        let state_str = TaskState::Pending.to_string();
+        let pending_str = TaskState::Pending.to_string();
         let now = Utc::now();
 
         let task = sqlx::query!(
             r#"
-            INSERT INTO tasks (type, image_id, state, created_at)
-            VALUES (?, ?, ?, ?)
-            RETURNING 
-                id as "id!", 
-                type as task_type, 
-                image_id, 
-                state, 
-                created_at as "created_at: DateTime<Utc>", 
-                started_at as "started_at: DateTime<Utc>", 
-                finished_at as "finished_at: DateTime<Utc>", 
-                error
+            INSERT INTO tasks (type, image_id, created_at)
+            VALUES (?, ?, ?)
+            RETURNING id as "id!"
             "#,
             type_str,
             image_id,
-            state_str,
             now
         )
         .fetch_one(&self.pool)
@@ -77,9 +64,10 @@ impl TaskRepository for SqliteTaskRepository {
         let mut tx = self.pool.begin().await?;
         for host_id in host_ids.iter() {
             sqlx::query!(
-                "INSERT INTO task_hosts (task_id, host_id) VALUES (?, ?)",
+                "INSERT INTO task_hosts (task_id, host_id, state) VALUES (?, ?, ?)",
                 task.id,
-                host_id
+                host_id,
+                pending_str
             )
             .execute(&mut *tx)
             .await?;
@@ -96,21 +84,19 @@ impl TaskRepository for SqliteTaskRepository {
         let row = sqlx::query_as!(
             TaskRow,
             r#"
-            SELECT 
-                twh.id as "id!", twh.type as task_type, twh.image_id, twh.state,
+            SELECT
+                twh.id as "id!", twh.type as task_type, twh.image_id, twh.image_name,
+                twh.image_deleted as "image_deleted!: i64",
                 twh.created_at as "created_at: DateTime<Utc>",
-                twh.started_at as "started_at: DateTime<Utc>",
-                twh.finished_at as "finished_at: DateTime<Utc>",
-                twh.error,
-                twh.host_ids as "host_ids!: sqlx::types::Json<Vec<i64>>"
+                twh.hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
             FROM tasks_with_hosts twh
             JOIN task_hosts th ON th.task_id = twh.id
             WHERE th.host_id = ?
-            AND (twh.state = ? OR twh.state = ?)
-            ORDER BY 
-                CASE twh.state 
-                    WHEN ? THEN 1 
-                    WHEN ? THEN 2 
+            AND (th.state = ? OR th.state = ?)
+            ORDER BY
+                CASE th.state
+                    WHEN ? THEN 1
+                    WHEN ? THEN 2
                 END ASC,
                 twh.created_at ASC
             LIMIT 1
@@ -130,30 +116,18 @@ impl TaskRepository for SqliteTaskRepository {
         }
     }
 
-    async fn retry(&self, id: i64) -> Result {
-        let pending_state = TaskState::Pending.to_string();
-
-        sqlx::query!(
-            "UPDATE tasks SET state = ?, started_at = NULL, finished_at = NULL, error = NULL WHERE id = ?",
-            pending_state,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn start(&self, id: i64) -> Result {
+    async fn start(&self, task_id: i64, host_id: i64) -> Result {
         let running = TaskState::Running.to_string();
         let pending = TaskState::Pending.to_string();
         let now = Utc::now();
 
         sqlx::query!(
-            "UPDATE tasks SET state = ?, started_at = ? WHERE id = ? AND (state = ? OR state = ?)",
+            "UPDATE task_hosts SET state = ?, started_at = ? \
+             WHERE task_id = ? AND host_id = ? AND (state = ? OR state = ?)",
             running,
             now,
-            id,
+            task_id,
+            host_id,
             pending,
             running,
         )
@@ -163,19 +137,111 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(())
     }
 
+    async fn mark_finished(&self, task_id: i64, host_id: i64) -> Result {
+        let state = TaskState::Done.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE task_hosts SET state = ?, finished_at = ? WHERE task_id = ? AND host_id = ?",
+            state,
+            now,
+            task_id,
+            host_id
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn mark_failed(&self, task_id: i64, host_id: i64, error: &str) -> Result {
+        let state = TaskState::Failed.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE task_hosts SET state = ?, finished_at = ?, error = ? \
+             WHERE task_id = ? AND host_id = ?",
+            state,
+            now,
+            error,
+            task_id,
+            host_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_all_finished(&self, task_id: i64) -> Result {
+        let done = TaskState::Done.to_string();
+        let pending = TaskState::Pending.to_string();
+        let running = TaskState::Running.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE task_hosts SET state = ?, finished_at = ? \
+             WHERE task_id = ? AND (state = ? OR state = ?)",
+            done,
+            now,
+            task_id,
+            pending,
+            running
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn mark_all_failed(&self, task_id: i64, error: &str) -> Result {
+        let failed = TaskState::Failed.to_string();
+        let pending = TaskState::Pending.to_string();
+        let running = TaskState::Running.to_string();
+        let now = Utc::now();
+        sqlx::query!(
+            "UPDATE task_hosts SET state = ?, finished_at = ?, error = ? \
+             WHERE task_id = ? AND (state = ? OR state = ?)",
+            failed,
+            now,
+            error,
+            task_id,
+            pending,
+            running
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn retry(&self, id: i64) -> Result {
+        let pending = TaskState::Pending.to_string();
+        let failed = TaskState::Failed.to_string();
+        let cancelled = TaskState::Cancelled.to_string();
+
+        sqlx::query!(
+            "UPDATE task_hosts SET state = ?, error = NULL, started_at = NULL, finished_at = NULL \
+             WHERE task_id = ? AND (state = ? OR state = ?)",
+            pending,
+            id,
+            failed,
+            cancelled
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn cancel(&self, id: i64) -> Result {
-        let cancelled_state = TaskState::Cancelled.to_string();
-        let pending_state = TaskState::Pending.to_string();
-        let running_state = TaskState::Running.to_string();
+        let cancelled = TaskState::Cancelled.to_string();
+        let pending = TaskState::Pending.to_string();
+        let running = TaskState::Running.to_string();
         let now = Utc::now();
 
         sqlx::query!(
-            "UPDATE tasks SET state = ?, finished_at = ? WHERE id = ? AND (state = ? OR state = ?)",
-            cancelled_state,
+            "UPDATE task_hosts SET state = ?, finished_at = ? \
+             WHERE task_id = ? AND (state = ? OR state = ?)",
+            cancelled,
             now,
             id,
-            pending_state,
-            running_state
+            pending,
+            running
         )
         .execute(&self.pool)
         .await?;
@@ -190,16 +256,18 @@ impl TaskRepository for SqliteTaskRepository {
         let rows = sqlx::query_as!(
             TaskRow,
             r#"
-            SELECT 
-                id as "id!", type as task_type, image_id, state, 
-                created_at as "created_at: DateTime<Utc>", 
-                started_at as "started_at: DateTime<Utc>", 
-                finished_at as "finished_at: DateTime<Utc>", 
-                host_ids as "host_ids!: sqlx::types::Json<Vec<i64>>",
-                error
-            FROM tasks_with_hosts
-            WHERE image_id = ? AND (state = ? OR state = ?)
-            ORDER BY created_at DESC
+            SELECT
+                twh.id as "id!", twh.type as task_type, twh.image_id, twh.image_name,
+                twh.image_deleted as "image_deleted!: i64",
+                twh.created_at as "created_at: DateTime<Utc>",
+                twh.hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
+            FROM tasks_with_hosts twh
+            WHERE twh.image_id = ?
+            AND EXISTS (
+                SELECT 1 FROM task_hosts th
+                WHERE th.task_id = twh.id AND (th.state = ? OR th.state = ?)
+            )
+            ORDER BY twh.created_at DESC
             "#,
             image_id,
             pending,
@@ -216,13 +284,11 @@ impl TaskRepository for SqliteTaskRepository {
         let rows = sqlx::query_as!(
             TaskRow,
             r#"
-            SELECT 
-                id, type as task_type, image_id, state, 
-                created_at as "created_at: DateTime<Utc>", 
-                started_at as "started_at: DateTime<Utc>", 
-                finished_at as "finished_at: DateTime<Utc>", 
-                host_ids as "host_ids!: sqlx::types::Json<Vec<i64>>",
-                error
+            SELECT
+                id as "id!", type as task_type, image_id, image_name,
+                image_deleted as "image_deleted!: i64",
+                created_at as "created_at: DateTime<Utc>",
+                hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
             FROM tasks_with_hosts
             ORDER BY created_at DESC
             "#
@@ -237,13 +303,11 @@ impl TaskRepository for SqliteTaskRepository {
         let row = sqlx::query_as!(
             TaskRow,
             r#"
-            SELECT 
-                id, type as task_type, image_id, state, 
-                created_at as "created_at: DateTime<Utc>", 
-                started_at as "started_at: DateTime<Utc>", 
-                finished_at as "finished_at: DateTime<Utc>", 
-                host_ids as "host_ids!: sqlx::types::Json<Vec<i64>>",
-                error
+            SELECT
+                id as "id!", type as task_type, image_id, image_name,
+                image_deleted as "image_deleted!: i64",
+                created_at as "created_at: DateTime<Utc>",
+                hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
             FROM tasks_with_hosts
             WHERE id = ?
             "#,
@@ -255,51 +319,23 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(row.try_into()?)
     }
 
-    async fn mark_finished(&self, id: i64) -> Result {
-        let state = TaskState::Done.to_string();
-        let now = Utc::now();
-        sqlx::query!(
-            "UPDATE tasks SET state = ?, finished_at = ? WHERE id = ?",
-            state,
-            now,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn mark_failed(&self, id: i64, error: &str) -> Result {
-        let state = TaskState::Failed.to_string();
-        let now = Utc::now();
-        sqlx::query!(
-            "UPDATE tasks SET state = ?, finished_at = ?, error = ? WHERE id = ?",
-            state,
-            now,
-            error,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     async fn get_next_multicast(&self) -> Result<Option<Task>> {
         let pending_state = TaskState::Pending.to_string();
         let task_type = TaskType::Multicast.to_string();
-        let task = sqlx::query_as!(
+        let row = sqlx::query_as!(
             TaskRow,
             r#"
-            SELECT 
-                id as "id!", type as task_type, image_id, state, 
-                created_at as "created_at: DateTime<Utc>", 
-                started_at as "started_at: DateTime<Utc>", 
-                finished_at as "finished_at: DateTime<Utc>", 
-                host_ids as "host_ids!: sqlx::types::Json<Vec<i64>>",
-                error
-            FROM tasks_with_hosts
-            WHERE type = ? AND state = ?
+            SELECT
+                twh.id as "id!", twh.type as task_type, twh.image_id, twh.image_name,
+                twh.image_deleted as "image_deleted!: i64",
+                twh.created_at as "created_at: DateTime<Utc>",
+                twh.hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
+            FROM tasks_with_hosts twh
+            WHERE twh.type = ?
+            AND EXISTS (
+                SELECT 1 FROM task_hosts th
+                WHERE th.task_id = twh.id AND th.state = ?
+            )
             "#,
             task_type,
             pending_state
@@ -307,6 +343,6 @@ impl TaskRepository for SqliteTaskRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(task.map(|r| r.try_into()).transpose()?)
+        Ok(row.map(|r| r.try_into()).transpose()?)
     }
 }
