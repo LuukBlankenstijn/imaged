@@ -168,7 +168,6 @@ export function TasksView() {
               <col className="col-status-text" />
               <col className="col-type" />
               <col className="col-name" />
-              <col className="col-name" />
               <col className="col-captured" />
               <col className="col-captured" />
               <col className="col-actions" />
@@ -178,7 +177,6 @@ export function TasksView() {
                 <th>ID</th>
                 <th>Status</th>
                 <th>Type</th>
-                <th>Host</th>
                 <th>Image</th>
                 <th>Created</th>
                 <th>Updated</th>
@@ -231,7 +229,6 @@ function TaskRow({
     const h = hostsById.get(hostId.toString());
     return h?.name || h?.macAddress || `host ${hostId.toString()}`;
   };
-  const hostNames = task.hosts.map((h) => hostName(h.hostId));
   const hostsMissing = task.hosts.length === 0;
   const updatedAt = latestActivity(task);
 
@@ -252,8 +249,7 @@ function TaskRow({
   // Deploy and multicast write to the disk; cancelling interrupts that write
   // and can leave the disk in an inconsistent state. Capture only reads.
   const cancelWarns =
-    task.type === TaskType.TYPE_DEPLOY ||
-    task.type === TaskType.TYPE_MULTICAST;
+    task.type === TaskType.TYPE_DEPLOY || task.type === TaskType.TYPE_MULTICAST;
 
   function handleCancel() {
     if (
@@ -282,12 +278,6 @@ function TaskRow({
         </td>
         <td>
           <TypeBadge type={task.type} />
-        </td>
-        <td
-          className={`cell-name${hostsMissing ? " cell-deleted" : ""}`}
-          title={hostNames.join(", ") || undefined}
-        >
-          <HostsLabel count={task.hosts.length} first={hostNames[0]} />
         </td>
         <td
           className={`cell-name${task.imageDeleted ? " cell-deleted" : ""}`}
@@ -328,7 +318,7 @@ function TaskRow({
       {expanded && (
         <tr className="row-detail">
           <td />
-          <td colSpan={7} className="cell-detail">
+          <td colSpan={6} className="cell-detail">
             <div className="task-hosts">
               {task.hosts.length === 0 && (
                 <span className="name-empty">no hosts (deleted)</span>
@@ -354,17 +344,6 @@ function TaskRow({
           </td>
         </tr>
       )}
-    </>
-  );
-}
-
-function HostsLabel({ count, first }: { count: number; first?: string }) {
-  if (count === 0) return <>(deleted)</>;
-  if (count === 1) return <>{first}</>;
-  return (
-    <>
-      {first}
-      <span className="host-extra-count">+{count - 1}</span>
     </>
   );
 }
@@ -509,7 +488,14 @@ function stateLabel(state: TaskState): string {
 
 function stateTone(
   state: TaskState,
-): "ok" | "progress" | "error" | "neutral" | "pending" | "cancelled" | "partial" {
+):
+  | "ok"
+  | "progress"
+  | "error"
+  | "neutral"
+  | "pending"
+  | "cancelled"
+  | "partial" {
   switch (state) {
     case TaskState.TASK_DONE:
       return "ok";
