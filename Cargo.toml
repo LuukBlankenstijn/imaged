@@ -4,7 +4,8 @@ members = [
     "gen/rs",
     "crates/server",
     "crates/client",
-    "crates/shared"
+    "crates/shared",
+    "crates/tftp"
 ]
 
 [workspace.package]
@@ -18,7 +19,7 @@ tonic = { version = "0.14", features = ["transport", "tls-ring"] }
 tonic-prost = "0.14"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"]}
 imaged-rpc = { path = "gen/rs" }
-imaged-shared = { path = "crates/shared"}
+imaged-shared = { path = "crates/shared", default-features = false }
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }
 tracing = "0.1"

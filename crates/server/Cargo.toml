@@ -14,7 +14,7 @@ thiserror.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-imaged-shared.workspace = true
+imaged-shared = { workspace = true, features = ["all"] }
 tokio-util.workspace = true
 
 axum = { version = "0.8", features = ["macros"] }
@@ -28,5 +28,4 @@ bytes = "1.11.1"
 hex = "0.4.3"
 prost-types.workspace = true
 tower-http = { version = "0.6.8", features = ["fs", "trace"] }
-async-tftp = "0.4.2"
 socket2 = { version = "0.6", features = ["all"] }

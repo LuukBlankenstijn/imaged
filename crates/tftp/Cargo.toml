@@ -1,0 +1,10 @@
+[package]
+name = "imaged-tftp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-tftp = "0.4.2"
+futures-lite = "2.6.1"
+imaged-shared = { workspace = true, features = ["logging"] }
+tracing.workspace = true

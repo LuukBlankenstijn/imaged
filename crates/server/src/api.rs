@@ -22,7 +22,6 @@ use crate::{
 pub mod client;
 pub mod dashboard;
 pub mod pxe;
-pub mod tftp;
 
 #[derive(Clone, Constructor)]
 pub struct HandlerState {

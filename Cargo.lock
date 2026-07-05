@@ -1228,7 +1228,6 @@ dependencies = [
 name = "imaged-server"
 version = "0.1.0"
 dependencies = [
- "async-tftp",
  "async-trait",
  "axum",
  "bytes",
@@ -1259,8 +1258,17 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "serde",
- "serde_json",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "imaged-tftp"
+version = "0.1.0"
+dependencies = [
+ "async-tftp",
+ "futures-lite",
+ "imaged-shared",
+ "tracing",
 ]
 
 [[package]]

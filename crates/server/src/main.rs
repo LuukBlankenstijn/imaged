@@ -59,26 +59,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(grpc_router)
         .layer(TraceLayer::new_for_http());
 
-    let http = async {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
-            .await?
-            .tap_io(|stream| {
-                // Cap how long unacknowledged data may linger before the kernel
-                // declares the connection dead.
-                if let Err(e) = socket2::SockRef::from(&*stream)
-                    .set_tcp_user_timeout(Some(Duration::from_secs(20)))
-                {
-                    tracing::warn!("failed to set TCP_USER_TIMEOUT on connection: {e}");
-                }
-            });
-        let service = routes.into_make_service();
-        tracing::info!(interface = "0.0.0.0", port = 8080, "starting imaged-server");
-        axum::serve(listener, service).await?;
-        Ok(())
-    };
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+        .await?
+        .tap_io(|stream| {
+            // Cap how long unacknowledged data may linger before the kernel
+            // declares the connection dead.
+            if let Err(e) =
+                socket2::SockRef::from(&*stream).set_tcp_user_timeout(Some(Duration::from_secs(20)))
+            {
+                tracing::warn!("failed to set TCP_USER_TIMEOUT on connection: {e}");
+            }
+        });
+    let service = routes.into_make_service();
+    tracing::info!(interface = "0.0.0.0", port = 8080, "starting imaged-server");
+    axum::serve(listener, service).await?;
 
-    let tftp = async { api::tftp::serve().await };
-    tokio::try_join!(http, tftp)?;
     Ok(())
 }
 
