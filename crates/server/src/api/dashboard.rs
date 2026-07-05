@@ -223,6 +223,11 @@ impl DashboardService for DashboardHandler {
                 .mark_faulted(image_id, "Capture task was cancelled by user")
                 .await?;
         }
+        // Stop the server-side sender: the DB is now marked cancelled, but the
+        // detached multicast loop is still blasting data unless we cancel it.
+        if task.task_type == TaskType::Multicast {
+            self.multicast_manager.cancel(task.id);
+        }
         for host in task
             .hosts
             .iter()

@@ -10,6 +10,7 @@ use std::{
 use tracing::{debug, error, info};
 
 use tokio::{process::Command, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     domain::{image::ImageRepository, task::TaskRepository},
@@ -19,6 +20,8 @@ use crate::{
 struct RunningMulticastTask {
     id: i64,
     handle: JoinHandle<()>,
+    /// Cancels the in-flight `do_work` for `id`, killing the udp-sender child.
+    cancel: CancellationToken,
 }
 
 struct SlotGuard(Arc<Mutex<Option<RunningMulticastTask>>>);
@@ -66,10 +69,6 @@ impl MulticastManager {
         Ok(new)
     }
 
-    pub fn get_running_task(&self) -> Option<i64> {
-        self.current.lock().unwrap().as_ref().map(|r| r.id)
-    }
-
     pub fn notify_new(&self, task_id: i64) -> Result {
         let mut lock = self.current.lock().unwrap();
 
@@ -97,27 +96,57 @@ impl MulticastManager {
             handle,
             // this id can be incorrect since the loop fetches the task for himself
             id: task_id,
+            cancel: CancellationToken::new(),
         });
 
         Ok(())
     }
 
+    /// Cancel the in-flight multicast send if `task_id` is the one currently
+    /// running. The caller is responsible for marking the task cancelled in the
+    /// DB first; this stops the detached sender loop's current `do_work` (and
+    /// its udp-sender child) so the loop moves on to the next queued task.
+    pub fn cancel(&self, task_id: i64) {
+        let lock = self.current.lock().unwrap();
+        if let Some(r) = lock.as_ref()
+            && r.id == task_id
+        {
+            r.cancel.cancel();
+            debug!(task_id, "cancelling running multicast task");
+        }
+    }
+
     async fn handle_loop(&self) -> Result {
         while let Some(t) = self.task_repo.get_next_multicast().await? {
-            // this is save, since the lock in notify_handler is not released until the
-            // handle is set
+            // Fresh token for this task, published into the slot so `cancel`
+            // can stop it. This is safe since the lock in notify_new is not
+            // released until the handle is set.
+            let cancel = CancellationToken::new();
             {
                 let mut lock = self.current.lock().unwrap();
                 if let Some(r) = lock.as_mut() {
                     r.id = t.id;
+                    r.cancel = cancel.clone();
                 }
             }
-            if let Err(e) = self.do_work(t.clone()).await {
-                let _ = self.task_repo.mark_all_failed(t.id, &e.to_string()).await;
-                error!(err=%e, "task failed: {:?}", t)
-            } else {
-                let _ = self.task_repo.mark_all_finished(t.id).await;
-                debug!(id=%t.id, "multicast task finished");
+
+            tokio::select! {
+                biased;
+                // Cancel wins: dropping the do_work future drops the udp-sender
+                // Child, which is killed via kill_on_drop. The DB rows are
+                // already marked cancelled by the caller, so nothing to do here.
+                _ = cancel.cancelled() => {
+                    debug!(id=%t.id, "multicast task cancelled");
+                }
+                res = self.do_work(t.clone()) => {
+                    if let Err(e) = res {
+                        let _ = self.task_repo.mark_all_failed(t.id, &e.to_string()).await;
+                        error!(err=%e, "task failed: {:?}", t)
+                    } else {
+                        let _ = self.task_repo.mark_all_finished(t.id).await;
+                        debug!(id=%t.id, "multicast task finished");
+                    }
+                }
             }
         }
 
@@ -125,6 +154,11 @@ impl MulticastManager {
     }
 
     async fn do_work(&self, task: Task) -> Result {
+        // Re-fetch: `task` is a snapshot from get_next_multicast and may have
+        // been cancelled in the tiny window before this iteration published its
+        // cancellation token. Trust the DB so a cancel that raced the dequeue
+        // still prevents the send.
+        let task = self.task_repo.get(task.id).await?;
         if task.task_type != TaskType::Multicast || task.aggregate_state() != TaskState::Pending {
             return Err(AppError::FailedPrecondition(
                 "tasktype or state is wrong".to_string(),
@@ -186,6 +220,7 @@ async fn upd_sender(file: &str, portbase: u16, num_receivers: usize) -> Result {
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| AppError::Internal(format!("failed to spawn udp-sender {e}")))?
         .wait()
@@ -199,4 +234,63 @@ async fn upd_sender(file: &str, portbase: u16, num_receivers: usize) -> Result {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    /// Spawns a child that only creates `marker` if it survives ~1s, mirroring
+    /// how `upd_sender` runs udp-sender: `kill_on_drop(true)` + `spawn().wait()`.
+    async fn run_child(marker: &std::path::Path) {
+        let _ = Command::new("sh")
+            .arg("-c")
+            .arg(format!("sleep 1 && touch {}", marker.display()))
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn sh")
+            .wait()
+            .await;
+    }
+
+    /// Regression test for the multicast cancel bug: cancelling a running send
+    /// must actually kill the sender child, not just flip the database. We drive
+    /// the same `select!(token.cancelled(), do_work)` shape as `handle_loop` and
+    /// prove the child is killed before it can finish its work.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancel_kills_running_child() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let marker =
+            std::env::temp_dir().join(format!("imaged-cancel-{}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+
+        let token = CancellationToken::new();
+        let trigger = token.clone();
+        // Cancel once the child has spawned and is mid-sleep. Uses a plain thread
+        // so we don't depend on tokio's "time" feature.
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            trigger.cancel();
+        });
+
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => {}
+            _ = run_child(&marker) => panic!("child completed instead of being cancelled"),
+        }
+
+        // Absent the kill, the child would `touch` the marker at ~1s. Wait past
+        // that and confirm it never happened.
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            !marker.exists(),
+            "child survived cancellation and created {}",
+            marker.display()
+        );
+        let _ = std::fs::remove_file(&marker);
+    }
 }
