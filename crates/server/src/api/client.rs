@@ -31,6 +31,7 @@ pub fn router() -> Router<Arc<HandlerState>> {
         )
         .route("/client/tasks/{task_id}/faulted", post(task::mark_faulted))
         .route("/client/hosts/stream", get(sse::start_stream))
+        .route("/client/hosts/disconnect", post(sse::disconnect))
 }
 
 pub struct AgentMac(pub String);

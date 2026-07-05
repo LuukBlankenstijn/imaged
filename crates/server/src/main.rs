@@ -6,9 +6,9 @@ mod registry;
 mod repository;
 mod service;
 
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
-use axum::Router;
+use axum::{Router, serve::ListenerExt};
 use imaged_rpc::dashboard::v1::dashboard_service_server;
 use sqlx::{
     SqlitePool,
@@ -60,7 +60,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http());
 
     let http = async {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+            .await?
+            .tap_io(|stream| {
+                // Cap how long unacknowledged data may linger before the kernel
+                // declares the connection dead.
+                if let Err(e) = socket2::SockRef::from(&*stream)
+                    .set_tcp_user_timeout(Some(Duration::from_secs(20)))
+                {
+                    tracing::warn!("failed to set TCP_USER_TIMEOUT on connection: {e}");
+                }
+            });
         let service = routes.into_make_service();
         tracing::info!(interface = "0.0.0.0", port = 8080, "starting imaged-server");
         axum::serve(listener, service).await?;

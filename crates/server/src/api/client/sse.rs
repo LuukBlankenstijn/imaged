@@ -73,3 +73,12 @@ pub async fn start_stream(
 
     Ok(Sse::new(ReceiverStream::new(rx)).keep_alive(KeepAlive::default()))
 }
+
+pub async fn disconnect(
+    State(state): State<Arc<HandlerState>>,
+    AgentMac(mac): AgentMac,
+) -> Result<()> {
+    let host = state.host_repo.get_by_mac(&mac).await?;
+    state.host_registry.deregister(host.id);
+    Ok(())
+}

@@ -55,15 +55,9 @@ impl MulticastManager {
         };
         // mark all tasks that are already started as error
         let error = String::from("Server stopped while task was running");
-        for task in task_repo
-            .get_all()
-            .await?
-            .iter()
-            .filter(|t| {
-                t.task_type == TaskType::Multicast
-                    && t.aggregate_state() == TaskState::Running
-            })
-        {
+        for task in task_repo.get_all().await?.iter().filter(|t| {
+            t.task_type == TaskType::Multicast && t.aggregate_state() == TaskState::Running
+        }) {
             task_repo.mark_all_failed(task.id, &error).await?;
         }
         if let Some(task) = task_repo.get_next_multicast().await? {

@@ -231,21 +231,22 @@ impl ImageRepository for SqliteImageRepository {
     }
 
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>> {
-        Ok(
-            sqlx::query!("SELECT * FROM image_partitions WHERE image_id = ? ORDER BY partition_number", id)
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .map(|partition| {
-                    ImagePartition::new(
-                        // for some reason id is an option
-                        partition.id.unwrap(),
-                        partition.partition_number,
-                        partition.fstype,
-                        partition.size_bytes as u64,
-                    )
-                })
-                .collect(),
+        Ok(sqlx::query!(
+            "SELECT * FROM image_partitions WHERE image_id = ? ORDER BY partition_number",
+            id
         )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|partition| {
+            ImagePartition::new(
+                // for some reason id is an option
+                partition.id.unwrap(),
+                partition.partition_number,
+                partition.fstype,
+                partition.size_bytes as u64,
+            )
+        })
+        .collect())
     }
 }

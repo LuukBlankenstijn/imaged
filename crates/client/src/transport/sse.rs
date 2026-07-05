@@ -17,6 +17,19 @@ impl From<ServerEvent> for StreamMessage {
 }
 
 impl ApiClient {
+    pub async fn disconnect(&self) {
+        let url = match self.url("client/hosts/disconnect") {
+            Ok(url) => url,
+            Err(e) => {
+                tracing::warn!(error = %e, "disconnect: failed to build url");
+                return;
+            }
+        };
+        if let Err(e) = self.send(self.client.post(url), "disconnect").await {
+            tracing::warn!(error = %e, "failed to notify server of disconnect");
+        }
+    }
+
     pub async fn start_stream(
         &self,
         disk_size_bytes: u64,

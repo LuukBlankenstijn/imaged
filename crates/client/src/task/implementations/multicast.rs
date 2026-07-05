@@ -45,7 +45,10 @@ impl ClientTaskExt for MulticastTask {
             anyhow::bail!("sgdisk --load-backup failed");
         }
 
-        let status = Command::new("partprobe").kill_on_drop(true).status().await?;
+        let status = Command::new("partprobe")
+            .kill_on_drop(true)
+            .status()
+            .await?;
         if !status.success() {
             anyhow::bail!("partprobe failed");
         }
@@ -107,8 +110,9 @@ impl ClientTaskExt for MulticastTask {
         Ok(())
     }
 
-    async fn finalize(&self, _: &crate::transport::ApiClient) -> anyhow::Result<()> {
+    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
         tracing::info!(task=%self, "finished task successfully");
+        api.disconnect().await;
         sys::reboot()
     }
 }

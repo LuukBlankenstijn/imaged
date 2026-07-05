@@ -38,7 +38,10 @@ impl ClientTaskExt for DeployTask {
             anyhow::bail!("sgdisk --load-backup failed");
         }
 
-        let status = Command::new("partprobe").kill_on_drop(true).status().await?;
+        let status = Command::new("partprobe")
+            .kill_on_drop(true)
+            .status()
+            .await?;
         if !status.success() {
             anyhow::bail!("partprobe failed");
         }
@@ -104,6 +107,7 @@ impl ClientTaskExt for DeployTask {
     async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
         api.mark_task_finished(self.task_id).await?;
         tracing::info!(task=%self, "finished task successfully");
+        api.disconnect().await;
         sys::reboot()
     }
 

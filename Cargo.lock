@@ -1241,6 +1241,7 @@ dependencies = [
  "prost-types",
  "serde",
  "serde_json",
+ "socket2",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
