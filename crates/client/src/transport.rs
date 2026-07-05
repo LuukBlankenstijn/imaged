@@ -4,21 +4,26 @@ pub mod multicast;
 pub mod sse;
 mod task;
 
+use std::net::IpAddr;
+
+use mac_address::MacAddress;
 use reqwest::{Client, RequestBuilder, Response, Url};
 
 #[derive(Clone)]
 pub struct ApiClient {
     client: Client,
     base: Url,
-    mac: String,
+    mac: MacAddress,
+    ip: Option<IpAddr>,
 }
 
 impl ApiClient {
-    pub fn new(base: Url, mac: String) -> anyhow::Result<Self> {
+    pub fn new(base: Url, mac: MacAddress, ip: Option<IpAddr>) -> anyhow::Result<Self> {
         Ok(Self {
             client: Client::new(),
             base,
             mac,
+            ip,
         })
     }
 
@@ -27,7 +32,10 @@ impl ApiClient {
     }
 
     async fn send(&self, builder: RequestBuilder, context: &str) -> anyhow::Result<Response> {
-        let response = builder.header("X-Agent-Mac", &self.mac).send().await?;
+        let response = builder
+            .header("X-Agent-Mac", &self.mac.to_string())
+            .send()
+            .await?;
 
         if let Err(e) = response.error_for_status_ref() {
             let status = response.status();

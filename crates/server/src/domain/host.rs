@@ -8,11 +8,17 @@ pub struct Host {
     pub name: String,
     pub mac_address: String,
     pub disk_size: u64,
+    pub ip: Option<String>,
 }
 
 #[async_trait::async_trait]
 pub trait HostRepository: Send + Sync {
-    async fn upsert_host(&self, mac: String, disk_size_bytes: u64) -> Result<Host>;
+    async fn upsert_host(
+        &self,
+        mac: String,
+        disk_size_bytes: u64,
+        ip: Option<String>,
+    ) -> Result<Host>;
 
     async fn update_name(&self, id: i64, name: String) -> Result<Host>;
 

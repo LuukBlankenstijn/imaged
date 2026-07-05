@@ -36,6 +36,8 @@ pub struct Host {
     pub name: ::prost::alloc::string::String,
     #[prost(uint64, tag="4")]
     pub disk_size_bytes: u64,
+    #[prost(string, optional, tag="5")]
+    pub ip: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetAllHostsRequest {

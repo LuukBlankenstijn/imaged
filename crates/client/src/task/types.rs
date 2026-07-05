@@ -1,6 +1,8 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use anyhow::Result;
+use mac_address::MacAddress;
 use reqwest::Url;
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -32,9 +34,9 @@ pub struct ClientState {
 }
 
 impl ClientState {
-    pub fn new(base_url: Url, mac: String) -> Result<Self> {
+    pub fn new(base_url: Url, mac: MacAddress, ip: Option<IpAddr>) -> Result<Self> {
         Ok(Self {
-            http: ApiClient::new(base_url, mac)?,
+            http: ApiClient::new(base_url, mac, ip)?,
             current_task: Mutex::new(None),
         })
     }

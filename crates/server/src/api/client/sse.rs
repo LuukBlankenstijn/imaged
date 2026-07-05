@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::HandlerState;
 use crate::{
-    api::client::AgentMac,
+    api::client::AgentInfo,
     error::{AppError, Result},
 };
 use axum::{
@@ -23,11 +23,11 @@ pub struct StartStreamQuery {
 pub async fn start_stream(
     State(state): State<Arc<HandlerState>>,
     Query(req): Query<StartStreamQuery>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, ip)): AgentInfo,
 ) -> Result<Sse<impl Stream<Item = Result<Event>>>> {
     let host = state
         .host_repo
-        .upsert_host(mac, req.disk_size_bytes)
+        .upsert_host(mac, req.disk_size_bytes, ip)
         .await?;
 
     let (tx, rx) = mpsc::channel::<Result<Event>>(8);
@@ -76,7 +76,7 @@ pub async fn start_stream(
 
 pub async fn disconnect(
     State(state): State<Arc<HandlerState>>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
 ) -> Result<()> {
     let host = state.host_repo.get_by_mac(&mac).await?;
     state.host_registry.deregister(host.id);

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api::client::{AgentMac, get_next_task},
+    api::client::{AgentInfo, get_next_task},
     domain::{
         image::ImageStatus,
         task::{Task, TaskType},
@@ -19,7 +19,7 @@ use super::HandlerState;
 pub async fn download_partition_data(
     State(state): State<Arc<HandlerState>>,
     Path((task_id, partition_number)): Path<(i64, i64)>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
     let (_, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
@@ -38,7 +38,7 @@ pub async fn download_partition_data(
 pub async fn download_partition_table(
     State(state): State<Arc<HandlerState>>,
     Path(task_id): Path<i64>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
     let (task, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {

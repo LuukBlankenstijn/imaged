@@ -7,6 +7,7 @@ message Host {
   string mac_address = 2;
   string name = 3;
   uint64 disk_size_bytes = 4;
+  optional string ip = 5;
 }
 
 message GetAllHostsRequest {

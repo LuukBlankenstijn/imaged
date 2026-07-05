@@ -39,7 +39,13 @@ impl ApiClient {
             disk_size_bytes
         ))?;
 
-        let req = self.client.get(url).header("X-Agent-Mac", &self.mac);
+        let mut req = self
+            .client
+            .get(url)
+            .header("X-Agent-Mac", &self.mac.to_string());
+        if let Some(ip) = &self.ip {
+            req = req.header("X-Agent-Ip", ip.to_string());
+        }
         let es = EventSource::new(req).expect("building eventsource");
 
         let stream = es.filter_map(|event| async move {

@@ -26,13 +26,19 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     setup_logging!(args.log_level);
 
-    let server = args.server;
     let mac = sys::get_mac()?;
+    let ip = sys::get_ip();
     let disk = sys::disk::find_target_disk().await?;
 
     // create the state
-    let state = Arc::new(task::ClientState::new(server, mac)?);
+    let state = Arc::new(task::ClientState::new(args.server.clone(), mac, ip)?);
     // start the stream
+    tracing::info!(
+        server=%args.server.to_string(),
+        mac=%mac.to_string(),
+        ip=%ip.map(|ip| ip.to_string()).unwrap_or("unknown".to_string()),
+        "starting stream"
+    );
     let stream = state.client().start_stream(disk.size).await?;
     pin_mut!(stream);
 

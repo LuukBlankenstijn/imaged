@@ -7,11 +7,10 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{FromRequestParts, Query},
+    extract::FromRequestParts,
     http::request::Parts,
     routing::{get, post, put},
 };
-use serde::Deserialize;
 
 use crate::{api::HandlerState, domain::task::Task, error::AppError};
 
@@ -34,37 +33,29 @@ pub fn router() -> Router<Arc<HandlerState>> {
         .route("/client/hosts/disconnect", post(sse::disconnect))
 }
 
-pub struct AgentMac(pub String);
+pub struct AgentInfo(pub (String, Option<String>));
 
-#[derive(Deserialize)]
-struct MacQuery {
-    mac: Option<String>,
-}
-
-impl<S> FromRequestParts<S> for AgentMac
+impl<S> FromRequestParts<S> for AgentInfo
 where
     S: Send + Sync,
 {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // try header first
-        if let Some(mac) = parts
+        let mac = parts
             .headers
             .get("X-Agent-Mac")
             .and_then(|v| v.to_str().ok())
-        {
-            return Ok(AgentMac(mac.to_string()));
-        }
+            .ok_or(AppError::InvalidArgument("missing mac".into()))?
+            .to_string();
 
-        // fall back to query
-        let Query(q) = Query::<MacQuery>::from_request_parts(parts, _state)
-            .await
-            .map_err(|_| AppError::InvalidArgument("missing mac".into()))?;
+        let ip = parts
+            .headers
+            .get("X-Agent-Ip")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
 
-        q.mac
-            .map(AgentMac)
-            .ok_or(AppError::InvalidArgument("missing mac".into()))
+        Ok(AgentInfo((mac, ip)))
     }
 }
 

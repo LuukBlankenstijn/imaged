@@ -23,3 +23,4 @@ mac_address = "1.1.8"
 anyhow = "1.0.102"
 rustix = { version = "1.1.4", features = ["termios", "stdio", "system"] }
 enum_dispatch = "0.3.13"
+local-ip-address = "0.6.13"

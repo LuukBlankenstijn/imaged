@@ -950,6 +950,13 @@ input {
   color: var(--text-mono);
 }
 
+.cell-ip {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
 .cell-disk {
   font-family: var(--font-mono);
   font-size: 0.82rem;

@@ -17,6 +17,7 @@ struct HostRow {
     mac: String,
     name: String,
     disk_size_bytes: i64,
+    ip: Option<String>,
 }
 
 impl From<HostRow> for Host {
@@ -26,31 +27,40 @@ impl From<HostRow> for Host {
             value.name,
             value.mac,
             value.disk_size_bytes as u64,
+            value.ip,
         )
     }
 }
 
 #[async_trait::async_trait]
 impl domain::host::HostRepository for SqliteHostRepository {
-    async fn upsert_host(&self, mac_address: String, disk_size_bytes: u64) -> Result<Host> {
+    async fn upsert_host(
+        &self,
+        mac_address: String,
+        disk_size_bytes: u64,
+        ip: Option<String>,
+    ) -> Result<Host> {
         let name = mac_address.replace(":", "-");
         let size = disk_size_bytes as i64;
         let host = sqlx::query_as!(
             HostRow,
             r#"
-                INSERT INTO hosts (mac, name, disk_size_bytes)
-                VALUES (?, ?, ?)
+                INSERT INTO hosts (mac, name, disk_size_bytes, ip)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(mac) DO UPDATE SET
-                    disk_size_bytes = excluded.disk_size_bytes
+                    disk_size_bytes = excluded.disk_size_bytes,
+                    ip = excluded.ip
                 RETURNING
                     id AS "id!: i64",
                     mac AS "mac!: String",
                     name AS "name!: String",
-                    disk_size_bytes AS "disk_size_bytes!: i64"
+                    disk_size_bytes AS "disk_size_bytes!: i64",
+                    ip AS "ip!: String"
             "#,
             mac_address,
             name,
-            size
+            size,
+            ip
         )
         .fetch_one(&self.pool)
         .await?;
@@ -75,7 +85,7 @@ impl domain::host::HostRepository for SqliteHostRepository {
         let host_rows = match group_id {
             Some(group_id) => sqlx::query_as!(
                 HostRow,
-                r#"SELECT h.id as "id!", h.name, h.mac, h.disk_size_bytes FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?"#,
+                r#"SELECT h.id as "id!", h.name, h.mac, h.disk_size_bytes, h.ip FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?"#,
                 group_id
             ).fetch_all(&self.pool)
             .await?,
@@ -100,7 +110,8 @@ impl domain::host::HostRepository for SqliteHostRepository {
                 id AS "id!",
                 mac,
                 name,
-                disk_size_bytes
+                disk_size_bytes,
+                ip
             FROM hosts 
             WHERE mac = ?
             "#,

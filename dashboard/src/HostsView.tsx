@@ -173,7 +173,10 @@ function HostRow({ host }: { host: Host }) {
     <tr>
       <td className="cell-mono cell-id">{host.id.toString()}</td>
       <td className="cell-status"><StatusDot id={host.id} /></td>
-      <td className="cell-mono cell-mac">{host.macAddress}</td>
+      <td className="cell-mono cell-mac">
+        {host.macAddress}
+        {host.ip && <span className="cell-ip">{host.ip}</span>}
+      </td>
       <td className="cell-name">
         {mode === "renaming" ? (
           <input

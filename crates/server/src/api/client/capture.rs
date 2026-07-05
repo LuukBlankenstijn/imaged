@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    api::client::{AgentMac, get_next_task},
+    api::client::{AgentInfo, get_next_task},
     domain::task::{Task, TaskState, TaskType},
     error::{AppError, Result},
 };
@@ -19,7 +19,7 @@ use super::HandlerState;
 pub async fn upload_partition_data(
     State(state): State<Arc<HandlerState>>,
     Path((task_id, partition_number)): Path<(i64, i64)>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
     headers: HeaderMap,
     body: Body,
 ) -> Result<impl IntoResponse> {
@@ -58,7 +58,7 @@ pub async fn upload_partition_data(
 pub async fn upload_partition_table(
     State(state): State<Arc<HandlerState>>,
     Path(task_id): Path<i64>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
     body: Bytes,
 ) -> Result<impl IntoResponse> {
     let (task, image_id) = get_capture_task_and_verify(state.clone(), &mac, task_id).await?;

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::AgentMac;
+use super::AgentInfo;
 use super::HandlerState;
 use crate::api::client::get_next_task;
 use crate::domain::task::TaskType;
@@ -14,7 +14,7 @@ use serde::Deserialize;
 pub async fn mark_finished(
     State(state): State<Arc<HandlerState>>,
     Path(task_id): Path<i64>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
     let task = get_next_task(state.clone(), &mac).await?;
     if task.id != task_id {
@@ -41,7 +41,7 @@ pub struct MarkErrorPayload {
 pub async fn mark_faulted(
     State(state): State<Arc<HandlerState>>,
     Path(task_id): Path<i64>,
-    AgentMac(mac): AgentMac,
+    AgentInfo((mac, _)): AgentInfo,
     Json(body): Json<MarkErrorPayload>,
 ) -> Result<impl IntoResponse> {
     let task = get_next_task(state.clone(), &mac).await?;

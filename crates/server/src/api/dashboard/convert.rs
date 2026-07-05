@@ -20,6 +20,7 @@ impl From<pb::Host> for Host {
             value.name,
             value.mac_address,
             value.disk_size_bytes,
+            value.ip,
         )
     }
 }
@@ -31,6 +32,7 @@ impl From<Host> for pb::Host {
             mac_address: value.mac_address,
             name: value.name,
             disk_size_bytes: value.disk_size,
+            ip: value.ip,
         }
     }
 }
