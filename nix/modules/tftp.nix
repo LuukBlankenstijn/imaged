@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 with lib;
@@ -17,8 +16,12 @@ in
     };
     bindAddress = mkOption {
       type = types.str;
-      default = "0.0.0.0";
-      description = "IP address the tftp server listens on (note: currently hardcoded in binary to 0.0.0.0).";
+      default = "0.0.0.0:69";
+      description = "IP address the tftp server listens on.";
+    };
+    logLevel = mkOption {
+      type = types.str;
+      default = "info";
     };
   };
   config = mkIf cfg.enable {
@@ -33,7 +36,7 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-tftp";
+        ExecStart = "${cfg.package}/bin/imaged-tftp --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel}";
         User = "imaged-tftp";
         Group = "imaged-tftp";
         Restart = "always";

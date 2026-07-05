@@ -8,3 +8,4 @@ async-tftp = "0.4.2"
 futures-lite = "2.6.1"
 imaged-shared = { workspace = true, features = ["logging"] }
 tracing.workspace = true
+clap.workspace = true

@@ -1,3 +1,4 @@
+use clap::Parser;
 use std::net::SocketAddr;
 
 use async_tftp::{
@@ -6,11 +7,26 @@ use async_tftp::{
 };
 use futures_lite::io::Cursor;
 
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    /// address to bind to, also used as the wake on lan interface
+    #[arg(short, long, default_value_t = SocketAddr::from(([0,0,0,0], 8080)))]
+    bind_address: SocketAddr,
+    #[arg(short, long, default_value = "info")]
+    log_level: String,
+}
+
 fn main() -> Result<(), Error> {
-    imaged_shared::setup_logging!("info");
-    tracing::info!(interface = "0.0.0.0", port = 69, "starting imaged-tftp");
+    let args = Args::parse();
+    imaged_shared::setup_logging!(args.log_level);
+    tracing::info!(
+        interface = args.bind_address.to_string(),
+        "starting imaged-tftp"
+    );
     futures_lite::future::block_on(async {
         TftpServerBuilder::with_handler(StaticBytesHandler {})
+            .bind(args.bind_address)
             .build()
             .await?
             .serve()

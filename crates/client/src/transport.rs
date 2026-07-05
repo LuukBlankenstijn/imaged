@@ -14,10 +14,10 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(base: String, mac: String) -> anyhow::Result<Self> {
+    pub fn new(base: Url, mac: String) -> anyhow::Result<Self> {
         Ok(Self {
             client: Client::new(),
-            base: Url::parse(&base)?,
+            base,
             mac,
         })
     }

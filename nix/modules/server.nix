@@ -1,7 +1,6 @@
 {
   config,
   lib,
-  pkgs,
   ...
 }:
 
@@ -13,33 +12,27 @@ in
 {
   options.services.imaged.server = {
     enable = mkEnableOption "imaged-server";
-
     package = mkOption {
       type = types.package;
       description = "The imaged-server package to use.";
     };
-
     udpcast = mkOption {
       type = types.package;
       description = "Package providing udp-sender, used for multicast deploys.";
     };
-
     dataDir = mkOption {
       type = types.path;
       default = "/var/lib/imaged";
       description = "Directory to store images and the database.";
     };
-
-    port = mkOption {
-      type = types.port;
-      default = 8080;
-      description = "Port the server listens on (note: currently hardcoded in binary to 8080).";
-    };
-
     bindAddress = mkOption {
       type = types.str;
-      default = "0.0.0.0";
-      description = "IP address the server listens on (note: currently hardcoded in binary to 0.0.0.0).";
+      default = "0.0.0.0:8080";
+      description = "IP address the tftp server listens on.";
+    };
+    logLevel = mkOption {
+      type = types.str;
+      default = "info";
     };
   };
 
@@ -57,7 +50,7 @@ in
       wantedBy = [ "multi-user.target" ];
       path = [ cfg.udpcast ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server";
+        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";

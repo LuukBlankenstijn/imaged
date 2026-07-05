@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 imaged-shared = { workspace = true, features = ["all"] }
 tokio-util.workspace = true
+clap.workspace = true
 
 axum = { version = "0.8", features = ["macros"] }
 tonic-web = "0.14.5"
@@ -29,3 +30,4 @@ hex = "0.4.3"
 prost-types.workspace = true
 tower-http = { version = "0.6.8", features = ["fs", "trace"] }
 socket2 = { version = "0.6", features = ["all"] }
+

@@ -6,7 +6,9 @@ mod registry;
 mod repository;
 mod service;
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+
+use clap::Parser;
 
 use axum::{Router, serve::ListenerExt};
 use imaged_rpc::dashboard::v1::dashboard_service_server;
@@ -18,9 +20,20 @@ use tower_http::trace::TraceLayer;
 
 use crate::{api::dashboard::DashboardHandler, multicast::MulticastManager};
 
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    /// address to bind to, also used as the wake on lan interface
+    #[arg(short, long, default_value_t = SocketAddr::from(([0,0,0,0], 8080)))]
+    bind_address: SocketAddr,
+    #[arg(short, long, default_value = "info")]
+    log_level: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    imaged_shared::setup_logging!("debug");
+    let args = Args::parse();
+    imaged_shared::setup_logging!(args.log_level);
 
     let pool = setup_database().await?;
     let host_repo = repository::host_repo(pool.clone());
@@ -59,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(grpc_router)
         .layer(TraceLayer::new_for_http());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    let listener = tokio::net::TcpListener::bind(args.bind_address.to_owned())
         .await?
         .tap_io(|stream| {
             // Cap how long unacknowledged data may linger before the kernel
@@ -71,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     let service = routes.into_make_service();
-    tracing::info!(interface = "0.0.0.0", port = 8080, "starting imaged-server");
+    tracing::info!(bind_address=%&args.bind_address, "starting imaged-server");
     axum::serve(listener, service).await?;
 
     Ok(())

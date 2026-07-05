@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use reqwest::Url;
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::task::implementations::ClientTaskExt;
@@ -31,7 +32,7 @@ pub struct ClientState {
 }
 
 impl ClientState {
-    pub fn new(base_url: String, mac: String) -> Result<Self> {
+    pub fn new(base_url: Url, mac: String) -> Result<Self> {
         Ok(Self {
             http: ApiClient::new(base_url, mac)?,
             current_task: Mutex::new(None),

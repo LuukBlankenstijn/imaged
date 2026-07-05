@@ -1232,6 +1232,7 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "clap",
  "derive_more",
  "futures",
  "hex",
@@ -1266,6 +1267,7 @@ name = "imaged-tftp"
 version = "0.1.0"
 dependencies = [
  "async-tftp",
+ "clap",
  "futures-lite",
  "imaged-shared",
  "tracing",
