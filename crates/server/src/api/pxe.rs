@@ -67,8 +67,8 @@ pub async fn manifest_ipxe(Query(params): Query<BootParams>) -> impl IntoRespons
     ([("content-type", "text/plain; charset=utf-8")], body)
 }
 
-static VMLINUZ: &[u8] = include_bytes!("../../../../boot/vmlinuz");
-static INITRAMFS: &[u8] = include_bytes!("../../../../boot/initramfs.cpio.gz");
+static VMLINUZ: &[u8] = include_bytes!("../../../../assets/vmlinuz");
+static INITRAMFS: &[u8] = include_bytes!("../../../../assets/initramfs.cpio.gz");
 
 async fn serve_vmlinuz() -> impl IntoResponse {
     Response::builder()
