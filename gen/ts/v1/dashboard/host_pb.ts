@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file v1/dashboard/host.proto.
  */
 export const file_v1_dashboard_host: GenFile = /*@__PURE__*/
-  fileDesc("Chd2MS9kYXNoYm9hcmQvaG9zdC5wcm90bxIMZGFzaGJvYXJkLnYxImYKBEhvc3QSCgoCaWQYASABKAMSEwoLbWFjX2FkZHJlc3MYAiABKAkSDAoEbmFtZRgDIAEoCRIXCg9kaXNrX3NpemVfYnl0ZXMYBCABKAQSDwoCaXAYBSABKAlIAIgBAUIFCgNfaXAiOAoSR2V0QWxsSG9zdHNSZXF1ZXN0EhUKCGdyb3VwX2lkGAEgASgDSACIAQFCCwoJX2dyb3VwX2lkIjUKEEdldEhvc3RzUmVzcG9uc2USIQoFaG9zdHMYASADKAsyEi5kYXNoYm9hcmQudjEuSG9zdCI0ChNIb3N0Q29ubmVjdGlvbkV2ZW50EgoKAmlkGAEgASgDEhEKCWNvbm5lY3RlZBgCIAEoCCIxChFEZXBsb3lIb3N0UmVxdWVzdBIKCgJpZBgBIAEoAxIQCghpbWFnZV9pZBgCIAEoAyI7ChVNdWx0aWNhc3RIb3N0c1JlcXVlc3QSEAoIaG9zdF9pZHMYASADKAMSEAoIaW1hZ2VfaWQYAiABKAMiJgoSUmVib290SG9zdHNSZXF1ZXN0EhAKCGhvc3RfaWRzGAEgAygDQm4KEGNvbS5kYXNoYm9hcmQudjFCCUhvc3RQcm90b1ABogIDRFhYqgIMRGFzaGJvYXJkLlYxygIMRGFzaGJvYXJkXFYx4gIYRGFzaGJvYXJkXFYxXEdQQk1ldGFkYXRh6gINRGFzaGJvYXJkOjpWMWIGcHJvdG8z");
+  fileDesc("Chd2MS9kYXNoYm9hcmQvaG9zdC5wcm90bxIMZGFzaGJvYXJkLnYxImYKBEhvc3QSCgoCaWQYASABKAMSEwoLbWFjX2FkZHJlc3MYAiABKAkSDAoEbmFtZRgDIAEoCRIXCg9kaXNrX3NpemVfYnl0ZXMYBCABKAQSDwoCaXAYBSABKAlIAIgBAUIFCgNfaXAiOAoSR2V0QWxsSG9zdHNSZXF1ZXN0EhUKCGdyb3VwX2lkGAEgASgDSACIAQFCCwoJX2dyb3VwX2lkIjUKEEdldEhvc3RzUmVzcG9uc2USIQoFaG9zdHMYASADKAsyEi5kYXNoYm9hcmQudjEuSG9zdCI0ChNIb3N0Q29ubmVjdGlvbkV2ZW50EgoKAmlkGAEgASgDEhEKCWNvbm5lY3RlZBgCIAEoCCIxChFEZXBsb3lIb3N0UmVxdWVzdBIKCgJpZBgBIAEoAxIQCghpbWFnZV9pZBgCIAEoAyI7ChVNdWx0aWNhc3RIb3N0c1JlcXVlc3QSEAoIaG9zdF9pZHMYASADKAMSEAoIaW1hZ2VfaWQYAiABKAMiJgoSUmVib290SG9zdHNSZXF1ZXN0EhAKCGhvc3RfaWRzGAEgAygDIiQKEFdha2VPbkxhblJlcXVlc3QSEAoIaG9zdF9pZHMYASADKANCbgoQY29tLmRhc2hib2FyZC52MUIJSG9zdFByb3RvUAGiAgNEWFiqAgxEYXNoYm9hcmQuVjHKAgxEYXNoYm9hcmRcVjHiAhhEYXNoYm9hcmRcVjFcR1BCTWV0YWRhdGHqAg1EYXNoYm9hcmQ6OlYxYgZwcm90bzM");
 
 /**
  * @generated from message dashboard.v1.Host
@@ -165,4 +165,21 @@ export type RebootHostsRequest = Message<"dashboard.v1.RebootHostsRequest"> & {
  */
 export const RebootHostsRequestSchema: GenMessage<RebootHostsRequest> = /*@__PURE__*/
   messageDesc(file_v1_dashboard_host, 6);
+
+/**
+ * @generated from message dashboard.v1.WakeOnLanRequest
+ */
+export type WakeOnLanRequest = Message<"dashboard.v1.WakeOnLanRequest"> & {
+  /**
+   * @generated from field: repeated int64 host_ids = 1;
+   */
+  hostIds: bigint[];
+};
+
+/**
+ * Describes the message dashboard.v1.WakeOnLanRequest.
+ * Use `create(WakeOnLanRequestSchema)` to create a new message.
+ */
+export const WakeOnLanRequestSchema: GenMessage<WakeOnLanRequest> = /*@__PURE__*/
+  messageDesc(file_v1_dashboard_host, 7);
 

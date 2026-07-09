@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     Json,
@@ -32,6 +32,7 @@ pub struct HandlerState {
     group_repo: Arc<dyn GroupRepository>,
     image_service: Arc<ImageService>,
     multicast_manager: Arc<MulticastManager>,
+    bind_address: SocketAddr,
 }
 
 impl From<AppError> for Status {

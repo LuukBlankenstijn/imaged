@@ -36,3 +36,7 @@ message MulticastHostsRequest {
 message RebootHostsRequest {
   repeated int64 host_ids = 1;
 }
+
+message WakeOnLanRequest {
+  repeated int64 host_ids = 1;
+}

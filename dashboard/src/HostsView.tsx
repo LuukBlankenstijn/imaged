@@ -5,6 +5,7 @@ import { dashboardClient } from "./transport";
 import { formatBytes } from "./format";
 import { useConnection } from "./connectionStore";
 import { ActionMenu } from "./ActionMenu";
+import { pushToast } from "./toast";
 
 type RowMode = "view" | "renaming" | "deploying";
 
@@ -132,12 +133,27 @@ function HostRow({ host }: { host: Host }) {
     meta: { errorTitle: "Reboot failed" },
   });
 
+  // Wake-on-LAN creates no task, so there is nothing to refetch — just confirm
+  // the magic packet was sent with a toast.
+  const wakeMutation = useMutation({
+    mutationFn: () => dashboardClient.wakeOnLan({ hostIds: [host.id] }),
+    onSuccess: () => {
+      pushToast({
+        tone: "success",
+        title: "Magic packet sent",
+        message: host.name || host.macAddress,
+      });
+    },
+    meta: { errorTitle: "Wake failed" },
+  });
+
   const dirty = draft !== host.name;
   const busy =
     renameMutation.isPending ||
     deleteMutation.isPending ||
     deployMutation.isPending ||
-    rebootMutation.isPending;
+    rebootMutation.isPending ||
+    wakeMutation.isPending;
 
   function commitRename() {
     if (dirty) renameMutation.mutate(draft);
@@ -167,6 +183,10 @@ function HostRow({ host }: { host: Host }) {
   function reboot() {
     const label = host.name || `host ${host.id}`;
     if (window.confirm(`Reboot ${label}?`)) rebootMutation.mutate();
+  }
+
+  function wake() {
+    wakeMutation.mutate();
   }
 
   return (
@@ -270,6 +290,16 @@ function HostRow({ host }: { host: Host }) {
                     }}
                   >
                     Reboot
+                  </button>
+                  <button
+                    className="menu-item"
+                    role="menuitem"
+                    onClick={() => {
+                      close();
+                      wake();
+                    }}
+                  >
+                    Wake
                   </button>
                   <div className="menu-sep" />
                   <button

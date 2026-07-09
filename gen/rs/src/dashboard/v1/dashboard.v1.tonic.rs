@@ -258,6 +258,28 @@ pub mod dashboard_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn wake_on_lan(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WakeOnLanRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dashboard.v1.DashboardService/WakeOnLan",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("dashboard.v1.DashboardService", "WakeOnLan"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn get_all_images(
             &mut self,
             request: impl tonic::IntoRequest<()>,
@@ -608,6 +630,11 @@ pub mod dashboard_service_server {
         async fn reboot(
             &self,
             request: tonic::Request<super::RebootHostsRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
+        ///
+        async fn wake_on_lan(
+            &self,
+            request: tonic::Request<super::WakeOnLanRequest>,
         ) -> std::result::Result<tonic::Response<()>, tonic::Status>;
         ///
         async fn get_all_images(
@@ -1055,6 +1082,51 @@ pub mod dashboard_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RebootSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/dashboard.v1.DashboardService/WakeOnLan" => {
+                    #[allow(non_camel_case_types)]
+                    struct WakeOnLanSvc<T: DashboardService>(pub Arc<T>);
+                    impl<
+                        T: DashboardService,
+                    > tonic::server::UnaryService<super::WakeOnLanRequest>
+                    for WakeOnLanSvc<T> {
+                        type Response = ();
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::WakeOnLanRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DashboardService>::wake_on_lan(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = WakeOnLanSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

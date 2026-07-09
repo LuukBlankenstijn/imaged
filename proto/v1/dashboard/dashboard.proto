@@ -27,6 +27,7 @@ service DashboardService {
   rpc Deploy(DeployHostRequest) returns (Task) {}
   rpc Multicast(MulticastHostsRequest) returns (google.protobuf.Empty) {}
   rpc Reboot(RebootHostsRequest) returns (google.protobuf.Empty) {}
+  rpc WakeOnLan(WakeOnLanRequest) returns (google.protobuf.Empty) {}
 
   rpc GetAllImages(google.protobuf.Empty) returns (GetImagesResponse) {}
   rpc UpdateImageName(UpdateNameRequest) returns (Image) {}

@@ -75,6 +75,11 @@ pub struct RebootHostsRequest {
     #[prost(int64, repeated, tag="1")]
     pub host_ids: ::prost::alloc::vec::Vec<i64>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WakeOnLanRequest {
+    #[prost(int64, repeated, tag="1")]
+    pub host_ids: ::prost::alloc::vec::Vec<i64>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Image {
     #[prost(int64, tag="1")]

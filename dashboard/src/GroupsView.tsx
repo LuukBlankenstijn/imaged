@@ -4,6 +4,7 @@ import type { Group } from "@imaged/gen/v1/dashboard/group_pb";
 import type { Host } from "@imaged/gen/v1/dashboard/host_pb";
 import { dashboardClient } from "./transport";
 import { ActionMenu } from "./ActionMenu";
+import { pushToast } from "./toast";
 
 type DetailIntent = "multicast" | null;
 
@@ -228,11 +229,31 @@ function GroupRow({
     meta: { errorTitle: "Reboot failed" },
   });
 
+  // Wake every member; WoL creates no task, so confirm with a toast instead of
+  // refetching.
+  const wakeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await dashboardClient.getAllHosts({ groupId: group.id });
+      const hostIds = res.hosts.map((h) => h.id);
+      if (hostIds.length === 0) throw new Error("Group has no members");
+      await dashboardClient.wakeOnLan({ hostIds });
+    },
+    onSuccess: () => {
+      pushToast({
+        tone: "success",
+        title: "Magic packets sent",
+        message: group.name || `group ${group.id}`,
+      });
+    },
+    meta: { errorTitle: "Wake failed" },
+  });
+
   const dirty = draftName !== group.name;
   const busy =
     renameMutation.isPending ||
     deleteMutation.isPending ||
-    rebootMutation.isPending;
+    rebootMutation.isPending ||
+    wakeMutation.isPending;
 
   function commitRename() {
     if (dirty) renameMutation.mutate(draftName);
@@ -254,6 +275,10 @@ function GroupRow({
     if (window.confirm(`Reboot all members of ${label}?`)) {
       rebootMutation.mutate();
     }
+  }
+
+  function wake() {
+    wakeMutation.mutate();
   }
 
   function startMulticast() {
@@ -344,6 +369,16 @@ function GroupRow({
                       }}
                     >
                       Reboot
+                    </button>
+                    <button
+                      className="menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        close();
+                        wake();
+                      }}
+                    >
+                      Wake
                     </button>
                     <div className="menu-sep" />
                     <button

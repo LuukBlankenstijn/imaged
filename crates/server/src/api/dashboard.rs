@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -132,6 +133,41 @@ impl DashboardService for DashboardHandler {
             .await?;
         for id in request.host_ids.into_iter() {
             self.host_registry.send_task(id, &task);
+        }
+
+        Ok(().into())
+    }
+
+    async fn wake_on_lan(&self, req: Request<pb::WakeOnLanRequest>) -> TonicResult {
+        let request = req.into_inner();
+        let mut src = self.bind_address;
+        // Send from an ephemeral source port; the magic packet is delivered to
+        // the broadcast address on port 9 (matches wakey's own send_magic
+        // default — it's the destination port, not the source, that must be 9).
+        src.set_port(0);
+        let dest = SocketAddr::from(([255, 255, 255, 255], 9));
+
+        // Resolve the requested host ids to MACs server-side (one query, filtered
+        // in memory) rather than trusting client-supplied MAC strings.
+        let wanted: std::collections::HashSet<i64> = request.host_ids.into_iter().collect();
+        for host in self
+            .host_repo
+            .get_all(None)
+            .await?
+            .into_iter()
+            .filter(|h| wanted.contains(&h.id))
+        {
+            let normalized = host.mac_address.replace('-', ":");
+            match wakey::WolPacket::from_string(&normalized, ':') {
+                Ok(packet) => {
+                    if let Err(e) = packet.send_magic_to(src, dest) {
+                        tracing::warn!(mac = %host.mac_address, err = %e, "failed to send wake-on-lan packet");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(mac = %host.mac_address, err = %e, "invalid mac address for wake-on-lan")
+                }
+            }
         }
 
         Ok(().into())

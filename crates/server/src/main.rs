@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         group_repo,
         image_service,
         multicast_manager,
+        args.bind_address,
     ));
     let dashboard_service = dashboard_service_server::DashboardServiceServer::new(
         DashboardHandler::new(handler_state.clone()),
