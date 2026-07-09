@@ -22,6 +22,11 @@
         "name": "disk_size_bytes",
         "ordinal": 3,
         "type_info": "Integer"
+      },
+      {
+        "name": "ip",
+        "ordinal": 4,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -31,7 +36,8 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
   "hash": "97e7b92a0fba8e75f80f5102650262ba5b71c88a17db09a4906b75c5dae88cd2"

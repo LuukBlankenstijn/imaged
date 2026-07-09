@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT \n                id AS \"id!\",\n                mac,\n                name,\n                disk_size_bytes\n            FROM hosts \n            WHERE mac = ?\n            ",
+  "query": "\n            SELECT \n                id AS \"id!\",\n                mac,\n                name,\n                disk_size_bytes,\n                ip\n            FROM hosts \n            WHERE mac = ?\n            ",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "name": "disk_size_bytes",
         "ordinal": 3,
         "type_info": "Integer"
+      },
+      {
+        "name": "ip",
+        "ordinal": 4,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -31,8 +36,9 @@
       true,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "c44f1862d25f97a7bf79d074b1fdc133f9d56c07926147638b453473ce018e98"
+  "hash": "93d8b145331834dab0bea671927c7009d3defbea255d7a1baad67334c90d5fcc"
 }

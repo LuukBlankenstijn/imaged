@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT h.id as \"id!\", h.name, h.mac, h.disk_size_bytes FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?",
+  "query": "SELECT h.id as \"id!\", h.name, h.mac, h.disk_size_bytes, h.ip FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "name": "disk_size_bytes",
         "ordinal": 3,
         "type_info": "Integer"
+      },
+      {
+        "name": "ip",
+        "ordinal": 4,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -31,8 +36,9 @@
       true,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "10846c7756ce1e3507478ba186b19d541d7ec9bead4cca82fea52378d8c8ed67"
+  "hash": "c93bef82ac4ac84f9f2892f0b6c9a0b3bc53522dd37f6246ac0f93a91e62da41"
 }
