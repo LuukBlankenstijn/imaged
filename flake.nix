@@ -77,6 +77,7 @@
             inherit initramfs;
           };
           imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { };
+          imaged-dashboard = pkgs.callPackage ./nix/packages/imaged-dashboard.nix { };
         };
 
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
@@ -111,6 +112,7 @@
           services.imaged = {
             server.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
             server.udpcast = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.udpcast;
+            server.frontend = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-dashboard;
             tftp.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-tftp;
           };
         };

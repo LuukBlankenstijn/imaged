@@ -8,3 +8,4 @@ node_modules
 images
 .claude
 assets/initramfs.cpio.gz
+docs

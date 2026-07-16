@@ -6,17 +6,23 @@ mod registry;
 mod repository;
 mod service;
 
-use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use clap::Parser;
 
-use axum::{Router, serve::ListenerExt};
+use axum::{
+    Router,
+    serve::{Listener, ListenerExt},
+};
 use imaged_rpc::dashboard::v1::dashboard_service_server;
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
-use tower_http::trace::TraceLayer;
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 
 use crate::{api::dashboard::DashboardHandler, multicast::MulticastManager};
 
@@ -28,6 +34,15 @@ struct Args {
     bind_address: SocketAddr,
     #[arg(short, long, default_value = "info")]
     log_level: String,
+    /// Address to bind the web routes to, if not set will be the same as bind_address
+    #[arg(short, long)]
+    web_bind_address: Option<SocketAddr>,
+    /// network interface udp-sender binds for multicast deploys
+    #[arg(short, long, env = "MULTICAST_INTERFACE", default_value = "lo")]
+    multicast_interface: String,
+    /// directory of built dashboard assets to serve; unset disables static serving
+    #[arg(short, long, env = "ASSETS_DIR")]
+    assets_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -43,7 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_registry = Arc::new(registry::HostRegistry::new());
     let image_service = Arc::new(service::image::ImageService::new("images".to_string()));
     let multicast_manager = Arc::new(
-        MulticastManager::new(task_repo.clone(), image_repo.clone(), image_service.clone()).await?,
+        MulticastManager::new(
+            task_repo.clone(),
+            image_repo.clone(),
+            image_service.clone(),
+            args.multicast_interface,
+        )
+        .await?,
     );
 
     let handler_state = Arc::new(api::HandlerState::new(
@@ -67,28 +88,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_axum_router()
         .layer(tonic_web::GrpcWebLayer::new());
 
-    let routes = Router::new()
-        .merge(api::pxe::router())
-        .merge(api::client::router().with_state(handler_state))
-        .merge(grpc_router)
-        .layer(TraceLayer::new_for_http());
+    let machine_router =
+        api::pxe::router().merge(api::client::router().with_state(handler_state));
+    let web_router = build_web_router(grpc_router, args.assets_dir);
 
-    let listener = tokio::net::TcpListener::bind(args.bind_address.to_owned())
-        .await?
-        .tap_io(|stream| {
-            // Cap how long unacknowledged data may linger before the kernel
-            // declares the connection dead.
-            if let Err(e) =
-                socket2::SockRef::from(&*stream).set_tcp_user_timeout(Some(Duration::from_secs(20)))
-            {
-                tracing::warn!("failed to set TCP_USER_TIMEOUT on connection: {e}");
-            }
-        });
-    let service = routes.into_make_service();
-    tracing::info!(bind_address=%&args.bind_address, "starting imaged-server");
-    axum::serve(listener, service).await?;
+    let main_listener = bind(args.bind_address).await?;
+    match args.web_bind_address {
+        Some(web_bind_address) => {
+            let web_listener = bind(web_bind_address).await?;
+            tracing::info!(
+                bind_address = %args.bind_address,
+                web_bind_address = %web_bind_address,
+                "starting imaged-server"
+            );
+            tokio::try_join!(
+                serve(main_listener, machine_router),
+                serve(web_listener, web_router),
+            )?;
+        }
+        None => {
+            tracing::info!(bind_address = %args.bind_address, "starting imaged-server");
+            serve(main_listener, machine_router.merge(web_router)).await?;
+        }
+    }
 
     Ok(())
+}
+
+const DEAD_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
+
+async fn bind(address: SocketAddr) -> std::io::Result<impl Listener<Addr = SocketAddr>> {
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    Ok(listener.tap_io(|stream| {
+        if let Err(e) =
+            socket2::SockRef::from(&*stream).set_tcp_user_timeout(Some(DEAD_CONNECTION_TIMEOUT))
+        {
+            tracing::warn!(error = %e, "failed to set connection death timeout");
+        }
+    }))
+}
+
+async fn serve(listener: impl Listener<Addr = SocketAddr>, router: Router) -> std::io::Result<()> {
+    let service = router.layer(TraceLayer::new_for_http()).into_make_service();
+    axum::serve(listener, service).await
+}
+
+fn build_web_router(grpc: Router, assets_dir: Option<PathBuf>) -> Router {
+    let router = Router::new().nest("/api", grpc);
+    match assets_dir {
+        Some(dir) => router.fallback_service(spa_service(dir)),
+        None => router,
+    }
+}
+
+fn spa_service(dir: PathBuf) -> ServeDir<ServeFile> {
+    let index_html = dir.join("index.html");
+    ServeDir::new(dir).fallback(ServeFile::new(index_html))
 }
 
 async fn setup_database() -> Result<SqlitePool, Box<dyn std::error::Error>> {

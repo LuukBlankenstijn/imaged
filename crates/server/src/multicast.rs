@@ -41,6 +41,7 @@ pub struct MulticastManager {
     task_repo: Arc<dyn TaskRepository>,
     image_repo: Arc<dyn ImageRepository>,
     image_service: Arc<ImageService>,
+    interface: String,
     current: Arc<Mutex<Option<RunningMulticastTask>>>,
 }
 
@@ -49,11 +50,13 @@ impl MulticastManager {
         task_repo: Arc<dyn TaskRepository>,
         image_repo: Arc<dyn ImageRepository>,
         image_service: Arc<ImageService>,
+        interface: String,
     ) -> Result<Self> {
         let new = Self {
             task_repo: task_repo.clone(),
             image_repo,
             image_service,
+            interface,
             current: Arc::new(Mutex::new(None)),
         };
         // mark all tasks that are already started as error
@@ -177,7 +180,13 @@ impl MulticastManager {
 
         let partition_table_path = self.image_service.get_partition_table_path(image_id);
 
-        upd_sender(&partition_table_path, get_multicast_port(0), num_receivers).await?;
+        upd_sender(
+            &partition_table_path,
+            get_multicast_port(0),
+            num_receivers,
+            &self.interface,
+        )
+        .await?;
 
         let partitions = self.image_repo.get_partitions(image_id).await?;
         for p in partitions.into_iter() {
@@ -189,6 +198,7 @@ impl MulticastManager {
                 &partition_path,
                 get_multicast_port(p.partition_number),
                 num_receivers,
+                &self.interface,
             )
             .await?;
         }
@@ -197,10 +207,9 @@ impl MulticastManager {
     }
 }
 
-async fn upd_sender(file: &str, portbase: u16, num_receivers: usize) -> Result {
+async fn upd_sender(file: &str, portbase: u16, num_receivers: usize, interface: &str) -> Result {
     let rvd_address = MULTICAST_RVD_ADDRESS;
     let data_address = MULTICAST_DATA_ADDRESS;
-    let interface = std::env::var("MULTICAST_INTERFACE").unwrap_or("lo".to_string());
     let status = Command::new("udp-sender")
         .args([
             "--file",
@@ -216,7 +225,7 @@ async fn upd_sender(file: &str, portbase: u16, num_receivers: usize) -> Result {
             "--nokbd",
             "--autorate",
             "--interface",
-            &interface,
+            interface,
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

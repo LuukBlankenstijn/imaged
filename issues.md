@@ -1,2 +1,1 @@
 - removing image does not cancel tasks that reference it
-- cancel on multicast task does not actually cancel
