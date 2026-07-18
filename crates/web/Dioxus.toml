@@ -1,0 +1,20 @@
+[application]
+name = "imaged-web"
+
+[web.app]
+title = "imaged"
+
+[web.watcher]
+watch_path = ["src", "assets"]
+index_on_404 = true
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+script = []
+
+[bundle]
+identifier = "dev.imaged.web"
+publisher = "imaged"

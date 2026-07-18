@@ -9,3 +9,5 @@ images
 .claude
 assets/initramfs.cpio.gz
 docs
+
+crates/web/assets/tailwind.css

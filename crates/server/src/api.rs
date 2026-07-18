@@ -7,7 +7,6 @@ use axum::{
 };
 use derive_more::Constructor;
 use serde_json::json;
-use tonic::Status;
 
 use crate::{
     domain::{
@@ -20,38 +19,49 @@ use crate::{
 };
 
 pub mod client;
-pub mod dashboard;
 pub mod pxe;
 
 #[derive(Clone, Constructor)]
 pub struct HandlerState {
-    host_repo: Arc<dyn HostRepository>,
-    host_registry: Arc<HostRegistry>,
-    image_repo: Arc<dyn ImageRepository>,
-    task_repo: Arc<dyn TaskRepository>,
-    group_repo: Arc<dyn GroupRepository>,
-    image_service: Arc<ImageService>,
-    multicast_manager: Arc<MulticastManager>,
-    bind_address: SocketAddr,
+    pub host_repo: Arc<dyn HostRepository>,
+    pub host_registry: Arc<HostRegistry>,
+    pub image_repo: Arc<dyn ImageRepository>,
+    pub task_repo: Arc<dyn TaskRepository>,
+    pub group_repo: Arc<dyn GroupRepository>,
+    pub image_service: Arc<ImageService>,
+    pub multicast_manager: Arc<MulticastManager>,
+    pub bind_address: SocketAddr,
 }
 
-impl From<AppError> for Status {
-    fn from(err: AppError) -> Self {
-        match &err {
-            AppError::NotFound(msg) => Status::not_found(msg.clone()),
-            AppError::InvalidArgument(msg) => Status::invalid_argument(msg.clone()),
-            AppError::AlreadyExists(msg) => Status::already_exists(msg.clone()),
-            AppError::FailedPrecondition(msg) => Status::failed_precondition(msg.clone()),
-            AppError::Internal(msg) => {
-                tracing::error!(error = %msg, "internal error");
-                Status::internal("internal server error")
+pub async fn send_wake_on_lan(
+    host_repo: &Arc<dyn HostRepository>,
+    bind_address: SocketAddr,
+    host_ids: Vec<i64>,
+) -> crate::error::Result<()> {
+    let mut src = bind_address;
+    src.set_port(0);
+    let dest = SocketAddr::from(([255, 255, 255, 255], 9));
+
+    let wanted: std::collections::HashSet<i64> = host_ids.into_iter().collect();
+    for host in host_repo
+        .get_all(None)
+        .await?
+        .into_iter()
+        .filter(|h| wanted.contains(&h.id))
+    {
+        let normalized = host.mac_address.replace('-', ":");
+        match wakey::WolPacket::from_string(&normalized, ':') {
+            Ok(packet) => {
+                if let Err(e) = packet.send_magic_to(src, dest) {
+                    tracing::warn!(mac = %host.mac_address, err = %e, "failed to send wake-on-lan packet");
+                }
             }
-            AppError::Database(e) => {
-                tracing::error!(error = %e, "database error");
-                Status::internal("internal database error")
+            Err(e) => {
+                tracing::warn!(mac = %host.mac_address, err = %e, "invalid mac address for wake-on-lan")
             }
         }
     }
+    Ok(())
 }
 
 impl IntoResponse for AppError {

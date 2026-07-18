@@ -1,0 +1,15 @@
+[package]
+name = "imaged-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dioxus = { version = "0.7", features = ["fullstack"] }
+serde = { workspace = true, features = ["derive"] }
+inject = { workspace = true }
+imaged-server-core = { path = "../server", optional = true }
+tracing = { workspace = true, optional = true }
+
+[features]
+default = []
+server = ["dioxus/server", "dep:imaged-server-core", "dep:tracing"]

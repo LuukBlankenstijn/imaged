@@ -28,7 +28,7 @@ in
     bindAddress = mkOption {
       type = types.str;
       default = "0.0.0.0:8080";
-      description = "host:port the imaged-server HTTP/gRPC API listens on.";
+      description = "host:port the imaged-server PXE / agent HTTP API listens on.";
     };
     logLevel = mkOption {
       type = types.str;
@@ -42,11 +42,7 @@ in
     webBindAddress = mkOption {
       type = types.nullOr types.str;
       default = null;
-      description = "host:port for the dashboard UI and gRPC API; defaults to bindAddress when null.";
-    };
-    frontend = mkOption {
-      type = types.package;
-      description = "Built dashboard assets served on the web routes.";
+      description = "host:port for the dashboard UI + server functions; defaults to bindAddress when null.";
     };
   };
 
@@ -64,7 +60,7 @@ in
       wantedBy = [ "multi-user.target" ];
       path = [ cfg.udpcast ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface} --assets-dir ${cfg.frontend}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}";
+        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";

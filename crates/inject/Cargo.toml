@@ -1,0 +1,8 @@
+[package]
+name = "inject"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+inject-macros = { path = "inject-macros" }
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }

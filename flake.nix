@@ -2,7 +2,7 @@
   description = "imaged: network boot imaging tool";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -36,13 +36,14 @@
             "clippy"
             "rustfmt"
           ];
-          targets = [ "x86_64-unknown-linux-musl" ];
+          targets = [
+            "x86_64-unknown-linux-musl"
+            "wasm32-unknown-unknown"
+          ];
         };
 
         imaged-client = pkgs.callPackage ./nix/packages/imaged-client.nix { };
 
-        # Shared initramfs contents, consumed by both the pure `initramfs`
-        # derivation and the `build-initramfs` dev script.
         initramfsStaging = import ./nix/lib/initramfs-staging.nix {
           inherit (pkgs) pkgsStatic;
           inherit udpcast partclone;
@@ -74,10 +75,9 @@
             teardown-net
             ;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit initramfs;
+            inherit initramfs rustToolchain;
           };
           imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { };
-          imaged-dashboard = pkgs.callPackage ./nix/packages/imaged-dashboard.nix { };
         };
 
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
@@ -106,13 +106,9 @@
             ./nix/modules/server.nix
             ./nix/modules/tftp.nix
           ];
-          # Default the service packages to the ones this flake builds (with the
-          # rust-overlay pkgs), so consumers get working defaults without having
-          # to wire up rust-overlay or the initramfs chain themselves.
           services.imaged = {
             server.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
             server.udpcast = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.udpcast;
-            server.frontend = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-dashboard;
             tftp.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-tftp;
           };
         };

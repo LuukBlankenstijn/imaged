@@ -8,14 +8,11 @@
   run-vm-pxe,
   setup-net,
   teardown-net,
-  buf,
-  protoc-gen-tonic,
-  protoc-gen-prost,
-  protoc-gen-es,
-  protoc-gen-prost-crate,
   sqlx-cli,
-  nodejs,
-  pnpm,
+  dioxus-cli,
+  tailwindcss_4,
+  wasm-bindgen-cli_0_2_118,
+  binaryen,
   ipxe,
 }:
 
@@ -28,14 +25,11 @@ mkShell {
     setup-net
     teardown-net
     udpcast
-    buf
-    protoc-gen-tonic
-    protoc-gen-prost
-    protoc-gen-es
-    protoc-gen-prost-crate
     sqlx-cli
-    nodejs
-    pnpm
+    dioxus-cli
+    tailwindcss_4
+    wasm-bindgen-cli_0_2_118
+    binaryen
   ];
 
   env = {

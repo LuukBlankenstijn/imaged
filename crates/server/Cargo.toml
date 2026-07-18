@@ -1,11 +1,13 @@
 [package]
-name = "imaged-server"
+name = "imaged-server-core"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "imaged_server_core"
+path = "src/lib.rs"
+
 [dependencies]
-imaged-rpc = { workspace = true, features = ["dashboard-v1"] }
-tonic.workspace = true
 tokio-stream.workspace = true
 derive_more = { workspace = true, features = ["display", "from_str", "is_variant", "unwrap"] }
 tracing.workspace = true
@@ -15,11 +17,10 @@ futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 imaged-shared = { workspace = true, features = ["all"] }
-tokio-util.workspace = true
-clap.workspace = true
+tokio-util = { workspace = true, features = ["io", "rt"] }
+inject.workspace = true
 
 axum = { version = "0.8", features = ["macros"] }
-tonic-web = "0.14.5"
 
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
 
@@ -27,7 +28,6 @@ chrono = { version = "0.4.44", features = ["serde"] }
 async-trait = "0.1.89"
 bytes = "1.11.1"
 hex = "0.4.3"
-prost-types.workspace = true
-tower-http = { version = "0.6.8", features = ["fs", "trace"] }
+tower-http = { version = "0.6.8", features = ["trace"] }
 socket2 = { version = "0.6", features = ["all"] }
 wakey = "0.4.1"

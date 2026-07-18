@@ -2,65 +2,59 @@
 
 A self-hosted disk imaging tool: capture an image from a machine over the
 network, then re-deploy it to other machines. Hosts boot over PXE into a small
-client that talks to a central server. This project is inspired by the capturing and deploying part of [The Fog Project](https://github.com/FOGProject/fogproject). Multicast support is planned as well. The web-frontend is implemented by AI, all rust code is hand written.
+client that talks to a central server. Inspired by the capture/deploy part of [The Fog Project](https://github.com/FOGProject/fogproject); multicast support is planned.
 
 ## Components
 
-### `crates/server` — `imaged-server`
+### `crates/server` — `imaged-server-core`
 
-Rust (axum + tonic). Serves a gRPC/gRPC-Web API consumed by the web-client and http api for the pxe client. Uses SQLite (sqlx) for hosts, images, and tasks. Stores image partitions on disk under `images/`.
+Rust library (axum). Domain model, SQLite (sqlx) repositories for hosts, images
+and tasks, the in-memory host connection registry, the multicast manager, image
+storage, and the PXE / agent HTTP routers. Image partitions are stored on disk
+under `images/`.
 
-Run:
+### `crates/web` — `imaged-server`
+
+Dioxus fullstack app; its binary is named `imaged-server`. It renders the
+dashboard (hydrated wasm client) and hosts the dashboard server functions plus
+the PXE / agent HTTP API in a single binary, backed by `imaged-server-core`.
+Styled with Tailwind CSS v4.
+
+Run (dev):
 
 ```sh
-cargo run -p imaged-server
+dx serve --package imaged-web
 ```
 
-Listens on `0.0.0.0:8080`.
+Bundle (production):
+
+```sh
+dx bundle --release --platform web --package imaged-web
+```
+
+Listens on `0.0.0.0:8080` (`--bind-address`); an optional `--web-bind-address`
+serves the dashboard on a separate socket.
 
 ### `crates/client` — `imaged-client`
 
 Rust binary that runs on a PXE-booted machine. On start it sends its state to
-the server (mac address, disk size) and processes capture / deploy tasks
-issued back over sse's. Uses `partclone` for filesystem-aware imaging.
+the server (mac address, disk size) and processes capture / deploy tasks issued
+back over SSE. Uses `partclone` for filesystem-aware imaging.
 
 ```sh
 cargo run -p imaged-client -- http://<server>:8080
 ```
 
-### `dashboard/` — web UI
-
-React + Vite + TypeScript. Connects to the server via gRPC-Web through a
-`/api` proxy. Manages hosts, images, and tasks.
-
-```sh
-cd dashboard
-pnpm install
-pnpm dev          # http://localhost:5173, proxies /api to localhost:8080
-pnpm build        # production bundle in dist/
-```
-
-### `proto/` and `gen/`
-
-Protocol definitions live in `proto/`. Code generation is driven by
-`buf.gen.yaml`:
-
-```sh
-buf generate
-```
-
-This regenerates `gen/rs` (Rust, used by both client and server through
-`imaged-rpc`) and `gen/ts` (TypeScript, used by the dashboard).
-
 ## Dev environment
 
-A `flake.nix` provides the toolchain (Rust, Node/pnpm, buf, protoc,
-sqlx-cli). With direnv:
+A `flake.nix` provides the toolchain: Rust with the `wasm32-unknown-unknown`
+target, `dx` (dioxus-cli), Tailwind CSS v4, wasm-bindgen, binaryen and sqlx-cli.
+With direnv:
 
 ```sh
 direnv allow
 ```
 
-It also provides all tools needed by the project. A minimal linux kernel, partclone,
-udp-cast, several packages for in the initramfs and scripts to build the initramfs
-and run the test vm.
+It also provides everything else the project needs: a minimal Linux kernel,
+partclone, udp-cast, the initramfs packages and scripts, and the test-VM
+scripts.

@@ -1,22 +1,34 @@
 {
   lib,
+  stdenv,
   rustPlatform,
+  rustToolchain,
   pkg-config,
   sqlite,
+  dioxus-cli,
+  tailwindcss_4,
+  wasm-bindgen-cli_0_2_118,
+  binaryen,
   initramfs,
 }:
 
-rustPlatform.buildRustPackage {
+stdenv.mkDerivation {
   pname = "imaged-server";
   version = "0.1.0";
 
   src = ../..;
 
-  cargoLock = {
+  cargoDeps = rustPlatform.importCargoLock {
     lockFile = ../../Cargo.lock;
   };
 
   nativeBuildInputs = [
+    rustToolchain
+    rustPlatform.cargoSetupHook
+    dioxus-cli
+    tailwindcss_4
+    wasm-bindgen-cli_0_2_118
+    binaryen
     pkg-config
   ];
 
@@ -24,27 +36,31 @@ rustPlatform.buildRustPackage {
     sqlite
   ];
 
-  # sqlx query!/query_as! macros verify SQL at compile time against the
-  # checked-in crates/server/.sqlx offline cache instead of a live database.
   SQLX_OFFLINE = "true";
 
-  # The server embeds vmlinuz and the initramfs at compile time via
-  # include_bytes! (see crates/server/src/api/pxe.rs). The initramfs is built
-  # by Nix and injected here; vmlinuz is read from the committed assets/vmlinuz
-  # so building the server never triggers the (~10 min) kernel build. Refresh
-  # that asset out-of-band with `nix build .#kernel` (the dev shell does this
-  # on entry).
   postPatch = ''
     install -Dm0644 ${initramfs} assets/initramfs.cpio.gz
   '';
 
-  buildAndTestSubdir = "crates/server";
+  buildPhase = ''
+    runHook preBuild
+    export HOME=$TMPDIR
+    tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
+    dx bundle --release --platform web --package imaged-web --out-dir "$TMPDIR/bundle"
+    runHook postBuild
+  '';
 
-  meta = with lib; {
-    description = "imaged server backend";
+  installPhase = ''
+    runHook preInstall
+    install -Dm0755 "$TMPDIR/bundle/web/server" "$out/bin/imaged-server"
+    cp -r "$TMPDIR/bundle/web/public" "$out/bin/public"
+    runHook postInstall
+  '';
+
+  meta = {
+    description = "imaged server backend and Dioxus dashboard";
     homepage = "https://github.com/luuk/imaged";
-    license = licenses.mit;
-    maintainers = [ ];
-    platforms = platforms.linux;
+    license = lib.licenses.mit;
+    platforms = lib.platforms.linux;
   };
 }
