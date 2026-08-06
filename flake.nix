@@ -42,6 +42,16 @@
           ];
         };
 
+        wasm-bindgen-cli =
+          let
+            lock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
+            version =
+              (pkgs.lib.findFirst (p: p.name == "wasm-bindgen")
+                (throw "wasm-bindgen not found in Cargo.lock")
+                lock.package).version;
+          in
+          pkgs."wasm-bindgen-cli_${builtins.replaceStrings [ "." ] [ "_" ] version}";
+
         imaged-client = pkgs.callPackage ./nix/packages/imaged-client.nix { };
 
         initramfsStaging = import ./nix/lib/initramfs-staging.nix {
@@ -75,7 +85,7 @@
             teardown-net
             ;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit initramfs rustToolchain;
+            inherit initramfs rustToolchain wasm-bindgen-cli;
           };
           imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { };
         };
@@ -90,6 +100,7 @@
             run-vm-pxe
             setup-net
             teardown-net
+            wasm-bindgen-cli
             ;
         };
       }

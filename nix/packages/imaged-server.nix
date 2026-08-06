@@ -7,7 +7,7 @@
   sqlite,
   dioxus-cli,
   tailwindcss_4,
-  wasm-bindgen-cli_0_2_118,
+  wasm-bindgen-cli,
   binaryen,
   initramfs,
 }:
@@ -27,7 +27,7 @@ stdenv.mkDerivation {
     rustPlatform.cargoSetupHook
     dioxus-cli
     tailwindcss_4
-    wasm-bindgen-cli_0_2_118
+    wasm-bindgen-cli
     binaryen
     pkg-config
   ];

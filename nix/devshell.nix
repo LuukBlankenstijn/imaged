@@ -11,7 +11,7 @@
   sqlx-cli,
   dioxus-cli,
   tailwindcss_4,
-  wasm-bindgen-cli_0_2_118,
+  wasm-bindgen-cli,
   binaryen,
   ipxe,
 }:
@@ -28,7 +28,7 @@ mkShell {
     sqlx-cli
     dioxus-cli
     tailwindcss_4
-    wasm-bindgen-cli_0_2_118
+    wasm-bindgen-cli
     binaryen
   ];
 
