@@ -52,8 +52,8 @@ stdenv.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    install -Dm0755 "$TMPDIR/bundle/web/server" "$out/bin/imaged-server"
-    cp -r "$TMPDIR/bundle/web/public" "$out/bin/public"
+    install -Dm0755 "$TMPDIR/bundle/server" "$out/bin/imaged-server"
+    cp -r "$TMPDIR/bundle/public" "$out/bin/public"
     runHook postInstall
   '';
 

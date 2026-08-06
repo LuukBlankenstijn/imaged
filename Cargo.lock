@@ -2378,6 +2378,7 @@ dependencies = [
  "imaged-server-core",
  "inject",
  "serde",
+ "tokio",
  "tracing",
 ]
 
@@ -2457,6 +2458,7 @@ dependencies = [
  "axum",
  "clap",
  "dioxus",
+ "dioxus-ssr",
  "gloo-timers",
  "imaged-api",
  "imaged-server-core",

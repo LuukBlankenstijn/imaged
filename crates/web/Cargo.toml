@@ -35,3 +35,6 @@ server = [
     "dep:tracing",
 ]
 web = ["dioxus/web", "dep:gloo-timers", "dep:js-sys"]
+
+[dev-dependencies]
+dioxus-ssr = "0.7"
