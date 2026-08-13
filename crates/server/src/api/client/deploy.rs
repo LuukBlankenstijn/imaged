@@ -9,6 +9,7 @@ use crate::{
     error::{AppError, Result},
 };
 use axum::{
+    Json,
     body::Body,
     extract::{Path, State},
     response::IntoResponse,
@@ -21,7 +22,7 @@ pub async fn download_partition_data(
     Path((task_id, partition_number)): Path<(i64, i64)>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
-    let (_, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
+    let (_, image_id) = get_restore_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
@@ -40,7 +41,7 @@ pub async fn download_partition_table(
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
-    let (task, image_id) = get_deploy_task_and_verify(state.clone(), &mac, task_id).await?;
+    let (task, image_id) = get_restore_task_and_verify(state.clone(), &mac, task_id).await?;
     if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
@@ -52,23 +53,44 @@ pub async fn download_partition_table(
     Ok(Body::from(data))
 }
 
-async fn get_deploy_task_and_verify(
+pub async fn download_partitions(
+    State(state): State<Arc<HandlerState>>,
+    Path(task_id): Path<i64>,
+    AgentInfo((mac, _)): AgentInfo,
+) -> Result<Json<Vec<imaged_shared::ImagePartition>>> {
+    let (_, image_id) = get_restore_task_and_verify(state.clone(), &mac, task_id).await?;
+    if state.image_repo.get_status(image_id).await? != ImageStatus::Ready {
+        return Err(AppError::FailedPrecondition(format!(
+            "Image {image_id} is not ready"
+        )));
+    };
+    let partitions = state
+        .image_repo
+        .get_partitions(image_id)
+        .await?
+        .into_iter()
+        .map(|p| imaged_shared::ImagePartition::new(p.partition_number, p.fstype))
+        .collect();
+    Ok(Json(partitions))
+}
+
+async fn get_restore_task_and_verify(
     state: Arc<HandlerState>,
     mac: &str,
     task_id: i64,
 ) -> Result<(Task, i64)> {
     let task = get_next_task(state, mac).await?;
+    if task.id != task_id || !matches!(task.task_type, TaskType::Deploy | TaskType::Multicast) {
+        return Err(AppError::InvalidArgument(format!(
+            "No restore task for task {task_id} found"
+        )));
+    }
+
     let Some(image_id) = task.image_id else {
         return Err(AppError::InvalidArgument(format!(
-            "Task {task_id} is not valid"
+            "Task {task_id} has no image"
         )));
     };
 
-    if task.id != task_id || task.task_type != TaskType::Deploy {
-        Err(AppError::InvalidArgument(format!(
-            "No deploy task for task {task_id} found"
-        )))
-    } else {
-        Ok((task, image_id))
-    }
+    Ok((task, image_id))
 }

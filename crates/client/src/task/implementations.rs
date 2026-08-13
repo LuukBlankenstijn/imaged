@@ -6,7 +6,10 @@ mod reboot;
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
 
-use crate::{sys::disk::BlockDevice, transport::ApiClient};
+use crate::{
+    sys::disk::{BlockDevice, PartitionTarget},
+    transport::ApiClient,
+};
 
 #[enum_dispatch]
 pub trait ClientTaskExt: std::fmt::Display {
@@ -14,7 +17,15 @@ pub trait ClientTaskExt: std::fmt::Display {
         Ok(())
     }
 
-    async fn handle_partition(&self, _: &ApiClient, _: BlockDevice) -> anyhow::Result<()> {
+    async fn plan_partitions(
+        &self,
+        _: &ApiClient,
+        disk: &BlockDevice,
+    ) -> anyhow::Result<Vec<PartitionTarget>> {
+        disk.formatted_partitions()
+    }
+
+    async fn handle_partition(&self, _: &ApiClient, _: PartitionTarget) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -27,6 +38,21 @@ pub trait ClientTaskExt: std::fmt::Display {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
         Ok(())
     }
+}
+
+async fn image_partitions(
+    api: &ApiClient,
+    task_id: i64,
+    disk: &BlockDevice,
+) -> anyhow::Result<Vec<PartitionTarget>> {
+    let partitions = api.download_image_partitions(task_id).await?;
+    if partitions.is_empty() {
+        anyhow::bail!("image for task {task_id} has no partitions to restore");
+    }
+    partitions
+        .into_iter()
+        .map(|p| disk.partition_target(p.partition_number, p.fstype))
+        .collect()
 }
 
 #[derive(Display)]
@@ -44,7 +70,9 @@ impl From<imaged_shared::Task> for Task {
         match value.task_type {
             imaged_shared::TaskType::Capture => Self::Capture(capture::CaptureTask::new(value.id)),
             imaged_shared::TaskType::Deploy => Self::Deploy(deploy::DeployTask::new(value.id)),
-            imaged_shared::TaskType::Multicast => Self::Multicast(multicast::MulticastTask),
+            imaged_shared::TaskType::Multicast => {
+                Self::Multicast(multicast::MulticastTask::new(value.id))
+            }
             imaged_shared::TaskType::Reboot => Self::Reboot(reboot::RebootTask::new(value.id)),
         }
     }

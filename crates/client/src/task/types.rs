@@ -16,10 +16,9 @@ pub trait RunnableClientTask: ClientTaskExt {
 
         self.handle_partition_table(&state.http, &device).await?;
 
-        // update all partitions just in case the partitions were changed
         let disk = crate::sys::disk::find_target_disk().await?;
 
-        for partition in disk.children.into_iter() {
+        for partition in self.plan_partitions(&state.http, &disk).await? {
             self.handle_partition(&state.http, partition).await?;
         }
 

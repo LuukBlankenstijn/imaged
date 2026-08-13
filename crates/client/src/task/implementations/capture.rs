@@ -36,22 +36,16 @@ impl ClientTaskExt for CaptureTask {
     async fn handle_partition(
         &self,
         api: &crate::transport::ApiClient,
-        partition: crate::sys::disk::BlockDevice,
+        partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
-        let Some(fstype) = &partition.fstype else {
-            tracing::info!(name=%partition.name, "skipping partition with no fstype");
-            return Ok(());
-        };
-        let partclone_bin = partition
-            .get_partclone_binary()
-            .ok_or_else(|| anyhow::anyhow!("filetype not supported: {fstype}"))?;
+        let partclone_bin = partition.partclone_binary()?;
         let mut child = tokio::process::Command::new(partclone_bin)
             .args([
                 "--clone",
                 "--logfile",
                 "/tmp/partclone-log",
                 "--source",
-                &partition.get_device(),
+                &partition.device,
                 "--output",
                 "-",
             ])
@@ -65,8 +59,8 @@ impl ClientTaskExt for CaptureTask {
 
         api.upload_partition_data(
             self.task_id,
-            partition.find_partition_number()?,
-            fstype,
+            partition.number,
+            &partition.fstype,
             partition.size,
             compressed,
         )

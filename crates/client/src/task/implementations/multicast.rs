@@ -1,5 +1,5 @@
 use async_compression::tokio::bufread::ZstdDecoder;
-use derive_more::Display;
+use derive_more::{Constructor, Display};
 use imaged_shared::get_multicast_port;
 use tokio::{
     io::{AsyncReadExt, BufReader},
@@ -10,9 +10,11 @@ use tracing::{debug, info};
 use super::ClientTaskExt;
 use crate::{sys, task::PARTTABLE_TMP, transport::multicast::udp_receiver_stream};
 
-#[derive(Clone, Display)]
+#[derive(Clone, Display, Constructor)]
 #[display("multicast task")]
-pub(crate) struct MulticastTask;
+pub(crate) struct MulticastTask {
+    task_id: i64,
+}
 
 impl ClientTaskExt for MulticastTask {
     async fn handle_partition_table(
@@ -57,25 +59,26 @@ impl ClientTaskExt for MulticastTask {
         Ok(())
     }
 
+    async fn plan_partitions(
+        &self,
+        api: &crate::transport::ApiClient,
+        disk: &crate::sys::disk::BlockDevice,
+    ) -> anyhow::Result<Vec<crate::sys::disk::PartitionTarget>> {
+        super::image_partitions(api, self.task_id, disk).await
+    }
+
     async fn handle_partition(
         &self,
         _: &crate::transport::ApiClient,
-        partition: crate::sys::disk::BlockDevice,
+        partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
-        let Some(fstype) = &partition.fstype else {
-            tracing::info!(name=%partition.name, "skipping partition with no fstype");
-            return Ok(());
-        };
-
-        debug!(partition_number=%partition.find_partition_number()?, "starting partition download with udp-receiver");
-        let port = get_multicast_port(partition.find_partition_number()?);
+        debug!(partition_number=%partition.number, "starting partition download with udp-receiver");
+        let port = get_multicast_port(partition.number);
         let stream = udp_receiver_stream(port).await?;
         let mut decoder = ZstdDecoder::new(BufReader::new(stream));
 
-        info!(partition_number=%partition.find_partition_number()?, "restoring partition");
-        let partclone_bin = partition
-            .get_partclone_binary()
-            .ok_or_else(|| anyhow::anyhow!("filetype not supported: {fstype}"))?;
+        info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
+        let partclone_bin = partition.partclone_binary()?;
         let mut child = tokio::process::Command::new(partclone_bin)
             .args([
                 "--restore",
@@ -84,7 +87,7 @@ impl ClientTaskExt for MulticastTask {
                 "--source",
                 "-",
                 "--output",
-                &partition.get_device(),
+                &partition.device,
             ])
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())

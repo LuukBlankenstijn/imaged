@@ -50,26 +50,27 @@ impl ClientTaskExt for DeployTask {
         Ok(())
     }
 
+    async fn plan_partitions(
+        &self,
+        api: &crate::transport::ApiClient,
+        disk: &crate::sys::disk::BlockDevice,
+    ) -> anyhow::Result<Vec<crate::sys::disk::PartitionTarget>> {
+        super::image_partitions(api, self.task_id, disk).await
+    }
+
     async fn handle_partition(
         &self,
         api: &crate::transport::ApiClient,
-        partition: crate::sys::disk::BlockDevice,
+        partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
-        let Some(fstype) = &partition.fstype else {
-            tracing::info!(name=%partition.name, "skipping partition with no fstype");
-            return Ok(());
-        };
-
-        debug!(partition_number=%partition.find_partition_number()?, "starting partition download");
+        debug!(partition_number=%partition.number, "starting partition download");
         let stream = api
-            .download_partition_data(self.task_id, partition.find_partition_number()?)
+            .download_partition_data(self.task_id, partition.number)
             .await?;
         let mut decoder = ZstdDecoder::new(BufReader::new(stream));
 
-        info!(partition_number=%partition.find_partition_number()?, "restoring partition");
-        let partclone_bin = partition
-            .get_partclone_binary()
-            .ok_or_else(|| anyhow::anyhow!("filetype not supported: {fstype}"))?;
+        info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
+        let partclone_bin = partition.partclone_binary()?;
         let mut child = tokio::process::Command::new(partclone_bin)
             .args([
                 "--restore",
@@ -78,7 +79,7 @@ impl ClientTaskExt for DeployTask {
                 "--source",
                 "-",
                 "--output",
-                &partition.get_device(),
+                &partition.device,
             ])
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())

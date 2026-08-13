@@ -16,6 +16,17 @@ impl ApiClient {
         Ok(bytes.to_vec())
     }
 
+    pub async fn download_image_partitions(
+        &self,
+        task_id: i64,
+    ) -> anyhow::Result<Vec<imaged_shared::ImagePartition>> {
+        let url = self.url(&format!("client/tasks/{}/partitions", task_id))?;
+        let response = self
+            .send(self.client.get(url), "download_image_partitions")
+            .await?;
+        Ok(response.json().await?)
+    }
+
     pub async fn download_partition_data(
         &self,
         task_id: i64,
