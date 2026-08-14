@@ -1,4 +1,3 @@
-
 use dioxus::prelude::*;
 
 pub fn use_poll<T, F>(interval_ms: u32, fetcher: impl FnMut() -> F + 'static) -> Resource<T>

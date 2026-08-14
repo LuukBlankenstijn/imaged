@@ -408,7 +408,11 @@ fn MemberRow(host: Host) -> Element {
 }
 
 #[component]
-fn EditMembersModal(group_id: i64, onclose: EventHandler<()>, on_saved: EventHandler<()>) -> Element {
+fn EditMembersModal(
+    group_id: i64,
+    onclose: EventHandler<()>,
+    on_saved: EventHandler<()>,
+) -> Element {
     let all_hosts = use_resource(|| async move { get_all_hosts(None).await });
     let members = use_resource(move || async move { get_all_hosts(Some(group_id)).await });
     let selected = use_signal(HashSet::<i64>::new);

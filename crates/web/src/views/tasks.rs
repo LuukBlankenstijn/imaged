@@ -141,7 +141,10 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
     );
     let needs_confirm = matches!(task.r#type, TaskType::Deploy | TaskType::Multicast);
 
-    let image_label = task.image_name.clone().unwrap_or_else(|| "\u{2014}".to_string());
+    let image_label = task
+        .image_name
+        .clone()
+        .unwrap_or_else(|| "\u{2014}".to_string());
     let host_count = task.hosts.len();
     let hosts = task.hosts.clone();
 

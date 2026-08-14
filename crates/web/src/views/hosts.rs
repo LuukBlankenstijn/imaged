@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::api::hosts::{deploy, delete_host, get_all_hosts, reboot, update_host_name, wake_on_lan};
+use crate::api::hosts::{
+    delete_host, deploy, get_all_hosts, reboot, update_host_name, wake_on_lan,
+};
 use crate::api::images::get_all_images;
 use crate::components::connection::use_connection;
 use crate::components::hooks::use_poll;

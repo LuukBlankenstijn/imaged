@@ -1,4 +1,3 @@
-
 use dioxus::prelude::*;
 
 use crate::components::icons::Icon;
@@ -26,7 +25,9 @@ pub fn Button(
                 disabled:opacity-40 disabled:cursor-not-allowed";
     let v = match variant {
         ButtonVariant::Primary => "bg-amber-500 text-ink-950 hover:bg-amber-400 font-semibold",
-        ButtonVariant::Ghost => "border border-ink-600 text-fog-300 hover:bg-ink-700 hover:text-fog-100",
+        ButtonVariant::Ghost => {
+            "border border-ink-600 text-fog-300 hover:bg-ink-700 hover:text-fog-100"
+        }
         ButtonVariant::Danger => "border border-bad/40 text-bad hover:bg-bad/10",
         ButtonVariant::Subtle => "text-fog-400 hover:text-fog-100 hover:bg-ink-700",
     };
@@ -41,10 +42,14 @@ pub fn Button(
 }
 
 #[component]
-pub fn Card(#[props(default)] class: String, #[props(default)] style: String, children: Element) -> Element {
+pub fn Card(
+    #[props(default)] class: String,
+    #[props(default)] style: String,
+    children: Element,
+) -> Element {
     rsx! {
         div {
-            class: "rounded-xl border border-line bg-ink-850/80 backdrop-blur-sm {class}",
+            class: "rounded-xl border border-line bg-ink-850/80 {class}",
             style,
             {children}
         }
