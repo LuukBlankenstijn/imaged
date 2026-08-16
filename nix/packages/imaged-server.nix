@@ -46,7 +46,7 @@ stdenv.mkDerivation {
     runHook preBuild
     export HOME=$TMPDIR
     tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
-    dx bundle --release --platform web --package imaged-web --out-dir "$TMPDIR/bundle"
+    dx bundle --release --platform web --package imaged-server --out-dir "$TMPDIR/bundle"
     runHook postBuild
   '';
 

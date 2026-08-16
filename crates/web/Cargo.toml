@@ -3,9 +3,9 @@ name = "imaged-web"
 version.workspace = true
 edition.workspace = true
 
-[[bin]]
-name = "imaged-server"
-path = "src/main.rs"
+[lib]
+name = "imaged_web"
+path = "src/lib.rs"
 
 [dependencies]
 dioxus = { version = "0.7", features = ["fullstack", "router"] }
@@ -15,25 +15,9 @@ imaged-api = { path = "../api" }
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 js-sys = { version = "0.3", optional = true }
 
-imaged-server-core = { path = "../server", optional = true }
-imaged-shared = { workspace = true, features = ["all"], optional = true }
-axum = { version = "0.8", optional = true }
-tokio = { workspace = true, optional = true }
-clap = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
-
 [features]
 default = []
-server = [
-    "dioxus/server",
-    "imaged-api/server",
-    "dep:imaged-server-core",
-    "dep:imaged-shared",
-    "dep:axum",
-    "dep:tokio",
-    "dep:clap",
-    "dep:tracing",
-]
+server = ["dioxus/server", "imaged-api/server"]
 web = ["dioxus/web", "dep:gloo-timers", "dep:js-sys"]
 
 [dev-dependencies]

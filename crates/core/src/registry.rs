@@ -48,8 +48,8 @@ pub struct HostRegistry {
     broadcast: broadcast::Sender<HostConnectionEvent>,
 }
 
-impl HostRegistry {
-    pub fn new() -> Self {
+impl Default for HostRegistry {
+    fn default() -> Self {
         let (sender, _) = broadcast::channel(32);
         Self {
             hosts: RwLock::new(Hosts::default()),

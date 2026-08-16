@@ -1,11 +1,11 @@
 [application]
-name = "imaged-web"
+name = "imaged-serve"
 
 [web.app]
 title = "imaged"
 
 [web.watcher]
-watch_path = ["src", "assets"]
+watch_path = ["src", "../web/src", "../web/assets"]
 index_on_404 = true
 
 [web.resource]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::HandlerState;
+use super::DIContainer;
 use crate::{
     api::client::AgentInfo,
     error::{AppError, Result},
@@ -21,7 +21,7 @@ pub struct StartStreamQuery {
 }
 
 pub async fn start_stream(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Query(req): Query<StartStreamQuery>,
     AgentInfo((mac, ip)): AgentInfo,
 ) -> Result<Sse<impl Stream<Item = Result<Event>>>> {
@@ -75,7 +75,7 @@ pub async fn start_stream(
 }
 
 pub async fn disconnect(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<()> {
     let host = state.host_repo.get_by_mac(&mac).await?;

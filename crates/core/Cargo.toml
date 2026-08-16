@@ -1,0 +1,36 @@
+[package]
+name = "imaged-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "imaged_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio-stream.workspace = true
+derive_more = { workspace = true, features = ["display", "from_str", "is_variant", "unwrap"] }
+tracing.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+imaged-shared = { workspace = true, features = ["all"] }
+tokio-util = { workspace = true, features = ["io", "rt"] }
+injectable.workspace = true
+
+axum = { version = "0.8", features = ["macros"] }
+
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite", "chrono", "migrate"] }
+
+chrono = { version = "0.4.44", features = ["serde"] }
+async-trait = "0.1.89"
+bytes = "1.11.1"
+hex = "0.4.3"
+tower-http = { version = "0.6.8", features = ["trace"] }
+socket2 = { version = "0.6", features = ["all"] }
+wakey = "0.4.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

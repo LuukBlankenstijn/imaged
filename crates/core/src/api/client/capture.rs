@@ -15,9 +15,9 @@ use axum::{
 };
 use futures::TryStreamExt;
 
-use super::HandlerState;
+use super::DIContainer;
 pub async fn upload_partition_data(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path((task_id, partition_number)): Path<(i64, i64)>,
     AgentInfo((mac, _)): AgentInfo,
     headers: HeaderMap,
@@ -56,7 +56,7 @@ pub async fn upload_partition_data(
 }
 
 pub async fn upload_partition_table(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
     body: Bytes,
@@ -85,7 +85,7 @@ pub async fn upload_partition_table(
 
 // verifies the task is the next task for the host and checks if the task is in the correct state
 async fn get_capture_task_and_verify(
-    state: Arc<HandlerState>,
+    state: Arc<DIContainer>,
     mac: &str,
     task_id: i64,
 ) -> Result<(Task, i64)> {

@@ -1,9 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-    "crates/*",
-    "crates/inject/inject-macros",
-]
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,7 +9,7 @@ edition = "2024"
 [workspace.dependencies]
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"] }
 imaged-shared = { path = "crates/shared", default-features = false }
-inject = { path = "crates/inject" }
+injectable = "0.1.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }
 tracing = "0.1"

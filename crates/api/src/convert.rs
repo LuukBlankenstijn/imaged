@@ -1,11 +1,11 @@
 
-use imaged_server_core::domain::{
+use imaged_core::domain::{
     group::Group as DGroup,
     host::Host as DHost,
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
     task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
 };
-use imaged_server_core::registry::HostConnectionEvent as DConn;
+use imaged_core::registry::HostConnectionEvent as DConn;
 
 use crate::model;
 

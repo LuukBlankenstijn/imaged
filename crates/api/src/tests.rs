@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use imaged_server_core as core;
+use imaged_core as core;
 
 use core::di::DIContainer;
 use core::domain::task::TaskType;
@@ -36,7 +36,7 @@ async fn container() -> (DIContainer, TestDir) {
     let image_repo = core::repository::image_repo(pool.clone());
     let task_repo = core::repository::task_repo(pool.clone());
     let group_repo = core::repository::group_repo(pool.clone());
-    let host_registry = Arc::new(core::registry::HostRegistry::new());
+    let host_registry = Arc::new(core::registry::HostRegistry::default());
     let images_dir = dir.join("images").to_string_lossy().to_string();
     let image_service = Arc::new(core::service::image::ImageService::new(images_dir));
     let multicast_manager = Arc::new(

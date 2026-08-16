@@ -15,10 +15,10 @@ use axum::{
     response::IntoResponse,
 };
 
-use super::HandlerState;
+use super::DIContainer;
 
 pub async fn download_partition_data(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path((task_id, partition_number)): Path<(i64, i64)>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
@@ -37,7 +37,7 @@ pub async fn download_partition_data(
 }
 
 pub async fn download_partition_table(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
@@ -54,7 +54,7 @@ pub async fn download_partition_table(
 }
 
 pub async fn download_partitions(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<Json<Vec<imaged_shared::ImagePartition>>> {
@@ -75,7 +75,7 @@ pub async fn download_partitions(
 }
 
 async fn get_restore_task_and_verify(
-    state: Arc<HandlerState>,
+    state: Arc<DIContainer>,
     mac: &str,
     task_id: i64,
 ) -> Result<(Task, i64)> {

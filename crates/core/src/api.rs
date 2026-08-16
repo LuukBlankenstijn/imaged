@@ -5,33 +5,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use derive_more::Constructor;
 use serde_json::json;
 
-use crate::{
-    domain::{
-        group::GroupRepository, host::HostRepository, image::ImageRepository, task::TaskRepository,
-    },
-    error::AppError,
-    multicast::MulticastManager,
-    registry::HostRegistry,
-    service::image::ImageService,
-};
+use crate::di::DIContainer;
+use crate::{domain::host::HostRepository, error::AppError};
 
 pub mod client;
 pub mod pxe;
-
-#[derive(Clone, Constructor)]
-pub struct HandlerState {
-    pub host_repo: Arc<dyn HostRepository>,
-    pub host_registry: Arc<HostRegistry>,
-    pub image_repo: Arc<dyn ImageRepository>,
-    pub task_repo: Arc<dyn TaskRepository>,
-    pub group_repo: Arc<dyn GroupRepository>,
-    pub image_service: Arc<ImageService>,
-    pub multicast_manager: Arc<MulticastManager>,
-    pub bind_address: SocketAddr,
-}
 
 pub async fn send_wake_on_lan(
     host_repo: &Arc<dyn HostRepository>,

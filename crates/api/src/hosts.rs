@@ -3,18 +3,18 @@ use dioxus::prelude::*;
 use crate::model::{DeployRequest, Host, Task, UpdateName};
 
 #[cfg(feature = "server")]
-use inject::inject;
+use injectable::inject;
 
 #[cfg(feature = "server")]
 use crate::error::sfe;
 #[cfg(feature = "server")]
-use imaged_server_core::api::send_wake_on_lan;
+use imaged_core::api::send_wake_on_lan;
 #[cfg(feature = "server")]
-use imaged_server_core::di::{BindAddress, HostRepo, Registry, TaskRepo};
+use imaged_core::di::{BindAddress, HostRepo, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_server_core::domain::task::TaskType;
+use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
-use imaged_server_core::error::AppError;
+use imaged_core::error::AppError;
 
 #[get("/api/ui/hosts")]
 #[inject(host_repo: HostRepo)]

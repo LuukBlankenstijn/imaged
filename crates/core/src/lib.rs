@@ -1,4 +1,3 @@
-
 pub mod api;
 pub mod di;
 pub mod domain;
@@ -20,7 +19,8 @@ use sqlx::{
 };
 use tower_http::trace::TraceLayer;
 
-use crate::{api::HandlerState, multicast::MulticastManager};
+use crate::di::DIContainer;
+use crate::multicast::MulticastManager;
 
 pub const DEAD_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -38,17 +38,17 @@ pub async fn setup_database(db_url: &str) -> Result<SqlitePool, Box<dyn std::err
     Ok(sqlite_pool)
 }
 
-pub async fn build_handler_state(
+pub async fn build_di_container(
     pool: SqlitePool,
     images_dir: String,
     multicast_interface: String,
     bind_address: SocketAddr,
-) -> Result<Arc<HandlerState>, Box<dyn std::error::Error>> {
+) -> Result<DIContainer, Box<dyn std::error::Error>> {
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());
     let task_repo = repository::task_repo(pool.clone());
     let group_repo = repository::group_repo(pool);
-    let host_registry = Arc::new(registry::HostRegistry::new());
+    let host_registry = Arc::new(registry::HostRegistry::default());
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
     let multicast_manager = Arc::new(
         MulticastManager::new(
@@ -60,16 +60,16 @@ pub async fn build_handler_state(
         .await?,
     );
 
-    Ok(Arc::new(HandlerState::new(
+    Ok(DIContainer::new(
         host_repo,
-        host_registry,
         image_repo,
         task_repo,
         group_repo,
+        host_registry,
         image_service,
         multicast_manager,
         bind_address,
-    )))
+    ))
 }
 
 pub async fn bind(address: SocketAddr) -> std::io::Result<impl Listener<Addr = SocketAddr>> {

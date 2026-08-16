@@ -1,17 +1,4 @@
-#![allow(non_snake_case)]
-
-mod app;
-mod components;
-mod format;
-mod views;
-
-#[cfg(test)]
-mod tests;
-
-pub use imaged_api as api;
-pub use imaged_api::model;
-
-use app::App;
+use imaged_web::App;
 
 #[cfg(not(feature = "server"))]
 fn main() {
@@ -25,8 +12,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use clap::Parser;
     use dioxus::server::{DioxusRouterExt, ServeConfig};
-    use imaged_server_core as core;
-    use imaged_server_core::di::{self, DIContainer};
+    use imaged_core as core;
+    use imaged_core::di;
 
     #[derive(Parser)]
     #[command(version, about)]
@@ -45,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     imaged_shared::setup_logging!(args.log_level);
 
     let pool = core::setup_database("sqlite://imaged.db").await?;
-    let state = core::build_handler_state(
+    let container = core::build_di_container(
         pool,
         "images".to_string(),
         args.multicast_interface,
@@ -53,19 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    di::init_container(DIContainer::new(
-        state.host_repo.clone(),
-        state.image_repo.clone(),
-        state.task_repo.clone(),
-        state.group_repo.clone(),
-        state.host_registry.clone(),
-        state.image_service.clone(),
-        state.multicast_manager.clone(),
-        state.bind_address,
-    ));
+    di::init_container(container.clone());
 
-    let machine_router =
-        core::api::pxe::router().merge(core::api::client::router().with_state(state.clone()));
+    let machine_router = core::api::pxe::router()
+        .merge(core::api::client::router().with_state(std::sync::Arc::new(container)));
     let web_router = axum::Router::new().serve_dioxus_application(ServeConfig::new(), App);
 
     let main_listener = core::bind(args.bind_address).await?;

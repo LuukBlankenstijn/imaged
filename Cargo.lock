@@ -2375,8 +2375,8 @@ name = "imaged-api"
 version = "0.1.0"
 dependencies = [
  "dioxus",
- "imaged-server-core",
- "inject",
+ "imaged-core",
+ "injectable",
  "serde",
  "tokio",
  "tracing",
@@ -2406,7 +2406,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "imaged-server-core"
+name = "imaged-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -2417,7 +2417,7 @@ dependencies = [
  "futures",
  "hex",
  "imaged-shared",
- "inject",
+ "injectable",
  "serde",
  "serde_json",
  "socket2",
@@ -2430,6 +2430,21 @@ dependencies = [
  "tower-http",
  "tracing",
  "wakey",
+]
+
+[[package]]
+name = "imaged-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "dioxus",
+ "imaged-api",
+ "imaged-core",
+ "imaged-shared",
+ "imaged-web",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2456,18 +2471,12 @@ dependencies = [
 name = "imaged-web"
 version = "0.1.0"
 dependencies = [
- "axum",
- "clap",
  "dioxus",
  "dioxus-ssr",
  "gloo-timers",
  "imaged-api",
- "imaged-server-core",
- "imaged-shared",
  "js-sys",
  "serde",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -2490,17 +2499,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "inject"
+name = "injectable"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "884c33bd999907174666670cd2fa2e9f910e89d09ce50ea26532d0faafb49f3d"
 dependencies = [
- "inject-macros",
+ "injectable-macros",
  "tokio",
 ]
 
 [[package]]
-name = "inject-macros"
+name = "injectable-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "046a176ef8cd270d5bd576f8fd6a25009c992f1794cac1a18abfeb4b2128f7ae"
 dependencies = [
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn",
@@ -4970,7 +4984,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

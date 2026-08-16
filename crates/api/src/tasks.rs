@@ -3,16 +3,16 @@ use dioxus::prelude::*;
 use crate::model::Task;
 
 #[cfg(feature = "server")]
-use inject::inject;
+use injectable::inject;
 
 #[cfg(feature = "server")]
 use crate::error::sfe;
 #[cfg(feature = "server")]
-use imaged_server_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
+use imaged_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_server_core::domain::task::TaskType;
+use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
-use imaged_server_core::error::AppError;
+use imaged_core::error::AppError;
 
 #[get("/api/ui/tasks")]
 #[inject(task_repo: TaskRepo)]

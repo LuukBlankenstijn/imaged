@@ -3,14 +3,14 @@ use dioxus::prelude::*;
 use crate::model::{CreateGroupRequest, Group, MulticastRequest, UpdateGroupRequest, UpdateName};
 
 #[cfg(feature = "server")]
-use inject::inject;
+use injectable::inject;
 
 #[cfg(feature = "server")]
 use crate::error::sfe;
 #[cfg(feature = "server")]
-use imaged_server_core::di::{GroupRepo, MulticastMgr, Registry, TaskRepo};
+use imaged_core::di::{GroupRepo, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_server_core::domain::task::TaskType;
+use imaged_core::domain::task::TaskType;
 
 #[post("/api/ui/groups/create")]
 #[inject(group_repo: GroupRepo)]

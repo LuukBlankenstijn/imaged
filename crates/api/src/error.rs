@@ -1,5 +1,5 @@
 use dioxus::prelude::ServerFnError;
-use imaged_server_core::error::AppError;
+use imaged_core::error::AppError;
 
 pub fn sfe(e: AppError) -> ServerFnError {
     let (code, message): (u16, String) = match e {

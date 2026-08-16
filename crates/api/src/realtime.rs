@@ -4,10 +4,10 @@ use dioxus::prelude::*;
 use crate::model::HostConnectionEvent;
 
 #[cfg(feature = "server")]
-use inject::inject;
+use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_server_core::di::Registry;
+use imaged_core::di::Registry;
 
 #[get("/api/ui/connection-state")]
 #[inject(registry: Registry)]

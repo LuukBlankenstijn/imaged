@@ -12,9 +12,9 @@ use axum::{
     routing::{get, post, put},
 };
 
-use crate::{api::HandlerState, domain::task::Task, error::AppError};
+use crate::{api::DIContainer, domain::task::Task, error::AppError};
 
-pub fn router() -> Router<Arc<HandlerState>> {
+pub fn router() -> Router<Arc<DIContainer>> {
     Router::new()
         .route(
             "/client/tasks/{task_id}/partitions/{partition_number}/data",
@@ -63,7 +63,7 @@ where
     }
 }
 
-async fn get_next_task(state: Arc<HandlerState>, mac: &str) -> crate::error::Result<Task> {
+async fn get_next_task(state: Arc<DIContainer>, mac: &str) -> crate::error::Result<Task> {
     let host = state.host_repo.get_by_mac(mac).await?;
     let task =
         state.task_repo.get_next(host.id).await?.ok_or_else(|| {
@@ -87,7 +87,7 @@ mod tests {
         let pool = crate::setup_database(&format!("sqlite://{}", dir.join("test.db").display()))
             .await
             .unwrap();
-        let state = crate::build_handler_state(
+        let state = crate::build_di_container(
             pool,
             dir.join("images").to_string_lossy().to_string(),
             "lo".to_string(),
@@ -120,7 +120,7 @@ mod tests {
             .unwrap();
 
         let response = super::router()
-            .with_state(state)
+            .with_state(std::sync::Arc::new(state))
             .oneshot(
                 Request::builder()
                     .uri(format!("/client/tasks/{}/partitions", task.id))

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use derive_more::Constructor;
-use inject::{install_injectable_container, register_injectable};
+use injectable::{install_injectable_container, register_injectable};
 
 use crate::domain::group::GroupRepository;
 use crate::domain::host::HostRepository;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::AgentInfo;
-use super::HandlerState;
+use super::DIContainer;
 use crate::api::client::get_next_task;
 use crate::domain::task::TaskType;
 use crate::error::AppError;
@@ -12,7 +12,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 
 pub async fn mark_finished(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
 ) -> Result<impl IntoResponse> {
@@ -39,7 +39,7 @@ pub struct MarkErrorPayload {
 }
 
 pub async fn mark_faulted(
-    State(state): State<Arc<HandlerState>>,
+    State(state): State<Arc<DIContainer>>,
     Path(task_id): Path<i64>,
     AgentInfo((mac, _)): AgentInfo,
     Json(body): Json<MarkErrorPayload>,
