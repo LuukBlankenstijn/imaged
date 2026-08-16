@@ -69,7 +69,7 @@ impl ImageService {
         mut data_stream: S,
     ) -> Result
     where
-        S: Stream<Item = std::result::Result<Bytes, std::io::Error>> + Unpin + Send,
+        S: Stream<Item = std::result::Result<Bytes, AppError>> + Unpin + Send,
     {
         let file_path = self.get_partition_path(image_id, partition_number);
         let mut file = tokio::fs::File::create(&file_path).await.map_err(|e| {

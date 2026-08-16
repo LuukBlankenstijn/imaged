@@ -5,18 +5,17 @@ edition.workspace = true
 
 [dependencies]
 tracing.workspace = true
-tokio = { workspace = true, features = [ "process"]}
+tokio.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 imaged-shared = { workspace = true, features = ["all"] }
+api = { package = "imaged-api-client", path = "../api/client" }
 tokio-util.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 clap.workspace = true
+dioxus-fullstack = "0.7"
 
-
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-reqwest-eventsource = "0.6"
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 
 mac_address = "1.1.8"

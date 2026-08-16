@@ -6,46 +6,38 @@ mod reboot;
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
 
-use crate::{
-    sys::disk::{BlockDevice, PartitionTarget},
-    transport::ApiClient,
-};
+use crate::sys::disk::{BlockDevice, PartitionTarget};
 
 #[enum_dispatch]
 pub trait ClientTaskExt: std::fmt::Display {
-    async fn handle_partition_table(&self, _: &ApiClient, _: &str) -> anyhow::Result<()> {
+    async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn plan_partitions(
-        &self,
-        _: &ApiClient,
-        disk: &BlockDevice,
-    ) -> anyhow::Result<Vec<PartitionTarget>> {
+    async fn plan_partitions(&self, disk: &BlockDevice) -> anyhow::Result<Vec<PartitionTarget>> {
         disk.formatted_partitions()
     }
 
-    async fn handle_partition(&self, _: &ApiClient, _: PartitionTarget) -> anyhow::Result<()> {
+    async fn handle_partition(&self, _: PartitionTarget) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn finalize(&self, _: &ApiClient) -> anyhow::Result<()> {
+    async fn finalize(&self) -> anyhow::Result<()> {
         tracing::info!(task=%self, "finished task successfully");
         Ok(())
     }
 
-    async fn finalize_error(&self, _: &ApiClient, err: &str) -> anyhow::Result<()> {
+    async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
         Ok(())
     }
 }
 
 async fn image_partitions(
-    api: &ApiClient,
     task_id: i64,
     disk: &BlockDevice,
 ) -> anyhow::Result<Vec<PartitionTarget>> {
-    let partitions = api.download_image_partitions(task_id).await?;
+    let partitions = api::deploy::download_partitions(task_id).await?;
     if partitions.is_empty() {
         anyhow::bail!("image for task {task_id} has no partitions to restore");
     }

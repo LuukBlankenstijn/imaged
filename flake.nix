@@ -63,7 +63,7 @@
         };
 
         build-initramfs = pkgs.callPackage ./nix/scripts/build-initramfs.nix {
-          inherit initramfsStaging;
+          inherit initramfsStaging rustToolchain;
         };
         run-vm = pkgs.callPackage ./nix/scripts/run-vm.nix { };
         run-vm-pxe = pkgs.callPackage ./nix/scripts/run-vm-pxe.nix { };

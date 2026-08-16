@@ -6,6 +6,21 @@ fn main() {
 }
 
 #[cfg(feature = "server")]
+const CLIENT_API_PREFIX: &str = "/api/client";
+
+/// Routes the subset of registered server functions whose path passes `keep`,
+/// so the agent API and the dashboard API can be bound to different ports.
+#[cfg(feature = "server")]
+fn server_fns(keep: impl Fn(&str) -> bool) -> axum::Router<dioxus::server::FullstackState> {
+    dioxus::server::ServerFunction::collect()
+        .into_iter()
+        .filter(|f| keep(f.path()))
+        .fold(axum::Router::new(), |router, f| {
+            router.route(f.path(), f.method_router())
+        })
+}
+
+#[cfg(feature = "server")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::net::SocketAddr;
@@ -14,6 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use dioxus::server::{DioxusRouterExt, ServeConfig};
     use imaged_core as core;
     use imaged_core::di;
+
+    // Server functions self-register via `inventory` at load time, which only
+    // happens for crates actually linked into the binary.
+    use imaged_api_client as _;
+    use imaged_api_ui as _;
 
     #[derive(Parser)]
     #[command(version, about)]
@@ -40,11 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    di::init_container(container.clone());
+    di::init_container(container);
 
-    let machine_router = core::api::pxe::router()
-        .merge(core::api::client::router().with_state(std::sync::Arc::new(container)));
-    let web_router = axum::Router::new().serve_dioxus_application(ServeConfig::new(), App);
+    let machine_router = core::pxe::router().merge(
+        server_fns(|path| path.starts_with(CLIENT_API_PREFIX))
+            .with_state(dioxus::server::FullstackState::headless()),
+    );
+
+    let web_router = server_fns(|path| !path.starts_with(CLIENT_API_PREFIX))
+        .serve_static_assets()
+        .fallback(axum::routing::get(
+            dioxus::server::FullstackState::render_handler,
+        ))
+        .with_state(dioxus::server::FullstackState::new(ServeConfig::new(), App));
 
     let main_listener = core::bind(args.bind_address).await?;
     match args.web_bind_address {

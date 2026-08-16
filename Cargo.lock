@@ -1698,17 +1698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eventsource-stream"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74fef4569247a5f429d9156b9d0a2599914385dd189c539334c625d8099d90ab"
-dependencies = [
- "futures-core",
- "nom",
- "pin-project-lite",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1852,12 +1841,6 @@ name = "futures-task"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
-
-[[package]]
-name = "futures-timer"
-version = "3.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
 
 [[package]]
 name = "futures-util"
@@ -2371,15 +2354,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "imaged-api"
+name = "imaged-api-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "dioxus-fullstack",
+ "dioxus-server",
+ "futures",
+ "imaged-core",
+ "imaged-shared",
+ "injectable",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "imaged-api-ui"
 version = "0.1.0"
 dependencies = [
  "dioxus",
  "imaged-core",
+ "imaged-shared",
  "injectable",
  "serde",
  "tokio",
  "tracing",
+ "wakey",
 ]
 
 [[package]]
@@ -2390,13 +2394,13 @@ dependencies = [
  "async-compression",
  "clap",
  "derive_more",
+ "dioxus-fullstack",
  "enum_dispatch",
  "futures",
+ "imaged-api-client",
  "imaged-shared",
  "local-ip-address",
  "mac_address",
- "reqwest",
- "reqwest-eventsource",
  "rustix",
  "serde",
  "serde_json",
@@ -2415,21 +2419,17 @@ dependencies = [
  "chrono",
  "derive_more",
  "futures",
- "hex",
  "imaged-shared",
  "injectable",
  "serde",
- "serde_json",
  "socket2",
  "sqlx",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tower",
  "tower-http",
  "tracing",
- "wakey",
 ]
 
 [[package]]
@@ -2439,7 +2439,8 @@ dependencies = [
  "axum",
  "clap",
  "dioxus",
- "imaged-api",
+ "imaged-api-client",
+ "imaged-api-ui",
  "imaged-core",
  "imaged-shared",
  "imaged-web",
@@ -2451,8 +2452,14 @@ dependencies = [
 name = "imaged-shared"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "derive_more",
+ "dioxus-fullstack",
  "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tracing",
  "tracing-subscriber",
 ]
 
@@ -2474,7 +2481,8 @@ dependencies = [
  "dioxus",
  "dioxus-ssr",
  "gloo-timers",
- "imaged-api",
+ "imaged-api-ui",
+ "imaged-shared",
  "js-sys",
  "serde",
 ]
@@ -2913,12 +2921,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minimal-lexical"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
 name = "mio"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3016,16 +3018,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
-]
-
-[[package]]
-name = "nom"
-version = "7.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
-dependencies = [
- "memchr",
- "minimal-lexical",
 ]
 
 [[package]]
@@ -3548,22 +3540,6 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots",
-]
-
-[[package]]
-name = "reqwest-eventsource"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "632c55746dbb44275691640e7b40c907c16a2dc1a5842aa98aaec90da6ec6bde"
-dependencies = [
- "eventsource-stream",
- "futures-core",
- "futures-timer",
- "mime",
- "nom",
- "pin-project-lite",
- "reqwest",
- "thiserror 1.0.69",
 ]
 
 [[package]]

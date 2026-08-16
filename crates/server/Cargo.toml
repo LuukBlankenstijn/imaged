@@ -11,9 +11,10 @@ path = "src/main.rs"
 dioxus = { version = "0.7", features = ["fullstack", "router"] }
 imaged-web = { path = "../web" }
 
-imaged-api = { path = "../api", optional = true }
+imaged-api-ui = { path = "../api/ui", optional = true }
+imaged-api-client = { path = "../api/client", optional = true }
 imaged-core = { path = "../core", optional = true }
-imaged-shared = { workspace = true, features = ["all"], optional = true }
+imaged-shared = { workspace = true, features = ["logging"], optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
@@ -24,8 +25,10 @@ default = []
 server = [
     "dioxus/server",
     "imaged-web/server",
-    "dep:imaged-api",
-    "imaged-api/server",
+    "dep:imaged-api-ui",
+    "imaged-api-ui/server",
+    "dep:imaged-api-client",
+    "imaged-api-client/server",
     "dep:imaged-core",
     "dep:imaged-shared",
     "dep:axum",

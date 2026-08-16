@@ -1,4 +1,3 @@
-
 use imaged_core::domain::{
     group::Group as DGroup,
     host::Host as DHost,

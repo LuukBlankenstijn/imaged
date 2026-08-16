@@ -10,14 +10,15 @@ path = "src/lib.rs"
 [dependencies]
 dioxus = { version = "0.7", features = ["fullstack", "router"] }
 serde = { workspace = true, features = ["derive"] }
-imaged-api = { path = "../api" }
+imaged-api-ui = { path = "../api/ui" }
+imaged-shared = { workspace = true, features = ["error"] }
 
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 js-sys = { version = "0.3", optional = true }
 
 [features]
 default = []
-server = ["dioxus/server", "imaged-api/server"]
+server = ["dioxus/server", "imaged-api-ui/server"]
 web = ["dioxus/web", "dep:gloo-timers", "dep:js-sys"]
 
 [dev-dependencies]

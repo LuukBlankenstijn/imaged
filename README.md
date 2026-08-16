@@ -6,30 +6,43 @@ client that talks to a central server. Inspired by the capture/deploy part of [T
 
 ## Components
 
-### `crates/server` — `imaged-server-core`
+### `crates/core` — `imaged-core`
 
-Rust library (axum). Domain model, SQLite (sqlx) repositories for hosts, images
-and tasks, the in-memory host connection registry, the multicast manager, image
-storage, and the PXE / agent HTTP routers. Image partitions are stored on disk
+Rust library. Domain model, SQLite (sqlx) repositories for hosts, images and
+tasks, the in-memory host connection registry, the multicast manager, image
+storage, DI wiring, and the PXE routes. Image partitions are stored on disk
 under `images/`.
 
-### `crates/web` — `imaged-server`
+### `crates/web` — `imaged-web`
 
-Dioxus fullstack app; its binary is named `imaged-server`. It renders the
-dashboard (hydrated wasm client) and hosts the dashboard server functions plus
-the PXE / agent HTTP API in a single binary, backed by `imaged-server-core`.
-Styled with Tailwind CSS v4.
+Dioxus fullstack library that renders the dashboard (hydrated wasm client) and
+mounts the server-side routes.
+
+### `crates/api/ui` — `imaged-api-ui`
+
+Dashboard server functions served under `/api/ui/*`.
+
+### `crates/api/client` — `imaged-api-client`
+
+Agent-facing server functions served under `/api/client/*`.
+
+### `crates/server` — `imaged-server`
+
+Binary package that wires `imaged-core`, `imaged-web` and the two API crates
+together behind axum. By default it serves the dashboard and the agent API from
+a single binary; `--web-bind-address` splits the dashboard UI/API and the agent
+API onto two separate sockets. Styled with Tailwind CSS v4.
 
 Run (dev):
 
 ```sh
-dx serve --package imaged-web
+dx serve --package imaged-server
 ```
 
 Bundle (production):
 
 ```sh
-dx bundle --release --platform web --package imaged-web
+dx bundle --release --platform web --package imaged-server
 ```
 
 Listens on `0.0.0.0:8080` (`--bind-address`); an optional `--web-bind-address`

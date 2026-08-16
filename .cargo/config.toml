@@ -1,5 +1,5 @@
 [alias]
-test-native = "test --workspace --features imaged-api/server --target x86_64-unknown-linux-gnu"
+test-native = "test --workspace --features imaged-api-client/server,imaged-api-ui/server --target x86_64-unknown-linux-gnu"
 
 [env]
 CFLAGS_x86_64_unknown_linux_musl = "-DSQLITE_DISABLE_LFS"

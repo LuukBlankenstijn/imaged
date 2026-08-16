@@ -16,12 +16,6 @@ pub struct Task {
     pub image_id: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Constructor, Clone)]
-pub struct ImagePartition {
-    pub partition_number: i64,
-    pub fstype: String,
-}
-
 #[derive(Debug, Serialize, Deserialize, From, Clone, Copy)]
 pub enum ServerEvent {
     Task(Task),

@@ -9,5 +9,5 @@ mod views;
 mod tests;
 
 pub use app::App;
-pub use imaged_api as api;
-pub use imaged_api::model;
+pub use imaged_api_ui as api;
+pub use imaged_api_ui::model;

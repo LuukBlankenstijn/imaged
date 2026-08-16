@@ -17,11 +17,7 @@ pub(crate) struct MulticastTask {
 }
 
 impl ClientTaskExt for MulticastTask {
-    async fn handle_partition_table(
-        &self,
-        _: &crate::transport::ApiClient,
-        device: &str,
-    ) -> anyhow::Result<()> {
+    async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--zap-all", device])
             .kill_on_drop(true)
@@ -61,15 +57,13 @@ impl ClientTaskExt for MulticastTask {
 
     async fn plan_partitions(
         &self,
-        api: &crate::transport::ApiClient,
         disk: &crate::sys::disk::BlockDevice,
     ) -> anyhow::Result<Vec<crate::sys::disk::PartitionTarget>> {
-        super::image_partitions(api, self.task_id, disk).await
+        super::image_partitions(self.task_id, disk).await
     }
 
     async fn handle_partition(
         &self,
-        _: &crate::transport::ApiClient,
         partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download with udp-receiver");
@@ -113,9 +107,10 @@ impl ClientTaskExt for MulticastTask {
         Ok(())
     }
 
-    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
+    async fn finalize(&self) -> anyhow::Result<()> {
         tracing::info!(task=%self, "finished task successfully");
-        api.disconnect().await;
+        // best effort disconnect
+        let _ = api::event::disconnect().await;
         sys::reboot()
     }
 }

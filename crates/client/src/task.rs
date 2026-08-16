@@ -1,7 +1,7 @@
 mod implementations;
 mod types;
 
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 pub use types::ClientState;
 use types::RunningTask;
 
@@ -17,7 +17,7 @@ const PARTTABLE_TMP: &str = "/parttable.bin";
 pub async fn handle_message(state: Arc<ClientState>, msg: imaged_shared::ServerEvent) {
     match msg {
         imaged_shared::ServerEvent::Task(task) => start_task(state, task).await,
-        imaged_shared::ServerEvent::Cancel(task_id) => cancel_task(state, task_id).await,
+        imaged_shared::ServerEvent::Cancel(task_id) => cancel_task(state.deref(), task_id).await,
     }
 }
 
@@ -34,7 +34,7 @@ async fn start_task(state: Arc<ClientState>, task: imaged_shared::Task) {
 
     let handle = tokio::spawn(async move {
         tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
-        run_task(state_for_task.clone(), task.into(), cancel_for_task).await;
+        run_task(task.into(), cancel_for_task).await;
         let mut current = state_for_task.current_task.lock().await;
         *current = None;
     });
@@ -46,9 +46,9 @@ async fn start_task(state: Arc<ClientState>, task: imaged_shared::Task) {
     });
 }
 
-async fn run_task(state: Arc<ClientState>, task: Task, cancel_for_task: CancellationToken) {
+async fn run_task(task: Task, cancel_for_task: CancellationToken) {
     let result = match tokio::select! {
-        r = task.run(state.clone()) => Some(r),
+        r = task.run() => Some(r),
         _ = cancel_for_task.cancelled() => None,
     } {
         Some(result) => result,
@@ -59,20 +59,20 @@ async fn run_task(state: Arc<ClientState>, task: Task, cancel_for_task: Cancella
     };
     match result {
         Ok(_) => {
-            if let Err(e) = task.finalize(&state.http).await {
+            if let Err(e) = task.finalize().await {
                 tracing::error!(task=%task, error=%e, "failed to finalize task");
             }
         }
         Err(e) => {
             let reason = format!("{e:#}");
-            if let Err(e) = task.finalize_error(&state.http, &reason).await {
+            if let Err(e) = task.finalize_error(&reason).await {
                 tracing::error!(task=%task, error=%e, "failed to finalize task");
             }
         }
     }
 }
 
-async fn cancel_task(state: Arc<ClientState>, task_id: i64) {
+async fn cancel_task(state: &ClientState, task_id: i64) {
     let current = state.current_task.lock().await;
     if let Some(running) = current.as_ref()
         && running.task_id == task_id

@@ -1,6 +1,10 @@
+use std::io;
+
 use async_compression::tokio::bufread::ZstdDecoder;
 use derive_more::{Constructor, Display};
-use tokio::{io::BufReader, process::Command};
+use futures::StreamExt;
+use tokio::process::Command;
+use tokio_util::io::StreamReader;
 use tracing::{debug, info};
 
 use super::ClientTaskExt;
@@ -13,11 +17,7 @@ pub(crate) struct DeployTask {
 }
 
 impl ClientTaskExt for DeployTask {
-    async fn handle_partition_table(
-        &self,
-        api: &crate::transport::ApiClient,
-        device: &str,
-    ) -> anyhow::Result<()> {
+    async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--zap-all", device])
             .kill_on_drop(true)
@@ -27,7 +27,7 @@ impl ClientTaskExt for DeployTask {
             anyhow::bail!("sgdisk --zap-all failed");
         }
 
-        let data = api.download_parttable(self.task_id).await?;
+        let data = api::deploy::download_partition_table(self.task_id).await?;
         tokio::fs::write(PARTTABLE_TMP, data).await?;
         let status = Command::new("sgdisk")
             .args([&format!("--load-backup={PARTTABLE_TMP}"), device])
@@ -52,22 +52,22 @@ impl ClientTaskExt for DeployTask {
 
     async fn plan_partitions(
         &self,
-        api: &crate::transport::ApiClient,
         disk: &crate::sys::disk::BlockDevice,
     ) -> anyhow::Result<Vec<crate::sys::disk::PartitionTarget>> {
-        super::image_partitions(api, self.task_id, disk).await
+        super::image_partitions(self.task_id, disk).await
     }
 
     async fn handle_partition(
         &self,
-        api: &crate::transport::ApiClient,
         partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download");
-        let stream = api
-            .download_partition_data(self.task_id, partition.number)
-            .await?;
-        let mut decoder = ZstdDecoder::new(BufReader::new(stream));
+        let stream = api::deploy::download_partition_data(self.task_id, partition.number).await?;
+        let mut decoder = ZstdDecoder::new(StreamReader::new(
+            stream
+                .into_inner()
+                .map(|item| item.map_err(io::Error::other)),
+        ));
 
         info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
         let partclone_bin = partition.partclone_binary()?;
@@ -105,20 +105,17 @@ impl ClientTaskExt for DeployTask {
         Ok(())
     }
 
-    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
-        api.mark_task_finished(self.task_id).await?;
+    async fn finalize(&self) -> anyhow::Result<()> {
+        api::task::mark_finished(self.task_id).await?;
         tracing::info!(task=%self, "finished task successfully");
-        api.disconnect().await;
+        // best effort disconnect
+        let _ = api::event::disconnect().await;
         sys::reboot()
     }
 
-    async fn finalize_error(
-        &self,
-        api: &crate::transport::ApiClient,
-        err: &str,
-    ) -> anyhow::Result<()> {
+    async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
-        api.mark_task_failed(self.task_id, err).await?;
+        api::task::mark_failed(self.task_id, err.to_string()).await?;
         Ok(())
     }
 }

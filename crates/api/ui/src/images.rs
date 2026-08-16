@@ -6,57 +6,47 @@ use crate::model::{CreateImageRequest, Image, UpdateName};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use crate::error::sfe;
-#[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, ImageSvc, Registry, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
+use imaged_shared::error::Result;
 
 #[get("/api/ui/images")]
 #[inject(image_repo: ImageRepo)]
-pub async fn get_all_images() -> ServerFnResult<Vec<Image>> {
-    let images = image_repo.get_all().await.map_err(sfe)?;
+pub async fn get_all_images() -> Result<Vec<Image>> {
+    let images = image_repo.get_all().await?;
     Ok(images.into_iter().map(Into::into).collect())
 }
 
 #[post("/api/ui/images/rename")]
 #[inject(image_repo: ImageRepo)]
-pub async fn update_image_name(req: UpdateName) -> ServerFnResult<Image> {
-    let image = image_repo
-        .update_name(req.id, req.new_name)
-        .await
-        .map_err(sfe)?;
+pub async fn update_image_name(req: UpdateName) -> Result<Image> {
+    let image = image_repo.update_name(req.id, req.new_name).await?;
     Ok(image.into())
 }
 
 #[post("/api/ui/images/create")]
 #[inject(image_repo: ImageRepo, task_repo: TaskRepo, registry: Registry)]
-pub async fn create_image(req: CreateImageRequest) -> ServerFnResult<Image> {
-    let image = image_repo.create_image(req.name).await.map_err(sfe)?;
+pub async fn create_image(req: CreateImageRequest) -> Result<Image> {
+    let image = image_repo.create_image(req.name).await?;
     let task = task_repo
         .create(TaskType::Capture, vec![req.host_id], Some(image.id))
-        .await
-        .map_err(sfe)?;
+        .await?;
     registry.send_task(req.host_id, &task);
     Ok(image.into())
 }
 
 #[post("/api/ui/images/delete")]
 #[inject(task_repo: TaskRepo, image_repo: ImageRepo, image_svc: ImageSvc)]
-pub async fn delete_image(id: i64) -> ServerFnResult<()> {
-    if !task_repo
-        .get_active_by_image(id)
-        .await
-        .map_err(sfe)?
-        .is_empty()
-    {
-        return Err(sfe(AppError::InvalidArgument(format!(
+pub async fn delete_image(id: i64) -> Result<()> {
+    if !task_repo.get_active_by_image(id).await?.is_empty() {
+        return Err(AppError::InvalidArgument(format!(
             "image with id {id} has active tasks, first cancel or complete those"
-        ))));
+        )));
     }
-    image_repo.delete_image(id).await.map_err(sfe)?;
-    image_svc.clear_image_data(id).await.map_err(sfe)?;
+    image_repo.delete_image(id).await?;
+    image_svc.clear_image_data(id).await?;
     Ok(())
 }

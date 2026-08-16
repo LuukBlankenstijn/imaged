@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use imaged_core as core;
@@ -11,8 +10,6 @@ use crate::model;
 
 static DB_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Owns a per-test temp directory (unique DB + image dir). Dropping it removes
-/// the directory so parallel tests never share state and nothing leaks.
 struct TestDir(PathBuf);
 
 impl Drop for TestDir {
@@ -21,45 +18,10 @@ impl Drop for TestDir {
     }
 }
 
-/// Builds a fully-wired DI container backed by a fresh temp-file sqlite DB.
-///
-/// A plain in-memory DB is unusable here: `setup_database` opens a 5-connection
-/// pool and each in-memory connection would see its own empty database. A
-/// unique on-disk file per test keeps the pool coherent and the tests isolated.
 async fn container() -> (DIContainer, TestDir) {
     let id = DB_ID.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("imaged-test-{}-{}", std::process::id(), id));
-    std::fs::create_dir_all(&dir).unwrap();
-    let db_url = format!("sqlite://{}", dir.join("test.db").display());
-    let pool = core::setup_database(&db_url).await.unwrap();
-    let host_repo = core::repository::host_repo(pool.clone());
-    let image_repo = core::repository::image_repo(pool.clone());
-    let task_repo = core::repository::task_repo(pool.clone());
-    let group_repo = core::repository::group_repo(pool.clone());
-    let host_registry = Arc::new(core::registry::HostRegistry::default());
-    let images_dir = dir.join("images").to_string_lossy().to_string();
-    let image_service = Arc::new(core::service::image::ImageService::new(images_dir));
-    let multicast_manager = Arc::new(
-        core::multicast::MulticastManager::new(
-            task_repo.clone(),
-            image_repo.clone(),
-            image_service.clone(),
-            "lo".to_string(),
-        )
-        .await
-        .unwrap(),
-    );
-    let bind_address = "127.0.0.1:8080".parse().unwrap();
-    let c = DIContainer::new(
-        host_repo,
-        image_repo,
-        task_repo,
-        group_repo,
-        host_registry,
-        image_service,
-        multicast_manager,
-        bind_address,
-    );
+    let c = core::build_test_container(&dir).await;
     (c, TestDir(dir))
 }
 

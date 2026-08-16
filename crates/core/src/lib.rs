@@ -1,8 +1,8 @@
-pub mod api;
 pub mod di;
 pub mod domain;
 pub mod error;
 pub mod multicast;
+pub mod pxe;
 pub mod registry;
 pub mod repository;
 pub mod service;
@@ -70,6 +70,23 @@ pub async fn build_di_container(
         multicast_manager,
         bind_address,
     ))
+}
+
+#[cfg(feature = "test-support")]
+pub async fn build_test_container(dir: &std::path::Path) -> DIContainer {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).unwrap();
+    let pool = setup_database(&format!("sqlite://{}", dir.join("test.db").display()))
+        .await
+        .unwrap();
+    build_di_container(
+        pool,
+        dir.join("images").to_string_lossy().to_string(),
+        "lo".to_string(),
+        "127.0.0.1:8080".parse().unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 pub async fn bind(address: SocketAddr) -> std::io::Result<impl Listener<Addr = SocketAddr>> {

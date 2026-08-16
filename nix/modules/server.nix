@@ -70,6 +70,13 @@ in
       };
     };
 
+    networking.firewall.interfaces.${cfg.multicastInterface}.allowedUDPPortRanges = [
+      {
+        from = 50000;
+        to = 50127;
+      }
+    ];
+
     systemd.tmpfiles.rules = [
       "d ${cfg.dataDir} 0755 imaged-server imaged-server -"
       "d ${cfg.dataDir}/images 0755 imaged-server imaged-server -"

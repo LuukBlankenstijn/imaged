@@ -8,8 +8,6 @@ pub mod tasks;
 
 #[cfg(feature = "server")]
 mod convert;
-#[cfg(feature = "server")]
-mod error;
 
 #[cfg(all(test, feature = "server"))]
 mod tests;

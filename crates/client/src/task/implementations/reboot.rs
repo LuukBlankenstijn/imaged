@@ -9,9 +9,10 @@ pub(crate) struct RebootTask {
 }
 
 impl ClientTaskExt for RebootTask {
-    async fn finalize(&self, api: &crate::transport::ApiClient) -> anyhow::Result<()> {
-        api.mark_task_finished(self.task_id).await?;
-        api.disconnect().await;
+    async fn finalize(&self) -> anyhow::Result<()> {
+        api::task::mark_finished(self.task_id).await?;
+        // best effort disconnect
+        let _ = api::event::disconnect().await;
         sys::reboot()
     }
 }

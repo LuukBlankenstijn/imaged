@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = [
+    "crates/api/client",
+    "crates/api/ui",
+    "crates/client",
+    "crates/core",
+    "crates/server",
+    "crates/shared",
+    "crates/tftp",
+    "crates/web",
+]
 
 [workspace.package]
 version = "0.1.0"
