@@ -18,7 +18,7 @@ use crate::model::{DeployRequest, Host, Image, ImageStatus, UpdateName};
 
 #[component]
 pub fn Hosts() -> Element {
-    let mut hosts = use_poll(4000, || async move { get_all_hosts(None).await });
+    let mut hosts = use_poll(4000, || async move { get_all_hosts().await });
 
     rsx! {
         PageHeader { title: "Hosts", subtitle: "Registered machines on the netboot fabric" }

@@ -6,7 +6,7 @@ use crate::api::groups::{
     create_group, delete_group, get_all_groups, multicast, update_group_memberships,
     update_group_name,
 };
-use crate::api::hosts::{get_all_hosts, reboot, wake_on_lan};
+use crate::api::hosts::{get_all_hosts, get_hosts_by_group, reboot, wake_on_lan};
 use crate::api::images::get_all_images;
 use crate::components::connection::use_connection;
 use crate::components::hooks::use_poll;
@@ -25,7 +25,7 @@ use crate::model::{
 #[component]
 pub fn Groups() -> Element {
     let mut groups = use_poll(5000, || async move { get_all_groups().await });
-    let all_hosts = use_resource(|| async move { get_all_hosts(None).await });
+    let all_hosts = use_resource(|| async move { get_all_hosts().await });
     let open = use_signal(|| None::<i64>);
 
     let mut name = use_signal(String::new);
@@ -364,13 +364,13 @@ fn GroupRow(
 }
 
 async fn group_host_ids(group_id: i64) -> Result<Vec<i64>, ServerFnError> {
-    let hosts = get_all_hosts(Some(group_id)).await?;
+    let hosts = get_hosts_by_group(group_id).await?;
     Ok(hosts.iter().map(|h| h.id).collect())
 }
 
 #[component]
 fn MemberList(group_id: i64) -> Element {
-    let members = use_resource(move || async move { get_all_hosts(Some(group_id)).await });
+    let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
     rsx! {
         div { class: "border-t border-line/60 px-4 py-3",
             match &*members.read() {
@@ -413,8 +413,8 @@ fn EditMembersModal(
     onclose: EventHandler<()>,
     on_saved: EventHandler<()>,
 ) -> Element {
-    let all_hosts = use_resource(|| async move { get_all_hosts(None).await });
-    let members = use_resource(move || async move { get_all_hosts(Some(group_id)).await });
+    let all_hosts = use_resource(|| async move { get_all_hosts().await });
+    let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
     let selected = use_signal(HashSet::<i64>::new);
     let mut seeded = use_signal(|| false);
 

@@ -1,0 +1,4 @@
+{
+  "rust-analyzer.cargo.features": ["imaged-api/server", "imaged-web/server"],
+  "rust-analyzer.cargo.targetDir": "target/rust-analyzer"
+}

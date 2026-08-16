@@ -14,14 +14,14 @@ use imaged_server_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_server_core::error::AppError;
 
-#[get("/api/tasks")]
+#[get("/api/ui/tasks")]
 #[inject(task_repo: TaskRepo)]
 pub async fn get_all_tasks() -> ServerFnResult<Vec<Task>> {
     let tasks = task_repo.get_all().await.map_err(sfe)?;
     Ok(tasks.into_iter().map(Into::into).collect())
 }
 
-#[post("/api/tasks/cancel")]
+#[post("/api/ui/tasks/cancel")]
 #[inject(task_repo: TaskRepo, image_repo: ImageRepo, multicast_mgr: MulticastMgr, registry: Registry)]
 pub async fn cancel_task(id: i64) -> ServerFnResult<()> {
     let task = task_repo.get(id).await.map_err(sfe)?;
@@ -32,13 +32,13 @@ pub async fn cancel_task(id: i64) -> ServerFnResult<()> {
         ))));
     }
     task_repo.cancel(task.id).await.map_err(sfe)?;
-    if let Some(image_id) = task.image_id {
-        if task.task_type == TaskType::Capture {
-            image_repo
-                .mark_faulted(image_id, "Capture task was cancelled by user")
-                .await
-                .map_err(sfe)?;
-        }
+    if let Some(image_id) = task.image_id
+        && task.task_type == TaskType::Capture
+    {
+        image_repo
+            .mark_faulted(image_id, "Capture task was cancelled by user")
+            .await
+            .map_err(sfe)?;
     }
     if task.task_type == TaskType::Multicast {
         multicast_mgr.cancel(task.id);
@@ -53,7 +53,7 @@ pub async fn cancel_task(id: i64) -> ServerFnResult<()> {
     Ok(())
 }
 
-#[post("/api/tasks/retry")]
+#[post("/api/ui/tasks/retry")]
 #[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr, registry: Registry)]
 pub async fn retry_task(id: i64) -> ServerFnResult<()> {
     let task = task_repo.get(id).await.map_err(sfe)?;
@@ -78,10 +78,10 @@ pub async fn retry_task(id: i64) -> ServerFnResult<()> {
         multicast_mgr.notify_new(task.id).map_err(sfe)?;
     }
     for host in &task.hosts {
-        if let Some(next_task) = task_repo.get_next(host.host_id).await.map_err(sfe)? {
-            if next_task.id == task.id {
-                registry.send_task(host.host_id, &task);
-            }
+        if let Some(next_task) = task_repo.get_next(host.host_id).await.map_err(sfe)?
+            && next_task.id == task.id
+        {
+            registry.send_task(host.host_id, &task);
         }
     }
     Ok(())

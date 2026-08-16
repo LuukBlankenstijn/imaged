@@ -103,7 +103,7 @@ async fn delete_host_ok_without_tasks() {
         .await
         .unwrap();
 
-    let hosts = core::di::scope(c.clone(), crate::hosts::get_all_hosts(None))
+    let hosts = core::di::scope(c.clone(), crate::hosts::get_all_hosts())
         .await
         .unwrap();
     assert!(hosts.is_empty());
@@ -423,7 +423,7 @@ async fn groups_full_roundtrip() {
     )
     .await
     .unwrap();
-    let members = core::di::scope(c.clone(), crate::hosts::get_all_hosts(Some(group.id)))
+    let members = core::di::scope(c.clone(), crate::hosts::get_hosts_by_group(group.id))
         .await
         .unwrap();
     assert_eq!(members.len(), 2);

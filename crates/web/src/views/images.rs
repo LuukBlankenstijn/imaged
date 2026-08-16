@@ -13,7 +13,7 @@ use crate::model::{CreateImageRequest, Image, ImageStatus, UpdateName};
 #[component]
 pub fn Images() -> Element {
     let mut images = use_poll(3000, || async move { get_all_images().await });
-    let hosts = use_resource(move || async move { get_all_hosts(None).await });
+    let hosts = use_resource(move || async move { get_all_hosts().await });
 
     let mut new_name = use_signal(String::new);
     let mut host_id = use_signal(|| 0i64);

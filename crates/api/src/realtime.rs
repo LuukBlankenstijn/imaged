@@ -9,7 +9,7 @@ use inject::inject;
 #[cfg(feature = "server")]
 use imaged_server_core::di::Registry;
 
-#[get("/api/connection-state")]
+#[get("/api/ui/connection-state")]
 #[inject(registry: Registry)]
 pub async fn connection_state() -> ServerFnResult<ServerEvents<HostConnectionEvent>> {
     let initial = registry.get_current_state();

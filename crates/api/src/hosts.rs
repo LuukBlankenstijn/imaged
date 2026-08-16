@@ -16,14 +16,21 @@ use imaged_server_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_server_core::error::AppError;
 
-#[post("/api/hosts/list")]
+#[get("/api/ui/hosts")]
 #[inject(host_repo: HostRepo)]
-pub async fn get_all_hosts(group_id: Option<i64>) -> ServerFnResult<Vec<Host>> {
-    let hosts = host_repo.get_all(group_id).await.map_err(sfe)?;
+pub async fn get_all_hosts() -> ServerFnResult<Vec<Host>> {
+    let hosts = host_repo.get_all(None).await.map_err(sfe)?;
     Ok(hosts.into_iter().map(Into::into).collect())
 }
 
-#[post("/api/hosts/rename")]
+#[post("/api/ui/hosts/by-group")]
+#[inject(host_repo: HostRepo)]
+pub async fn get_hosts_by_group(group_id: i64) -> ServerFnResult<Vec<Host>> {
+    let hosts = host_repo.get_all(Some(group_id)).await.map_err(sfe)?;
+    Ok(hosts.into_iter().map(Into::into).collect())
+}
+
+#[post("/api/ui/hosts/rename")]
 #[inject(host_repo: HostRepo)]
 pub async fn update_host_name(req: UpdateName) -> ServerFnResult<Host> {
     let host = host_repo
@@ -33,7 +40,7 @@ pub async fn update_host_name(req: UpdateName) -> ServerFnResult<Host> {
     Ok(host.into())
 }
 
-#[post("/api/hosts/delete")]
+#[post("/api/ui/hosts/delete")]
 #[inject(task_repo: TaskRepo, host_repo: HostRepo)]
 pub async fn delete_host(id: i64) -> ServerFnResult<()> {
     if task_repo.get_next(id).await.map_err(sfe)?.is_some() {
@@ -45,7 +52,7 @@ pub async fn delete_host(id: i64) -> ServerFnResult<()> {
     Ok(())
 }
 
-#[post("/api/hosts/deploy")]
+#[post("/api/ui/hosts/deploy")]
 #[inject(task_repo: TaskRepo, registry: Registry)]
 pub async fn deploy(req: DeployRequest) -> ServerFnResult<Task> {
     let task = task_repo
@@ -56,7 +63,7 @@ pub async fn deploy(req: DeployRequest) -> ServerFnResult<Task> {
     Ok(task.into())
 }
 
-#[post("/api/hosts/reboot")]
+#[post("/api/ui/hosts/reboot")]
 #[inject(task_repo: TaskRepo, registry: Registry)]
 pub async fn reboot(host_ids: Vec<i64>) -> ServerFnResult<()> {
     let task = task_repo
@@ -69,7 +76,7 @@ pub async fn reboot(host_ids: Vec<i64>) -> ServerFnResult<()> {
     Ok(())
 }
 
-#[post("/api/hosts/wake")]
+#[post("/api/ui/hosts/wake")]
 #[inject(host_repo: HostRepo, bind_address: BindAddress)]
 pub async fn wake_on_lan(host_ids: Vec<i64>) -> ServerFnResult<()> {
     send_wake_on_lan(&host_repo, *bind_address, host_ids)
