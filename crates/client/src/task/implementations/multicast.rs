@@ -27,6 +27,8 @@ impl ClientTaskExt for MulticastTask {
             anyhow::bail!("sgdisk --zap-all failed");
         }
 
+        super::discard_disk(device).await;
+
         let port = get_multicast_port(0);
         let mut buffer: Vec<u8> = Vec::new();
         let mut data_stream = udp_receiver_stream(port).await?;
