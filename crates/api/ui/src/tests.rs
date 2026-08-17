@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use axum::response::Response;
 use imaged_core as core;
+use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::task::TaskType;
@@ -16,6 +20,13 @@ impl Drop for TestDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+async fn install_container() -> (DIContainer, TestDir) {
+    let dir = std::env::temp_dir().join(format!("imaged-ui-router-test-{}", std::process::id()));
+    let c = core::build_test_container(&dir).await;
+    core::di::init_container(c.clone());
+    (c, TestDir(dir))
 }
 
 async fn container() -> (DIContainer, TestDir) {
@@ -398,4 +409,220 @@ async fn groups_full_roundtrip() {
         .await
         .unwrap();
     assert!(groups.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// router-level contracts: verbs, paths and error -> status mapping
+// ---------------------------------------------------------------------------
+
+fn ui_router() -> axum::Router {
+    dioxus::server::ServerFunction::collect()
+        .into_iter()
+        .filter(|f| f.path().starts_with("/api/ui"))
+        .fold(axum::Router::new(), |router, f| {
+            router.route(f.path(), f.method_router())
+        })
+        .with_state(dioxus::server::FullstackState::headless())
+}
+
+async fn request(method: Method, uri: &str, body: Option<serde_json::Value>) -> Response {
+    let builder = Request::builder().method(method).uri(uri);
+    let request = match body {
+        Some(body) => builder
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap())),
+        None => builder.body(Body::empty()),
+    };
+    ui_router().oneshot(request.unwrap()).await.unwrap()
+}
+
+async fn get(uri: &str) -> Response {
+    request(Method::GET, uri, None).await
+}
+
+async fn post(uri: &str, body: serde_json::Value) -> Response {
+    request(Method::POST, uri, Some(body)).await
+}
+
+async fn json<T: serde::de::DeserializeOwned>(response: Response) -> T {
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn ui_api_contracts() {
+    let (c, _guard) = install_container().await;
+
+    reads_are_get_only(&c).await;
+    group_members_are_served_from_the_group_path(&c).await;
+    deleting_a_busy_host_is_a_bad_request(&c).await;
+    cancelling_a_finished_task_is_a_bad_request(&c).await;
+    retrying_a_pending_task_is_a_bad_request(&c).await;
+    deleting_a_capturing_image_is_a_bad_request(&c).await;
+    multicast_creates_a_task_for_every_host(&c).await;
+    waking_hosts_is_accepted(&c).await;
+}
+
+async fn reads_are_get_only(c: &DIContainer) {
+    c.host_repo
+        .upsert_host("aa:bb:cc:dd:ee:10".into(), 1_000_000, None)
+        .await
+        .unwrap();
+
+    for uri in [
+        "/api/ui/hosts",
+        "/api/ui/images",
+        "/api/ui/groups",
+        "/api/ui/tasks",
+    ] {
+        assert_eq!(get(uri).await.status(), StatusCode::OK, "{uri}");
+        assert_eq!(
+            post(uri, serde_json::json!({})).await.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{uri} accepted a POST"
+        );
+    }
+
+    assert_eq!(
+        get("/api/ui/hosts/rename").await.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+async fn group_members_are_served_from_the_group_path(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:11".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let group = c
+        .group_repo
+        .create_group("members", &[host.id])
+        .await
+        .unwrap();
+
+    let response = get(&format!("/api/ui/groups/{}/hosts", group.id)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let members: Vec<model::Host> = json(response).await;
+    assert_eq!(
+        members.iter().map(|h| h.id).collect::<Vec<_>>(),
+        vec![host.id]
+    );
+}
+
+async fn deleting_a_busy_host_is_a_bad_request(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:12".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    c.task_repo
+        .create(TaskType::Reboot, vec![host.id], None)
+        .await
+        .unwrap();
+
+    let response = post("/api/ui/hosts/delete", serde_json::json!({ "id": host.id })).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(c.host_repo.get_by_mac("aa:bb:cc:dd:ee:12").await.is_ok());
+}
+
+async fn cancelling_a_finished_task_is_a_bad_request(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:13".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Reboot, vec![host.id], None)
+        .await
+        .unwrap();
+    c.task_repo.mark_finished(task.id, host.id).await.unwrap();
+
+    let response = post("/api/ui/tasks/cancel", serde_json::json!({ "id": task.id })).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn retrying_a_pending_task_is_a_bad_request(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:14".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Reboot, vec![host.id], None)
+        .await
+        .unwrap();
+
+    let response = post("/api/ui/tasks/retry", serde_json::json!({ "id": task.id })).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn deleting_a_capturing_image_is_a_bad_request(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:15".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let image = c.image_repo.create_image("busy".into()).await.unwrap();
+    c.task_repo
+        .create(TaskType::Capture, vec![host.id], Some(image.id))
+        .await
+        .unwrap();
+
+    let response = post(
+        "/api/ui/images/delete",
+        serde_json::json!({ "id": image.id }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(c.image_repo.get_status(image.id).await.is_ok());
+}
+
+async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
+    let first = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:16".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let second = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:17".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let image = c.image_repo.create_image("cast".into()).await.unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
+
+    let response = post(
+        "/api/ui/groups/multicast",
+        serde_json::json!({ "req": { "host_ids": [first.id, second.id], "image_id": image.id } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let task = c.task_repo.get_next(first.id).await.unwrap().unwrap();
+    assert_eq!(task.task_type, TaskType::Multicast);
+    assert_eq!(task.image_id, Some(image.id));
+    assert_eq!(
+        c.task_repo.get_next(second.id).await.unwrap().unwrap().id,
+        task.id
+    );
+}
+
+async fn waking_hosts_is_accepted(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:18".into(), 1_000_000, None)
+        .await
+        .unwrap();
+
+    let response = post(
+        "/api/ui/hosts/wake",
+        serde_json::json!({ "host_ids": [host.id] }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
 }

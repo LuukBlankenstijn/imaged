@@ -18,4 +18,7 @@ server = ["dioxus/server", "dep:imaged-core", "dep:tracing", "dep:wakey"]
 
 [dev-dependencies]
 imaged-core = { path = "../../core", features = ["test-support"] }
+tower = { version = "0.5", features = ["util"] }
+axum = "0.8"
+serde_json = { workspace = true }
 tokio = { workspace = true }

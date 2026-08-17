@@ -2376,12 +2376,15 @@ dependencies = [
 name = "imaged-api-ui"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dioxus",
  "imaged-core",
  "imaged-shared",
  "injectable",
  "serde",
+ "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "wakey",
 ]
