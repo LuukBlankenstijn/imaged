@@ -130,6 +130,13 @@
             ./nix/modules/server.nix
             ./nix/modules/tftp.nix
           ];
+          nix.settings = {
+            substituters = [ "https://luukblankenstijn.cachix.org" ];
+            trusted-public-keys = [
+              "luukblankenstijn.cachix.org-1:gRz/ypm8zdDizcdAuWD6UKLVBDeObfHsNDWoAka2WSw="
+            ];
+          };
+
           services.imaged = {
             server.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
             server.udpcast = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.udpcast;
