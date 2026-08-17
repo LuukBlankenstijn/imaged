@@ -2,12 +2,13 @@
 
 (pkgsStatic.partclone.override {
   nilfs-utils = null;
+  ntfs3g = null;
 }).overrideAttrs
   (oldAttrs: {
     configureFlags = [
       "--enable-extfs"
       "--enable-fat"
-      "--enable-ntfs"
+      "--disable-ntfs"
       "--enable-pkg-config-static"
       "--disable-xfs"
       "--disable-btrfs"

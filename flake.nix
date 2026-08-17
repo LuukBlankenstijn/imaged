@@ -29,7 +29,7 @@
         partclone = pkgs.callPackage ./nix/packages/partclone.nix { };
         kernel = pkgs.callPackage ./nix/packages/kernel.nix { };
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        devRustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
             "rust-analyzer"
@@ -40,6 +40,10 @@
             "x86_64-unknown-linux-musl"
             "wasm32-unknown-unknown"
           ];
+        };
+
+        buildRustToolchain = pkgs.rust-bin.stable.latest.minimal.override {
+          targets = [ "wasm32-unknown-unknown" ];
         };
 
         wasm-bindgen-cli =
@@ -63,7 +67,8 @@
         };
 
         build-initramfs = pkgs.callPackage ./nix/scripts/build-initramfs.nix {
-          inherit initramfsStaging rustToolchain;
+          inherit initramfsStaging;
+          rustToolchain = devRustToolchain;
         };
         run-vm = pkgs.callPackage ./nix/scripts/run-vm.nix { };
         run-vm-pxe = pkgs.callPackage ./nix/scripts/run-vm-pxe.nix { };
@@ -85,14 +90,14 @@
             teardown-net
             ;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit initramfs rustToolchain wasm-bindgen-cli;
+            inherit initramfs wasm-bindgen-cli;
+            rustToolchain = buildRustToolchain;
           };
           imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { };
         };
 
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
           inherit
-            rustToolchain
             kernel
             udpcast
             build-initramfs
@@ -102,6 +107,7 @@
             teardown-net
             wasm-bindgen-cli
             ;
+          rustToolchain = devRustToolchain;
         };
       }
     )
