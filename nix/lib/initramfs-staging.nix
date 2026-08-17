@@ -19,7 +19,6 @@ clientBin: ''
   cp ${pkgsStatic.gptfdisk}/bin/sgdisk "$STAGING/bin/"
   cp ${udpcast}/bin/udp-receiver "$STAGING/bin/"
   cp ${pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
-  cp ${pkgsStatic.tcpdump}/bin/tcpdump "$STAGING/bin/"
   cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"
   cp ${partclone}/bin/partclone.vfat "$STAGING/bin/"
   cp "${clientBin}" "$STAGING/bin/imaged-client"
