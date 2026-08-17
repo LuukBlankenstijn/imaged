@@ -1,6 +1,13 @@
 {
   description = "imaged: network boot imaging tool";
 
+  nixConfig = {
+    extra-substituters = [ "https://luukblankenstijn.cachix.org" ];
+    extra-trusted-public-keys = [
+      "luukblankenstijn.cachix.org-1:gRz/ypm8zdDizcdAuWD6UKLVBDeObfHsNDWoAka2WSw="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
