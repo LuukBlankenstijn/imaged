@@ -11,6 +11,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -23,6 +24,7 @@
       nixpkgs,
       flake-utils,
       rust-overlay,
+      crane,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -53,6 +55,13 @@
           targets = [ "wasm32-unknown-unknown" ];
         };
 
+        craneLib = (crane.mkLib pkgs).overrideToolchain buildRustToolchain;
+        craneLibMusl = (crane.mkLib pkgs.pkgsCross.musl64).overrideToolchain (
+          pkgs.rust-bin.stable.latest.minimal.override {
+            targets = [ "x86_64-unknown-linux-musl" ];
+          }
+        );
+
         wasm-bindgen-cli =
           let
             lock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
@@ -63,7 +72,9 @@
           in
           pkgs."wasm-bindgen-cli_${builtins.replaceStrings [ "." ] [ "_" ] version}";
 
-        imaged-client = pkgs.callPackage ./nix/packages/imaged-client.nix { };
+        imaged-client = pkgs.callPackage ./nix/packages/imaged-client.nix {
+          craneLib = craneLibMusl;
+        };
 
         initramfsStaging = import ./nix/lib/initramfs-staging.nix {
           inherit (pkgs) pkgsStatic;
@@ -97,10 +108,9 @@
             teardown-net
             ;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit initramfs wasm-bindgen-cli;
-            rustToolchain = buildRustToolchain;
+            inherit initramfs wasm-bindgen-cli craneLib;
           };
-          imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { };
+          imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { inherit craneLib; };
         };
 
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
