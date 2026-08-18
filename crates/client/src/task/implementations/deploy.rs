@@ -27,8 +27,6 @@ impl ClientTaskExt for DeployTask {
             anyhow::bail!("sgdisk --zap-all failed");
         }
 
-        super::discard_disk(device).await;
-
         let data = api::deploy::download_partition_table(self.task_id).await?;
         tokio::fs::write(PARTTABLE_TMP, data).await?;
         let status = Command::new("sgdisk")

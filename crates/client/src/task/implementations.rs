@@ -5,7 +5,6 @@ mod reboot;
 
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
-use tokio::process::Command;
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
@@ -46,34 +45,6 @@ async fn image_partitions(
         .into_iter()
         .map(|p| disk.partition_target(p.partition_number, p.fstype))
         .collect()
-}
-
-async fn discard_disk(device: &str) {
-    tracing::info!(device, "discarding disk");
-    let result = Command::new("blkdiscard")
-        .arg(device)
-        .kill_on_drop(true)
-        .status()
-        .await;
-    match result {
-        Ok(status) if status.success() => {
-            tracing::info!(device, "discard finished")
-        }
-        Ok(status) => {
-            tracing::warn!(device, %status, "blkdiscard failed, restore may be slow")
-        }
-        Err(e) => tracing::warn!(device, err=%e, "could not run blkdiscard"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::discard_disk;
-
-    #[tokio::test]
-    async fn a_disk_that_rejects_discard_does_not_abort_imaging() {
-        discard_disk("/dev/imaged-nonexistent-device").await;
-    }
 }
 
 #[derive(Display)]
