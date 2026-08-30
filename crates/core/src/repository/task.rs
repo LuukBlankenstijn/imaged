@@ -48,6 +48,8 @@ impl TaskRepository for SqliteTaskRepository {
         let pending_str = TaskState::Pending.to_string();
         let now = Utc::now();
 
+        let mut tx = self.pool.begin().await?;
+
         let task = sqlx::query!(
             r#"
             INSERT INTO tasks (type, image_id, created_at)
@@ -58,10 +60,9 @@ impl TaskRepository for SqliteTaskRepository {
             image_id,
             now
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-        let mut tx = self.pool.begin().await?;
         for host_id in host_ids.iter() {
             sqlx::query!(
                 "INSERT INTO task_hosts (task_id, host_id, state) VALUES (?, ?, ?)",
@@ -139,13 +140,18 @@ impl TaskRepository for SqliteTaskRepository {
 
     async fn mark_finished(&self, task_id: i64, host_id: i64) -> Result {
         let state = TaskState::Done.to_string();
+        let pending = TaskState::Pending.to_string();
+        let running = TaskState::Running.to_string();
         let now = Utc::now();
         sqlx::query!(
-            "UPDATE task_hosts SET state = ?, finished_at = ? WHERE task_id = ? AND host_id = ?",
+            "UPDATE task_hosts SET state = ?, finished_at = ? \
+             WHERE task_id = ? AND host_id = ? AND (state = ? OR state = ?)",
             state,
             now,
             task_id,
-            host_id
+            host_id,
+            pending,
+            running
         )
         .execute(&self.pool)
         .await?;
@@ -155,15 +161,19 @@ impl TaskRepository for SqliteTaskRepository {
 
     async fn mark_failed(&self, task_id: i64, host_id: i64, error: &str) -> Result {
         let state = TaskState::Failed.to_string();
+        let pending = TaskState::Pending.to_string();
+        let running = TaskState::Running.to_string();
         let now = Utc::now();
         sqlx::query!(
             "UPDATE task_hosts SET state = ?, finished_at = ?, error = ? \
-             WHERE task_id = ? AND host_id = ?",
+             WHERE task_id = ? AND host_id = ? AND (state = ? OR state = ?)",
             state,
             now,
             error,
             task_id,
-            host_id
+            host_id,
+            pending,
+            running
         )
         .execute(&self.pool)
         .await?;
@@ -437,15 +447,15 @@ mod tests {
     #[tokio::test]
     async fn create_with_a_nonexistent_host_id_returns_an_error() {
         let (c, _g) = container().await;
-        let result = c
+        let err = c
             .task_repo
             .create(TaskType::Reboot, vec![999_999], None)
-            .await;
-        assert!(result.is_err(), "expected a foreign-key violation error");
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::FailedPrecondition(_)), "got {err:?}");
     }
 
     #[tokio::test]
-    #[ignore = "create inserts the tasks row on the pool before the task_hosts transaction, so a FK failure rolls back only task_hosts and leaves an orphaned task row behind"]
     async fn create_with_a_nonexistent_host_id_leaves_no_orphaned_task_row_behind() {
         let (c, _g) = container().await;
         let _ = c
@@ -684,7 +694,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_finished_overwrites_a_failed_host_row_because_it_lacks_a_terminal_guard() {
+    async fn mark_finished_does_not_resurrect_a_failed_host_row() {
         let (c, _g) = container().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
@@ -696,12 +706,27 @@ mod tests {
         c.task_repo.mark_finished(t.id, h).await.unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         let r = host_row(&got, h);
-        assert_eq!(r.state, TaskState::Done);
+        assert_eq!(r.state, TaskState::Failed);
         assert_eq!(r.error.as_deref(), Some("boom"));
     }
 
     #[tokio::test]
-    async fn mark_failed_overwrites_a_done_host_row_because_it_lacks_a_terminal_guard() {
+    async fn mark_finished_does_not_resurrect_a_cancelled_host_row() {
+        let (c, _g) = container().await;
+        let h = host(&c, "aa:bb:cc:dd:ee:01").await;
+        let t = c
+            .task_repo
+            .create(TaskType::Reboot, vec![h], None)
+            .await
+            .unwrap();
+        c.task_repo.cancel(t.id).await.unwrap();
+        c.task_repo.mark_finished(t.id, h).await.unwrap();
+        let got = c.task_repo.get(t.id).await.unwrap();
+        assert_eq!(host_row(&got, h).state, TaskState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn mark_failed_does_not_resurrect_a_done_host_row() {
         let (c, _g) = container().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
@@ -713,8 +738,25 @@ mod tests {
         c.task_repo.mark_failed(t.id, h, "late failure").await.unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         let r = host_row(&got, h);
-        assert_eq!(r.state, TaskState::Failed);
-        assert_eq!(r.error.as_deref(), Some("late failure"));
+        assert_eq!(r.state, TaskState::Done);
+        assert!(r.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_failed_does_not_resurrect_a_cancelled_host_row() {
+        let (c, _g) = container().await;
+        let h = host(&c, "aa:bb:cc:dd:ee:01").await;
+        let t = c
+            .task_repo
+            .create(TaskType::Reboot, vec![h], None)
+            .await
+            .unwrap();
+        c.task_repo.cancel(t.id).await.unwrap();
+        c.task_repo.mark_failed(t.id, h, "late failure").await.unwrap();
+        let got = c.task_repo.get(t.id).await.unwrap();
+        let r = host_row(&got, h);
+        assert_eq!(r.state, TaskState::Cancelled);
+        assert!(r.error.is_none());
     }
 
     #[tokio::test]
@@ -1032,22 +1074,5 @@ mod tests {
         let got = c.task_repo.get(t.id).await.unwrap();
         assert!(got.hosts.is_empty());
         assert_eq!(got.aggregate_state(), TaskState::Cancelled);
-    }
-
-    #[tokio::test]
-    #[ignore = "issues.md: removing an image does not cancel tasks that reference it"]
-    async fn removing_an_image_cancels_tasks_that_reference_it() {
-        let (c, _g) = container().await;
-        let img = image(&c, "doomed").await;
-        let h = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Deploy, vec![h], Some(img))
-            .await
-            .unwrap();
-        c.image_repo.delete_image(img).await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(got.aggregate_state(), TaskState::Cancelled);
-        assert!(c.task_repo.get_active_by_image(img).await.unwrap().is_empty());
     }
 }

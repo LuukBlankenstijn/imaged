@@ -393,7 +393,7 @@ async fn failed_on_a_deploy_task_leaves_the_image_ready() {
 }
 
 #[tokio::test]
-async fn a_stream_that_errors_mid_upload_leaves_no_partition_row_yet_can_still_be_marked_ready() {
+async fn a_stream_that_errors_mid_upload_leaves_nothing_behind_and_cannot_be_marked_ready() {
     let s = harness::server().await;
 
     let mac = harness::unique_mac();
@@ -434,15 +434,10 @@ async fn a_stream_that_errors_mid_upload_leaves_no_partition_row_yet_can_still_b
     assert!(!succeeded, "a truncated upload must not report success");
 
     let blob_path = s.container.image_service.get_partition_path(image_id, 1);
-    let mut delivered = chunk1.to_vec();
-    delivered.extend_from_slice(&chunk2);
-    if let Ok(on_disk) = tokio::fs::read(&blob_path).await {
-        assert!(
-            delivered.starts_with(&on_disk),
-            "any bytes left on disk must be a prefix of the delivered chunks, got {} bytes",
-            on_disk.len()
-        );
-    }
+    assert!(
+        !tokio::fs::try_exists(&blob_path).await.unwrap_or(false),
+        "an aborted upload must leave no partition blob at the destination"
+    );
 
     assert!(
         s.container
@@ -457,17 +452,9 @@ async fn a_stream_that_errors_mid_upload_leaves_no_partition_row_yet_can_still_b
     let resp = s
         .agent_post_empty(&format!("/api/client/tasks/{task_id}/finished"), &mac)
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(image_status(s, image_id).await, ImageStatus::Ready);
-    assert!(
-        s.container
-            .image_repo
-            .get_partitions(image_id)
-            .await
-            .unwrap()
-            .is_empty(),
-        "the image is marked Ready despite the aborted upload leaving zero partition rows"
-    );
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(image_status(s, image_id).await, ImageStatus::Faulted);
+    assert!(image_error(s, image_id).await.is_some());
 }
 
 #[tokio::test]

@@ -5,7 +5,10 @@ use crate::{
 use imaged_shared::{MULTICAST_DATA_ADDRESS, MULTICAST_RVD_ADDRESS, get_multicast_port};
 use std::{
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tracing::{debug, error, info};
 
@@ -22,17 +25,28 @@ struct RunningMulticastTask {
     handle: JoinHandle<()>,
     /// Cancels the in-flight `do_work` for `id`, killing the udp-sender child.
     cancel: CancellationToken,
+    /// Set by `notify_new` under the slot lock when work arrives while this
+    /// worker is alive. The worker's exit path re-reads it under the same lock
+    /// and keeps looping instead of exiting, so a task enqueued during the
+    /// exit window is never dropped.
+    pending: bool,
+    generation: u64,
 }
 
-struct SlotGuard(Arc<Mutex<Option<RunningMulticastTask>>>);
+struct SlotGuard {
+    slot: Arc<Mutex<Option<RunningMulticastTask>>>,
+    generation: u64,
+}
 
 impl Drop for SlotGuard {
     fn drop(&mut self) {
-        let mut slot = match self.0.lock() {
+        let mut slot = match self.slot.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *slot = None;
+        if slot.as_ref().map(|r| r.generation) == Some(self.generation) {
+            *slot = None;
+        }
     }
 }
 
@@ -43,6 +57,7 @@ pub struct MulticastManager {
     image_service: Arc<ImageService>,
     interface: String,
     current: Arc<Mutex<Option<RunningMulticastTask>>>,
+    next_generation: Arc<AtomicU64>,
 }
 
 impl MulticastManager {
@@ -58,6 +73,7 @@ impl MulticastManager {
             image_service,
             interface,
             current: Arc::new(Mutex::new(None)),
+            next_generation: Arc::new(AtomicU64::new(0)),
         };
         // mark all tasks that are already started as error
         let error = String::from("Server stopped while task was running");
@@ -75,21 +91,18 @@ impl MulticastManager {
     pub fn notify_new(&self, task_id: i64) -> Result {
         let mut lock = self.current.lock().unwrap();
 
-        if lock
-            .as_ref()
-            .map(|r| r.handle.is_finished())
-            .unwrap_or(false)
-        {
-            *lock = None;
-        }
-
-        if lock.is_some() {
+        if let Some(r) = lock.as_mut() {
+            r.pending = true;
             return Ok(());
         }
 
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         let self_clone = self.clone();
         let handle = tokio::spawn(async move {
-            let _guard = SlotGuard(self_clone.current.clone());
+            let _guard = SlotGuard {
+                slot: self_clone.current.clone(),
+                generation,
+            };
             if let Err(e) = self_clone.handle_loop().await {
                 error!(err=%e, "multicast task handler failed");
             }
@@ -100,6 +113,8 @@ impl MulticastManager {
             // this id can be incorrect since the loop fetches the task for himself
             id: task_id,
             cancel: CancellationToken::new(),
+            pending: false,
+            generation,
         });
 
         Ok(())
@@ -120,7 +135,22 @@ impl MulticastManager {
     }
 
     async fn handle_loop(&self) -> Result {
-        while let Some(t) = self.task_repo.get_next_multicast().await? {
+        loop {
+            let Some(t) = self.task_repo.get_next_multicast().await? else {
+                // Empty queue: decide whether to exit under the same lock
+                // notify_new uses to publish work. A task enqueued while this
+                // worker was polling sets `pending`, which we observe here and
+                // keep looping instead of exiting.
+                let mut lock = self.current.lock().unwrap();
+                if let Some(r) = lock.as_mut()
+                    && r.pending
+                {
+                    r.pending = false;
+                    continue;
+                }
+                *lock = None;
+                return Ok(());
+            };
             // Fresh token for this task, published into the slot so `cancel`
             // can stop it. This is safe since the lock in notify_new is not
             // released until the handle is set.
@@ -152,8 +182,6 @@ impl MulticastManager {
                 }
             }
         }
-
-        Ok(())
     }
 
     async fn do_work(&self, task: Task) -> Result {
@@ -481,6 +509,7 @@ mod tests {
             image_service: Arc::new(ImageService::new("/tmp/imaged-mcmgr-unused".to_string())),
             interface: "lo".to_string(),
             current: Arc::new(Mutex::new(None)),
+            next_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -544,6 +573,8 @@ mod tests {
             id: 42,
             handle,
             cancel: token.clone(),
+            pending: false,
+            generation: 0,
         });
 
         manager.cancel(99);
@@ -745,7 +776,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "race: notify_new drops a task enqueued while a worker has already committed to exiting but its handle.is_finished() is still false"]
     async fn notify_new_does_not_drop_a_task_enqueued_while_a_worker_is_exiting() {
         let repo = Arc::new(FakeTaskRepo::new());
         repo.park_on_empty.store(true, Ordering::SeqCst);

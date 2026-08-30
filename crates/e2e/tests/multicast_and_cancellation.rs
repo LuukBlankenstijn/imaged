@@ -432,13 +432,14 @@ async fn deleting_a_host_with_only_terminal_tasks_cascades_its_task_rows() {
 }
 
 #[tokio::test]
-async fn deleting_an_image_with_an_active_task_is_rejected() {
+async fn deleting_an_image_cancels_its_active_task() {
     let s = harness::server().await;
 
     let mac = harness::unique_mac();
     let host = seed::host(s, &mac, DISK).await;
     let image_id = empty_image(s).await;
-    s.container
+    let task = s
+        .container
         .task_repo
         .create(TaskType::Deploy, vec![host.id], Some(image_id))
         .await
@@ -447,11 +448,20 @@ async fn deleting_an_image_with_an_active_task_is_rejected() {
     let resp = s
         .ui_post("/api/ui/images/delete", &json!({ "id": image_id }))
         .await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert!(s.container.image_repo.get_status(image_id).await.is_ok());
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(get_task(s, task.id).await.aggregate_state().is_cancelled());
+    assert!(
+        s.container
+            .image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != image_id),
+        "deleted image should not be listed"
+    );
 }
 
-#[ignore = "issues.md: removing an image does not cancel tasks that reference it"]
 #[tokio::test]
 async fn deleting_an_image_should_cancel_its_referencing_multicast_task() {
     let s = harness::server().await;
@@ -476,7 +486,6 @@ async fn deleting_an_image_should_cancel_its_referencing_multicast_task() {
         .create(TaskType::Multicast, vec![host.id], Some(image_id))
         .await
         .unwrap();
-    s.container.multicast_manager.notify_new(task.id).unwrap();
 
     let resp = s
         .ui_post("/api/ui/images/delete", &json!({ "id": image_id }))

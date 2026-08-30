@@ -27,6 +27,12 @@ pub async fn mark_finished(task_id: i64) -> Result {
     if task.task_type == TaskType::Capture
         && let Some(image_id) = task.image_id
     {
+        if image_repo.get_partitions(image_id).await?.is_empty() {
+            let error = "Capture finished without any partitions";
+            image_repo.mark_faulted(image_id, error).await?;
+            task_repo.mark_failed(task.id, host_id, error).await?;
+            return Err(AppError::FailedPrecondition(error.to_string()));
+        }
         image_repo.mark_finished(image_id).await?;
     }
     task_repo.mark_finished(task.id, host_id).await?;

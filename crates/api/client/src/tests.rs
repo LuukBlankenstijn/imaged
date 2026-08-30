@@ -196,6 +196,7 @@ async fn agent_api_contracts() {
     a_missing_malformed_or_unknown_agent_mac_is_handled().await;
     a_host_without_an_active_task_is_a_bad_request_not_a_not_found(&c).await;
     marking_a_task_finished_updates_rows_and_image(&c).await;
+    a_capture_finished_without_partitions_faults_the_image(&c).await;
     marking_a_task_failed_stores_the_error_and_faults_a_capture_image(&c).await;
     downloading_the_partition_table_starts_the_host_row_and_is_idempotent(&c).await;
     downloading_the_partition_table_rejects_non_restore_tasks_and_unready_images(&c).await;
@@ -368,12 +369,25 @@ async fn marking_a_task_finished_updates_rows_and_image(c: &DIContainer) {
         c.image_repo.get_status(cap_image.id).await.unwrap(),
         ImageStatus::Empty
     );
+    c.image_repo
+        .save_partition(cap_image.id, 1, "ext4", 4_096)
+        .await
+        .unwrap();
     let resp = post(&format!("/api/client/tasks/{cap_task}/finished"), &cap_mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         c.image_repo.get_status(cap_image.id).await.unwrap(),
         ImageStatus::Ready
     );
+    let captured = c
+        .image_repo
+        .get_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.id == cap_image.id)
+        .unwrap();
+    assert!(captured.captured_at.is_some());
     let task = c.task_repo.get(cap_task).await.unwrap();
     assert_eq!(task.hosts[0].state, TaskState::Done);
     assert_eq!(task.aggregate_state(), TaskState::Done);
@@ -453,6 +467,26 @@ async fn marking_a_task_finished_updates_rows_and_image(c: &DIContainer) {
         c.task_repo.get(multi).await.unwrap().aggregate_state(),
         TaskState::Done
     );
+}
+
+async fn a_capture_finished_without_partitions_faults_the_image(c: &DIContainer) {
+    let cap_mac = next_mac();
+    let cap_image = c
+        .image_repo
+        .create_image(next_name("finish-empty-cap"))
+        .await
+        .unwrap();
+    let (_ch, cap_task) = host_task(c, &cap_mac, TaskType::Capture, Some(cap_image.id)).await;
+    let resp = post(&format!("/api/client/tasks/{cap_task}/finished"), &cap_mac).await;
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        c.image_repo.get_status(cap_image.id).await.unwrap(),
+        ImageStatus::Faulted
+    );
+    let task = c.task_repo.get(cap_task).await.unwrap();
+    assert_eq!(task.hosts[0].state, TaskState::Failed);
+    assert_eq!(task.aggregate_state(), TaskState::Failed);
+    assert!(task.hosts[0].error.is_some());
 }
 
 async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image(c: &DIContainer) {
@@ -1017,7 +1051,6 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
 }
 
 #[tokio::test]
-#[ignore = "SqliteImageRepository::save_partition returns image_id in the partition_number field, so upload_partition_data's response body reports the wrong partition_number"]
 async fn save_partition_returns_the_partition_number_it_was_given() {
     let (c, _guard) = container().await;
     let image = c

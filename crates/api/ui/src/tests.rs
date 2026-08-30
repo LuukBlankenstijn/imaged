@@ -292,8 +292,8 @@ async fn create_image_creates_image_and_capture_task() {
 }
 
 #[tokio::test]
-async fn delete_image_ok_without_tasks_err_with_active_capture() {
-    let (c, _guard) = container().await;
+async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
+    let (c, guard) = container().await;
 
     // No tasks: deletion succeeds.
     let free = c.image_repo.create_image("free".into()).await.unwrap();
@@ -301,25 +301,47 @@ async fn delete_image_ok_without_tasks_err_with_active_capture() {
         .await
         .unwrap();
 
-    // Active capture task: deletion is refused.
-    let host = c
-        .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:0a".into(), 1_000_000, None)
-        .await
-        .unwrap();
-    let busy = c.image_repo.create_image("busy".into()).await.unwrap();
-    c.task_repo
-        .create(TaskType::Capture, vec![host.id], Some(busy.id))
-        .await
-        .unwrap();
+    for (ttype, mac, name) in [
+        (TaskType::Deploy, "aa:bb:cc:dd:ee:0b", "deploying"),
+        (TaskType::Capture, "aa:bb:cc:dd:ee:0c", "capturing"),
+    ] {
+        let host = c
+            .host_repo
+            .upsert_host(mac.into(), 1_000_000, None)
+            .await
+            .unwrap();
+        let img = c.image_repo.create_image(name.into()).await.unwrap();
+        let task = c
+            .task_repo
+            .create(ttype, vec![host.id], Some(img.id))
+            .await
+            .unwrap();
+        c.image_service
+            .save_partition_table(img.id, &[1u8, 2, 3, 4])
+            .await
+            .unwrap();
+        let dir = guard.0.join("images").join(format!("img-{}", img.id));
+        assert!(dir.exists());
+        let mut conn = c.host_registry.register(host.id).unwrap();
 
-    let err = core::di::scope(c.clone(), crate::images::delete_image(busy.id))
-        .await
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("active tasks"),
-        "unexpected error: {err}"
-    );
+        core::di::scope(c.clone(), crate::images::delete_image(img.id))
+            .await
+            .unwrap();
+
+        assert!(
+            c.task_repo.get(task.id).await.unwrap().aggregate_state().is_cancelled(),
+            "{ttype:?} task referencing a deleted image should be cancelled"
+        );
+        match conn.receiver.try_recv() {
+            Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
+            other => panic!("registered host expected Cancel event, got {other:?}"),
+        }
+        assert!(!dir.exists(), "image data directory should be cleared");
+        assert!(
+            c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != img.id),
+            "soft-deleted image should not be listed"
+        );
+    }
 }
 
 #[tokio::test]
@@ -464,7 +486,7 @@ async fn ui_api_contracts() {
     deleting_a_busy_host_is_a_bad_request(&c).await;
     cancelling_a_finished_task_is_a_bad_request(&c).await;
     retrying_a_pending_task_is_a_bad_request(&c).await;
-    deleting_a_capturing_image_is_a_bad_request(&c).await;
+    deleting_a_capturing_image_cancels_its_task_and_succeeds(&c).await;
     multicast_creates_a_task_for_every_host(&c).await;
     waking_hosts_is_accepted(&c).await;
 }
@@ -565,14 +587,15 @@ async fn retrying_a_pending_task_is_a_bad_request(c: &DIContainer) {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-async fn deleting_a_capturing_image_is_a_bad_request(c: &DIContainer) {
+async fn deleting_a_capturing_image_cancels_its_task_and_succeeds(c: &DIContainer) {
     let host = c
         .host_repo
         .upsert_host("aa:bb:cc:dd:ee:15".into(), 1_000_000, None)
         .await
         .unwrap();
     let image = c.image_repo.create_image("busy".into()).await.unwrap();
-    c.task_repo
+    let task = c
+        .task_repo
         .create(TaskType::Capture, vec![host.id], Some(image.id))
         .await
         .unwrap();
@@ -582,8 +605,15 @@ async fn deleting_a_capturing_image_is_a_bad_request(c: &DIContainer) {
         serde_json::json!({ "id": image.id }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(c.image_repo.get_status(image.id).await.is_ok());
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        c.task_repo.get(task.id).await.unwrap().aggregate_state().is_cancelled(),
+        "capture task should be cancelled when its image is deleted"
+    );
+    assert!(
+        c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != image.id),
+        "deleted image should not be listed"
+    );
 }
 
 async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
@@ -899,7 +929,6 @@ async fn deleting_an_image_soft_deletes_the_row_and_clears_its_on_disk_directory
 }
 
 #[tokio::test]
-#[ignore = "issues.md: removing an image does not cancel tasks that reference it"]
 async fn removing_an_image_cancels_the_multicast_tasks_that_reference_it() {
     let (c, _guard) = container().await;
     let host = c
@@ -914,14 +943,24 @@ async fn removing_an_image_cancels_the_multicast_tasks_that_reference_it() {
         .create(TaskType::Multicast, vec![host.id], Some(img.id))
         .await
         .unwrap();
-    c.multicast_manager.notify_new(task.id).unwrap();
+    let mut conn = c.host_registry.register(host.id).unwrap();
 
-    let _ = core::di::scope(c.clone(), crate::images::delete_image(img.id)).await;
+    core::di::scope(c.clone(), crate::images::delete_image(img.id))
+        .await
+        .unwrap();
 
     let after = c.task_repo.get(task.id).await.unwrap();
     assert!(
         after.aggregate_state().is_cancelled(),
         "deleting an image should cancel the multicast tasks that reference it"
+    );
+    match conn.receiver.try_recv() {
+        Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
+        other => panic!("registered host expected Cancel event, got {other:?}"),
+    }
+    assert!(
+        c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != img.id),
+        "soft-deleted image should not be listed"
     );
 }
 

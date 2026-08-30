@@ -85,11 +85,11 @@ impl domain::host::HostRepository for SqliteHostRepository {
         let host_rows = match group_id {
             Some(group_id) => sqlx::query_as!(
                 HostRow,
-                r#"SELECT h.id as "id!", h.name, h.mac, h.disk_size_bytes, h.ip FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ?"#,
+                r#"SELECT h.id as "id!", h.name, h.mac, h.disk_size_bytes, h.ip FROM hosts AS h INNER JOIN group_hosts gh on gh.host_id = id AND  gh.group_id = ? ORDER BY h.name"#,
                 group_id
             ).fetch_all(&self.pool)
             .await?,
-            None => sqlx::query_as!(HostRow, "SELECT * FROM hosts").fetch_all(&self.pool)
+            None => sqlx::query_as!(HostRow, "SELECT * FROM hosts ORDER BY name").fetch_all(&self.pool)
             .await?,
         };
         Ok(host_rows.into_iter().map(|row| row.into()).collect())
@@ -266,25 +266,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_all_returns_every_host_but_the_sql_has_no_order_by_so_order_is_unspecified() {
+    async fn get_all_returns_hosts_ordered_by_name() {
         let (c, _guard) = container().await;
-        let a = c
+        let charlie = c
             .host_repo
-            .upsert_host("aa:bb:cc:dd:ee:05".into(), 1, None)
+            .upsert_host("cc:bb:cc:dd:ee:05".into(), 1, None)
             .await
             .unwrap();
-        let b = c
+        let alpha = c
             .host_repo
             .upsert_host("aa:bb:cc:dd:ee:06".into(), 2, None)
             .await
             .unwrap();
-        let d = c
+        let bravo = c
             .host_repo
-            .upsert_host("aa:bb:cc:dd:ee:07".into(), 3, None)
+            .upsert_host("bb:bb:cc:dd:ee:07".into(), 3, None)
             .await
             .unwrap();
 
-        let mut got: Vec<i64> = c
+        let got: Vec<i64> = c
             .host_repo
             .get_all(None)
             .await
@@ -292,10 +292,7 @@ mod tests {
             .into_iter()
             .map(|h| h.id)
             .collect();
-        got.sort();
-        let mut expected = vec![a.id, b.id, d.id];
-        expected.sort();
-        assert_eq!(got, expected);
+        assert_eq!(got, vec![alpha.id, bravo.id, charlie.id]);
     }
 
     #[tokio::test]

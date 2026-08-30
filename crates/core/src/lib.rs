@@ -27,7 +27,9 @@ pub const DEAD_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
 pub async fn setup_database(db_url: &str) -> Result<SqlitePool, Box<dyn std::error::Error>> {
     let sqlite_options = SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
     let sqlite_pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(sqlite_options)

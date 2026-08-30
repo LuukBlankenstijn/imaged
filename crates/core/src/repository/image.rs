@@ -116,20 +116,23 @@ impl ImageRepository for SqliteImageRepository {
         let mut image_ids = Vec::new();
 
         for row in rows {
-            let entry = images_map.entry(row.image_id).or_insert_with(|| {
-                image_ids.push(row.image_id);
-                Image::new(
-                    row.image_id,
-                    row.image_name,
-                    row.captured_at,
-                    ImageStatus::from_string(row.image_status)
-                        .expect("image status error, should never happen"),
-                    row.error,
-                    Vec::new(),
-                )
-            });
+            let entry = match images_map.get_mut(&row.image_id) {
+                Some(entry) => entry,
+                None => {
+                    let id = row.image_id;
+                    image_ids.push(id);
+                    let image = Image::new(
+                        id,
+                        row.image_name,
+                        row.captured_at,
+                        ImageStatus::from_string(row.image_status)?,
+                        row.error,
+                        Vec::new(),
+                    );
+                    images_map.entry(id).or_insert(image)
+                }
+            };
 
-            // 3. Add partition if it exists (the LEFT JOIN will yield nulls for p_* if empty)
             if let (Some(p_id), Some(p_num), Some(p_fstype), Some(p_size)) =
                 (row.p_id, row.p_num, row.p_fstype, row.p_size)
             {
@@ -161,7 +164,11 @@ impl ImageRepository for SqliteImageRepository {
                     (image_id, partition_number, fstype, size_bytes) 
                 VALUES 
                     (?,?,?,?)
-                RETURNING *
+                RETURNING
+                    id as "id!: i64",
+                    partition_number,
+                    fstype,
+                    size_bytes
             "#,
             image_id,
             partition_number,
@@ -171,9 +178,8 @@ impl ImageRepository for SqliteImageRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(ImagePartition::new(
-            // for some reason id is an option
-            partition.id.unwrap(),
-            partition.image_id,
+            partition.id,
+            partition.partition_number,
             partition.fstype,
             partition.size_bytes as u64,
         ))
@@ -193,12 +199,14 @@ impl ImageRepository for SqliteImageRepository {
 
     async fn start_capture(&self, id: i64) -> Result {
         let status = ImageStatus::Capturing.to_string();
+        let mut tx = self.pool.begin().await?;
         sqlx::query!("DELETE FROM image_partitions WHERE image_id = ?", id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         sqlx::query!("UPDATE images SET status = ? WHERE id = ?", status, id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -232,7 +240,12 @@ impl ImageRepository for SqliteImageRepository {
 
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>> {
         Ok(sqlx::query!(
-            "SELECT * FROM image_partitions WHERE image_id = ? ORDER BY partition_number",
+            r#"SELECT
+                id as "id!: i64",
+                partition_number,
+                fstype,
+                size_bytes
+            FROM image_partitions WHERE image_id = ? ORDER BY partition_number"#,
             id
         )
         .fetch_all(&self.pool)
@@ -240,8 +253,7 @@ impl ImageRepository for SqliteImageRepository {
         .into_iter()
         .map(|partition| {
             ImagePartition::new(
-                // for some reason id is an option
-                partition.id.unwrap(),
+                partition.id,
                 partition.partition_number,
                 partition.fstype,
                 partition.size_bytes as u64,
@@ -260,7 +272,6 @@ mod tests {
 
     use crate::di::DIContainer;
     use crate::domain::image::ImageStatus;
-    use crate::domain::task::{TaskState, TaskType};
     use crate::error::AppError;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
@@ -399,12 +410,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_partition_return_value_puts_image_id_into_the_partition_number_field() {
+    async fn save_partition_return_value_reports_the_partition_number_it_was_given() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         let returned = c.image_repo.save_partition(img.id, 7, "ext4", 1).await.unwrap();
-        assert_eq!(returned.partition_number, img.id);
-        assert_ne!(returned.partition_number, 7);
+        assert_eq!(returned.partition_number, 7);
         let stored = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(stored[0].partition_number, 7);
     }
@@ -452,8 +462,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic(expected = "image status error")]
-    async fn get_all_panics_when_an_image_row_has_an_unexpected_status_string() {
+    async fn get_all_returns_an_internal_error_when_an_image_row_has_an_unexpected_status_string() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         let pool = raw_pool(&_g).await;
@@ -463,7 +472,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let _ = c.image_repo.get_all().await;
+        let err = c.image_repo.get_all().await.unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)), "got {err:?}");
     }
 
     #[tokio::test]
@@ -529,7 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_capture_deletes_existing_partitions_and_flips_status_to_capturing() {
+    async fn start_capture_atomically_clears_partitions_and_flips_status_to_capturing() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.save_partition(img.id, 1, "ext4", 10).await.unwrap();
@@ -540,6 +550,9 @@ mod tests {
 
         assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Capturing);
         assert!(c.image_repo.get_partitions(img.id).await.unwrap().is_empty());
+        let reloaded = find_in_get_all(&c, img.id).await.unwrap();
+        assert_eq!(reloaded.status, ImageStatus::Capturing);
+        assert!(reloaded.partitions.is_empty());
     }
 
     #[tokio::test]
@@ -569,29 +582,4 @@ mod tests {
         assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Ready);
     }
 
-    #[tokio::test]
-    #[ignore = "issues.md: removing an image does not cancel tasks that reference it"]
-    async fn deleting_an_image_should_cancel_tasks_that_reference_it() {
-        let (c, _g) = container().await;
-        let host = c
-            .host_repo
-            .upsert_host("aa:bb:cc:dd:ee:01".into(), 1_000_000, None)
-            .await
-            .unwrap();
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
-        let task = c
-            .task_repo
-            .create(TaskType::Deploy, vec![host.id], Some(img.id))
-            .await
-            .unwrap();
-        assert_eq!(task.aggregate_state(), TaskState::Pending);
-
-        c.image_repo.delete_image(img.id).await.unwrap();
-
-        let active = c.task_repo.get_active_by_image(img.id).await.unwrap();
-        assert!(
-            active.is_empty(),
-            "deleting an image should leave no active tasks referencing it"
-        );
-    }
 }

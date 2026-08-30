@@ -5,6 +5,8 @@ use futures::Stream;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[derive(Constructor, Debug)]
 pub struct ImageService {
     images_path: String,
@@ -14,7 +16,11 @@ impl ImageService {
     pub async fn clear_image_data(&self, image_id: i64) -> Result<()> {
         let relative_dir = format!("img-{image_id}");
         let dir = format!("{}/{}", self.images_path, relative_dir);
-        if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+        let exists = tokio::fs::try_exists(&dir).await.map_err(|e| {
+            tracing::error!("failed to check image dir {dir}: {e}");
+            AppError::Internal(e.to_string())
+        })?;
+        if exists {
             tokio::fs::remove_dir_all(&dir).await.map_err(|e| {
                 tracing::error!("failed to clean image dir: {e}");
                 AppError::Internal(e.to_string())
@@ -71,23 +77,58 @@ impl ImageService {
     where
         S: Stream<Item = std::result::Result<Bytes, AppError>> + Unpin + Send,
     {
-        let file_path = self.get_partition_path(image_id, partition_number);
-        let mut file = tokio::fs::File::create(&file_path).await.map_err(|e| {
-            tracing::error!("failed to create partition file {file_path}: {e}");
+        let dir = format!("{}/img-{}", self.images_path, image_id);
+        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
+            tracing::error!("failed to create image dir {dir}: {e}");
             AppError::Internal(e.to_string())
         })?;
-        while let Some(chunk) = data_stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                tracing::error!(
-                    "error reading stream for image {image_id} partition {partition_number}: {e}"
-                );
-                AppError::InvalidArgument(format!("error reading stream: {e}"))
+
+        let file_path = self.get_partition_path(image_id, partition_number);
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = format!(
+            "{}/.p-{}.pcl.tmp.{}.{}",
+            dir,
+            partition_number,
+            std::process::id(),
+            seq
+        );
+
+        let write_result = async {
+            let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
+                tracing::error!("failed to create temp partition file {tmp_path}: {e}");
+                AppError::Internal(e.to_string())
             })?;
-            file.write_all(&chunk).await.map_err(|e| {
-                tracing::error!("failed to write chunk to {file_path}: {e}");
-                AppError::Internal("failed to write stream chunk to file".to_string())
+            while let Some(chunk) = data_stream.next().await {
+                let chunk = chunk.map_err(|e| {
+                    tracing::error!(
+                        "error reading stream for image {image_id} partition {partition_number}: {e}"
+                    );
+                    AppError::InvalidArgument(format!("error reading stream: {e}"))
+                })?;
+                file.write_all(&chunk).await.map_err(|e| {
+                    tracing::error!("failed to write chunk to {tmp_path}: {e}");
+                    AppError::Internal("failed to write stream chunk to file".to_string())
+                })?;
+            }
+            file.flush().await.map_err(|e| {
+                tracing::error!("failed to flush {tmp_path}: {e}");
+                AppError::Internal(e.to_string())
             })?;
+            Ok::<(), AppError>(())
         }
+        .await;
+
+        if let Err(e) = write_result {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(e);
+        }
+
+        if let Err(e) = tokio::fs::rename(&tmp_path, &file_path).await {
+            tracing::error!("failed to rename {tmp_path} to {file_path}: {e}");
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(AppError::Internal(e.to_string()));
+        }
+
         Ok(())
     }
 
@@ -183,8 +224,18 @@ mod tests {
         assert_eq!(written, b"aaaabbbbbbcc");
     }
 
+    async fn no_temp_files_remain(svc: &ImageService, image_id: i64) {
+        let mut entries = tokio::fs::read_dir(format!("{}/img-{}", svc.images_path, image_id))
+            .await
+            .unwrap();
+        while let Some(e) = entries.next_entry().await.unwrap() {
+            let name = e.file_name().into_string().unwrap();
+            assert!(!name.contains("tmp"), "leftover temp file: {name}");
+        }
+    }
+
     #[tokio::test]
-    async fn save_partition_data_leaves_a_truncated_file_on_disk_when_the_stream_errors_midway() {
+    async fn save_partition_data_leaves_no_partial_artifact_when_the_stream_errors_midway() {
         let (svc, _d) = service();
         svc.save_partition_table(5, b"table").await.unwrap();
         let chunks: Vec<std::result::Result<Bytes, AppError>> = vec![
@@ -196,8 +247,43 @@ mod tests {
             .save_partition_data(5, 1, futures::stream::iter(chunks))
             .await;
         assert!(res.is_err());
-        let partial = tokio::fs::read(svc.get_partition_path(5, 1)).await.unwrap();
-        assert_eq!(partial, b"good1good2");
+        assert!(
+            !tokio::fs::try_exists(svc.get_partition_path(5, 1)).await.unwrap(),
+            "destination partition file must not exist after a mid-stream error"
+        );
+        no_temp_files_remain(&svc, 5).await;
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_upload_cannot_clobber_a_previously_good_partition_file() {
+        let (svc, _d) = service();
+        let good = vec![Ok(Bytes::from_static(b"original-good-bytes"))];
+        svc.save_partition_data(9, 1, futures::stream::iter(good))
+            .await
+            .unwrap();
+
+        let chunks: Vec<std::result::Result<Bytes, AppError>> = vec![
+            Ok(Bytes::from_static(b"partial")),
+            Err(AppError::Internal("network drop".to_string())),
+        ];
+        let res = svc
+            .save_partition_data(9, 1, futures::stream::iter(chunks))
+            .await;
+        assert!(res.is_err());
+        let back = tokio::fs::read(svc.get_partition_path(9, 1)).await.unwrap();
+        assert_eq!(back, b"original-good-bytes");
+        no_temp_files_remain(&svc, 9).await;
+    }
+
+    #[tokio::test]
+    async fn save_partition_data_creates_the_image_dir_when_called_before_the_parttable() {
+        let (svc, _d) = service();
+        let chunks = vec![Ok(Bytes::from_static(b"zzzz"))];
+        svc.save_partition_data(11, 1, futures::stream::iter(chunks))
+            .await
+            .unwrap();
+        let written = tokio::fs::read(svc.get_partition_path(11, 1)).await.unwrap();
+        assert_eq!(written, b"zzzz");
     }
 
     #[tokio::test]

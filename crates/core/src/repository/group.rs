@@ -50,7 +50,7 @@ impl GroupRepository for SqliteGroupRepository {
     }
 
     async fn get_all(&self) -> Result<Vec<Group>> {
-        Ok(sqlx::query!("SELECT * FROM groups")
+        Ok(sqlx::query!("SELECT * FROM groups ORDER BY name")
             .fetch_all(&self.pool)
             .await?
             .into_iter()
@@ -169,13 +169,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_all_returns_every_group_but_the_sql_has_no_order_by() {
+    async fn get_all_returns_groups_ordered_by_name() {
         let (c, _guard) = container().await;
-        let x = c.group_repo.create_group("x", &[]).await.unwrap();
-        let y = c.group_repo.create_group("y", &[]).await.unwrap();
-        let z = c.group_repo.create_group("z", &[]).await.unwrap();
+        let gamma = c.group_repo.create_group("gamma", &[]).await.unwrap();
+        let alpha = c.group_repo.create_group("alpha", &[]).await.unwrap();
+        let beta = c.group_repo.create_group("beta", &[]).await.unwrap();
 
-        let mut got: Vec<i64> = c
+        let got: Vec<i64> = c
             .group_repo
             .get_all()
             .await
@@ -183,10 +183,7 @@ mod tests {
             .into_iter()
             .map(|g| g.id)
             .collect();
-        got.sort();
-        let mut expected = vec![x.id, y.id, z.id];
-        expected.sort();
-        assert_eq!(got, expected);
+        assert_eq!(got, vec![alpha.id, beta.id, gamma.id]);
     }
 
     #[tokio::test]

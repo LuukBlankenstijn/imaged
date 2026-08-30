@@ -6,8 +6,22 @@
 /// receiver. Only one multicast session runs at a time (the manager is
 /// single-slot and the multicast addresses are fixed), so a fixed base is safe.
 /// slot 0 is the partition table; slot N is partition number N.
+///
+/// Valid slots `0..=MAX_MULTICAST_SLOT` map to the even ports
+/// `MULTICAST_PORT_BASE..=65534`, all within the dynamic/ephemeral range.
+/// Any slot outside that domain (negative, or beyond what a GPT partition
+/// number can ever be) is out of contract; it returns the odd sentinel
+/// `u16::MAX`, which no valid slot can produce, so a bad slot can never
+/// silently alias another file's port.
+pub const MULTICAST_PORT_BASE: u16 = 50_000;
+pub const MAX_MULTICAST_SLOT: i64 = ((u16::MAX - MULTICAST_PORT_BASE - 1) / 2) as i64;
+
 pub fn get_multicast_port(slot: i64) -> u16 {
-    50_000 + (slot * 2) as u16
+    if (0..=MAX_MULTICAST_SLOT).contains(&slot) {
+        MULTICAST_PORT_BASE + (slot as u16) * 2
+    } else {
+        u16::MAX
+    }
 }
 
 pub const MULTICAST_RVD_ADDRESS: &str = "239.16.16.16";
@@ -37,14 +51,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "overflow")]
-    fn a_slot_large_enough_to_overflow_the_u16_port_panics() {
-        let _ = get_multicast_port(8_000);
+    fn out_of_range_slots_return_the_reserved_sentinel_port_never_a_valid_slots_port() {
+        assert_eq!(get_multicast_port(MAX_MULTICAST_SLOT + 1), u16::MAX);
+        assert_eq!(get_multicast_port(8_000), u16::MAX);
+        assert_eq!(get_multicast_port(i64::MAX), u16::MAX);
+        assert_eq!(get_multicast_port(-1), u16::MAX);
+        assert_eq!(u16::MAX % 2, 1);
+        assert_eq!(get_multicast_port(MAX_MULTICAST_SLOT) % 2, 0);
     }
 
     #[test]
-    fn a_slot_that_wraps_the_u16_cast_collides_with_the_partition_table_but_is_unreachable_from_real_partition_numbers()
-     {
-        assert_eq!(get_multicast_port(32_768), get_multicast_port(0));
+    fn a_slot_that_would_wrap_the_u16_cast_no_longer_collides_with_the_partition_table() {
+        assert_ne!(get_multicast_port(32_768), get_multicast_port(0));
     }
 }
