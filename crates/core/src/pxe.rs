@@ -96,3 +96,101 @@ pub fn router() -> Router {
         .route("/boot/vmlinuz", get(serve_vmlinuz))
         .route("/boot/initramfs.cpio.gz", get(serve_initramfs))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    static VMLINUZ_ASSET: &[u8] = include_bytes!("../../../assets/vmlinuz");
+    static INITRAMFS_ASSET: &[u8] = include_bytes!("../../../assets/initramfs.cpio.gz");
+
+    async fn get(uri: &str) -> Response<Body> {
+        router()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn manifest_body(uri: &str) -> String {
+        let resp = get(uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn assert_common_ipxe_invariants(script: &str) {
+        assert!(script.starts_with("#!ipxe\n"), "script: {script}");
+        assert!(
+            script.lines().any(|l| l.trim() == "boot"),
+            "missing boot line: {script}"
+        );
+        assert!(script.contains("/boot/vmlinuz"), "missing kernel url: {script}");
+        assert!(
+            script.contains("/boot/initramfs.cpio.gz"),
+            "missing initramfs url: {script}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_selects_the_vm_console_line_for_a_qemu_product() {
+        let script = manifest_body("/boot/manifest.ipxe?product=QEMU%20Standard").await;
+        assert_common_ipxe_invariants(&script);
+        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+    }
+
+    #[tokio::test]
+    async fn manifest_selects_the_vm_console_line_for_a_standard_pc_product() {
+        let script = manifest_body("/boot/manifest.ipxe?product=Standard%20PC%20(i440FX)").await;
+        assert_common_ipxe_invariants(&script);
+        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+    }
+
+    #[tokio::test]
+    async fn manifest_selects_the_vm_console_line_for_a_qemu_manufacturer() {
+        let script = manifest_body("/boot/manifest.ipxe?manufacturer=QEMU").await;
+        assert_common_ipxe_invariants(&script);
+        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+    }
+
+    #[tokio::test]
+    async fn manifest_selects_the_physical_console_line_by_default() {
+        let script = manifest_body("/boot/manifest.ipxe?product=Dell%20Inc.").await;
+        assert_common_ipxe_invariants(&script);
+        assert!(script.contains("console=ttyS0,115200n8 console=tty0"), "{script}");
+    }
+
+    #[tokio::test]
+    async fn serve_vmlinuz_returns_octet_stream_with_content_length_matching_the_embedded_asset() {
+        let resp = get("/boot/vmlinuz").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_LENGTH).unwrap(),
+            VMLINUZ_ASSET.len().to_string().as_str()
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.len(), VMLINUZ_ASSET.len());
+    }
+
+    #[tokio::test]
+    async fn serve_initramfs_returns_gzip_with_content_length_matching_the_embedded_asset() {
+        let resp = get("/boot/initramfs.cpio.gz").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/gzip"
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_LENGTH).unwrap(),
+            INITRAMFS_ASSET.len().to_string().as_str()
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.len(), INITRAMFS_ASSET.len());
+    }
+}

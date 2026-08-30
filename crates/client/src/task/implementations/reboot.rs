@@ -4,7 +4,7 @@ use crate::{sys, task::implementations::ClientTaskExt};
 
 #[derive(Clone, Display, Constructor)]
 #[display("reboot task")]
-pub(crate) struct RebootTask {
+pub struct RebootTask {
     task_id: i64,
 }
 

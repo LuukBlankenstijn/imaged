@@ -2395,6 +2395,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-compression",
+ "axum",
  "clap",
  "derive_more",
  "dioxus-fullstack",
@@ -2436,6 +2437,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "imaged-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "axum",
+ "bytes",
+ "dioxus-server",
+ "futures",
+ "http-body-util",
+ "imaged-api-client",
+ "imaged-api-ui",
+ "imaged-core",
+ "imaged-shared",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tower",
+]
+
+[[package]]
 name = "imaged-server"
 version = "0.1.0"
 dependencies = [
@@ -2458,10 +2482,12 @@ dependencies = [
  "axum",
  "derive_more",
  "dioxus-fullstack",
+ "imaged-shared",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

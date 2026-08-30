@@ -127,3 +127,219 @@ impl From<sqlx::Error> for AppError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg() -> String {
+        "the message".to_string()
+    }
+
+    #[cfg(feature = "serverfn")]
+    #[test]
+    fn as_status_code_maps_every_variant_exhaustively() {
+        use dioxus_fullstack::AsStatusCode;
+        use dioxus_fullstack::http::StatusCode;
+        for err in [
+            AppError::NotFound(msg()),
+            AppError::InvalidArgument(msg()),
+            AppError::AlreadyExists(msg()),
+            AppError::FailedPrecondition(msg()),
+            AppError::Internal(msg()),
+            AppError::Database(msg()),
+        ] {
+            let expected = match &err {
+                AppError::NotFound(_) => StatusCode::NOT_FOUND,
+                AppError::InvalidArgument(_) => StatusCode::BAD_REQUEST,
+                AppError::AlreadyExists(_) => StatusCode::BAD_REQUEST,
+                AppError::FailedPrecondition(_) => StatusCode::PRECONDITION_FAILED,
+                AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            assert_eq!(err.as_status_code(), expected, "wrong status for {err:?}");
+        }
+    }
+
+    #[test]
+    fn display_renders_the_documented_prefix_for_every_variant() {
+        assert_eq!(AppError::NotFound(msg()).to_string(), "not found: the message");
+        assert_eq!(
+            AppError::InvalidArgument(msg()).to_string(),
+            "invalid argument: the message"
+        );
+        assert_eq!(
+            AppError::AlreadyExists(msg()).to_string(),
+            "already exists: the message"
+        );
+        assert_eq!(
+            AppError::FailedPrecondition(msg()).to_string(),
+            "failed precondition: the message"
+        );
+        assert_eq!(AppError::Internal(msg()).to_string(), "internal: the message");
+        assert_eq!(AppError::Database(msg()).to_string(), "database: the message");
+    }
+
+    #[test]
+    fn serde_uses_external_tagging_and_round_trips() {
+        let json = serde_json::to_string(&AppError::NotFound("boom".into())).unwrap();
+        assert_eq!(json, r#"{"NotFound":"boom"}"#);
+        let back: AppError = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AppError::NotFound(s) if s == "boom"));
+
+        let json = serde_json::to_string(&AppError::FailedPrecondition("no".into())).unwrap();
+        assert_eq!(json, r#"{"FailedPrecondition":"no"}"#);
+        let back: AppError = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, AppError::FailedPrecondition(s) if s == "no"));
+    }
+
+    #[cfg(feature = "axum-error")]
+    async fn body_string(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[cfg(feature = "axum-error")]
+    #[tokio::test]
+    async fn into_response_exposes_client_errors_verbatim() {
+        use axum::response::IntoResponse;
+        for (err, status) in [
+            (
+                AppError::NotFound("host 5".into()),
+                axum::http::StatusCode::NOT_FOUND,
+            ),
+            (
+                AppError::InvalidArgument("host 5".into()),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            (
+                AppError::AlreadyExists("host 5".into()),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            (
+                AppError::FailedPrecondition("host 5".into()),
+                axum::http::StatusCode::PRECONDITION_FAILED,
+            ),
+        ] {
+            let resp = err.into_response();
+            assert_eq!(resp.status(), status);
+            assert_eq!(body_string(resp).await, r#"{"error":"host 5"}"#);
+        }
+    }
+
+    #[cfg(feature = "axum-error")]
+    #[tokio::test]
+    async fn into_response_hides_internal_and_database_detail_from_clients() {
+        use axum::response::IntoResponse;
+        for err in [
+            AppError::Internal("secret connection string".into()),
+            AppError::Database("secret connection string".into()),
+        ] {
+            let resp = err.into_response();
+            assert_eq!(resp.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            let body = body_string(resp).await;
+            assert_eq!(body, r#"{"error":"An internal server error occurred"}"#);
+            assert!(!body.contains("secret connection string"));
+        }
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    async fn mem_pool() -> sqlx::SqlitePool {
+        use sqlx::sqlite::SqlitePoolOptions;
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap()
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    #[tokio::test]
+    async fn row_not_found_maps_to_not_found() {
+        let pool = mem_pool().await;
+        let err = match sqlx::query("SELECT 1 WHERE 1 = 0").fetch_one(&pool).await {
+            Ok(_) => panic!("expected RowNotFound"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, sqlx::Error::RowNotFound));
+        assert!(matches!(AppError::from(err), AppError::NotFound(_)));
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    #[tokio::test]
+    async fn sqlite_unique_violation_maps_to_database_because_23505_is_a_postgres_only_sqlstate() {
+        let pool = mem_pool().await;
+        sqlx::query("CREATE TABLE t (name TEXT UNIQUE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO t (name) VALUES ('a')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = sqlx::query("INSERT INTO t (name) VALUES ('a')")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+
+        let code = match &err {
+            sqlx::Error::Database(db) => db.code().map(|c| c.into_owned()),
+            other => panic!("expected a database error, got {other:?}"),
+        };
+        assert_eq!(code.as_deref(), Some("2067"));
+        assert!(matches!(AppError::from(err), AppError::Database(_)));
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    #[tokio::test]
+    async fn sqlite_foreign_key_violation_maps_to_database_because_23503_is_a_postgres_only_sqlstate()
+     {
+        let pool = mem_pool().await;
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = sqlx::query("INSERT INTO child (parent_id) VALUES (999)")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+
+        let code = match &err {
+            sqlx::Error::Database(db) => db.code().map(|c| c.into_owned()),
+            other => panic!("expected a database error, got {other:?}"),
+        };
+        assert_eq!(code.as_deref(), Some("787"));
+        assert!(matches!(AppError::from(err), AppError::Database(_)));
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    #[tokio::test]
+    async fn pool_timeout_maps_to_database() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        use std::time::Duration;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(50))
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let held = pool.acquire().await.unwrap();
+        let err = match sqlx::query("SELECT 1").fetch_one(&pool).await {
+            Ok(_) => panic!("expected PoolTimedOut"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, sqlx::Error::PoolTimedOut));
+        assert!(matches!(AppError::from(err), AppError::Database(_)));
+        drop(held);
+    }
+}

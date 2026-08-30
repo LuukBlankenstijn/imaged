@@ -1,7 +1,4 @@
-mod shell;
-mod sys;
-mod task;
-mod transport;
+use imaged_client::{shell, sys, task, transport};
 
 use std::sync::Arc;
 

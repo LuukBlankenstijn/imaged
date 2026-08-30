@@ -1,5 +1,10 @@
 [alias]
-test-native = "test --workspace --features imaged-api-client/server,imaged-api-ui/server --target x86_64-unknown-linux-gnu"
+# The dioxus server-fn macro emits an HTTP call under `cfg(not(feature = "server"))`
+# and a direct in-process call under `cfg(feature = "server")`. imaged-client needs
+# the former, every other crate the latter, and cargo unifies features per
+# invocation -- so the agent tests must run in a second, server-free pass.
+test-native = "test --workspace --exclude imaged-client --features imaged-api-client/server,imaged-api-ui/server --target x86_64-unknown-linux-gnu"
+test-agent = "test -p imaged-client --target x86_64-unknown-linux-gnu"
 
 [env]
 CFLAGS_x86_64_unknown_linux_musl = "-DSQLITE_DISABLE_LFS"

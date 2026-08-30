@@ -1,7 +1,12 @@
-mod capture;
-mod deploy;
-mod multicast;
-mod reboot;
+pub mod capture;
+pub mod deploy;
+pub mod multicast;
+pub mod reboot;
+
+pub use capture::CaptureTask;
+pub use deploy::DeployTask;
+pub use multicast::MulticastTask;
+pub use reboot::RebootTask;
 
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;

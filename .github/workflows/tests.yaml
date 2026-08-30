@@ -1,0 +1,45 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+      - uses: cachix/cachix-action@v17
+        with:
+          name: luukblankenstijn
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      # crates/core/src/pxe.rs embeds this via include_bytes! but it is not
+      # tracked, so core does not compile without it.
+      - name: Materialise the embedded initramfs
+        run: |
+          nix build .#initramfs --print-build-logs
+          install -Dm0644 ./result assets/initramfs.cpio.gz
+
+      # sqlx's query! macros are checked at compile time against DATABASE_URL.
+      - name: Prepare the database
+        run: nix develop -c sqlx database setup --source crates/core/migrations
+
+      # The dioxus server-fn macro compiles either an HTTP client call or a
+      # direct in-process call depending on imaged-api-client/server, and cargo
+      # unifies features per invocation, so the agent needs its own pass.
+      - name: Server and dashboard tests
+        run: nix develop -c cargo test-native
+
+      - name: Agent tests
+        run: nix develop -c cargo test-agent

@@ -3,6 +3,14 @@ name = "imaged-client"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "imaged_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "imaged-client"
+path = "src/main.rs"
+
 [dependencies]
 tracing.workspace = true
 tokio.workspace = true
@@ -23,3 +31,7 @@ anyhow = "1.0.102"
 rustix = { version = "1.1.4", features = ["termios", "stdio", "system"] }
 enum_dispatch = "0.3.13"
 local-ip-address = "0.6.13"
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { workspace = true, features = ["net", "io-util", "fs", "time"] }

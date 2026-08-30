@@ -1,0 +1,29 @@
+[package]
+name = "imaged-e2e"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "imaged_e2e"
+path = "src/lib.rs"
+
+[dependencies]
+imaged-core = { path = "../core", features = ["test-support"] }
+imaged-shared = { workspace = true, features = ["all"] }
+imaged-api-client = { path = "../api/client", features = ["server"] }
+imaged-api-ui = { path = "../api/ui", features = ["server"] }
+
+dioxus-server = "0.7"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "sync", "time"] }
+tokio-util = { workspace = true, features = ["io"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytes = "1"
+http-body-util = "0.1"
+async-compression = { version = "0.4", features = ["tokio", "zstd"] }
+anyhow = "1"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json"] }

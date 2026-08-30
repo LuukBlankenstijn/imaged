@@ -4,8 +4,10 @@
 use dioxus::prelude::*;
 
 use crate::components::icons::Icon;
-use crate::components::ui::{Button, ImageStatusBadge, StatusDot, TaskStateBadge, TaskTypeBadge};
-use crate::format::format_bytes;
+use crate::components::ui::{
+    Button, EmptyState, ImageStatusBadge, StatusDot, TaskStateBadge, TaskTypeBadge,
+};
+use crate::format::{format_bytes, format_relative};
 use crate::model::{ImageStatus, TaskState, TaskType};
 
 fn render(el: Element) -> String {
@@ -131,4 +133,58 @@ fn icon_unknown_name_falls_back_to_circle() {
     let h = render(rsx! { Icon { name: "definitely-not-an-icon" } });
     assert!(h.contains("<svg"), "{h}");
     assert!(h.contains("<circle"), "{h}");
+}
+
+// ---------------------------------------------------------------------------
+// format_relative
+// ---------------------------------------------------------------------------
+
+#[test]
+fn format_relative_returns_empty_without_a_browser_clock() {
+    for millis in [0i64, 1_000, -1_000, 1_700_000_000_000, i64::MAX, i64::MIN] {
+        assert_eq!(format_relative(millis), "");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Badge tone mapping and empty-state branch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn image_status_badge_maps_every_status_to_its_tone_class() {
+    for (status, tone_class) in [
+        (ImageStatus::Ready, "text-ok"),
+        (ImageStatus::Capturing, "text-warn"),
+        (ImageStatus::Faulted, "text-bad"),
+        (ImageStatus::Empty, "text-idle"),
+    ] {
+        let h = render(rsx! { ImageStatusBadge { status } });
+        assert!(h.contains(tone_class), "{status:?} rendered {h}");
+    }
+}
+
+#[test]
+fn task_state_badge_maps_every_state_to_its_tone_class() {
+    for (state, tone_class) in [
+        (TaskState::Done, "text-ok"),
+        (TaskState::Running, "text-run"),
+        (TaskState::Pending, "text-warn"),
+        (TaskState::Failed, "text-bad"),
+        (TaskState::Partial, "text-warn"),
+        (TaskState::Cancelled, "text-idle"),
+    ] {
+        let h = render(rsx! { TaskStateBadge { state } });
+        assert!(h.contains(tone_class), "{state:?} rendered {h}");
+    }
+}
+
+#[test]
+fn empty_state_renders_the_hint_paragraph_only_when_a_hint_is_present() {
+    let with_hint = render(rsx! { EmptyState { title: "No images", hint: "Capture one first." } });
+    assert!(with_hint.contains("Capture one first."), "{with_hint}");
+    assert!(with_hint.contains("<p"), "{with_hint}");
+
+    let without_hint = render(rsx! { EmptyState { title: "No images" } });
+    assert!(without_hint.contains("No images"), "{without_hint}");
+    assert!(!without_hint.contains("<p"), "{without_hint}");
 }

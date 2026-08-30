@@ -5,6 +5,7 @@ members = [
     "crates/api/ui",
     "crates/client",
     "crates/core",
+    "crates/e2e",
     "crates/server",
     "crates/shared",
     "crates/tftp",

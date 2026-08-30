@@ -1,16 +1,15 @@
-mod implementations;
-mod types;
+pub mod implementations;
+pub mod types;
 
 use std::{ops::Deref, sync::Arc};
-pub use types::ClientState;
+pub use types::{ClientState, RunnableClientTask};
 use types::RunningTask;
 
-use tokio_util::sync::CancellationToken;
-
-use crate::task::{
-    implementations::{ClientTaskExt, Task},
-    types::RunnableClientTask,
+pub use implementations::{
+    CaptureTask, ClientTaskExt, DeployTask, MulticastTask, RebootTask, Task,
 };
+
+use tokio_util::sync::CancellationToken;
 
 const PARTTABLE_TMP: &str = "/parttable.bin";
 

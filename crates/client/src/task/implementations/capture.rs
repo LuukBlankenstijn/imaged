@@ -8,7 +8,7 @@ use crate::task::PARTTABLE_TMP;
 
 #[derive(Constructor, Clone, Display)]
 #[display("capture task {task_id}")]
-pub(crate) struct CaptureTask {
+pub struct CaptureTask {
     task_id: i64,
 }
 

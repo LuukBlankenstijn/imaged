@@ -12,7 +12,7 @@ use crate::{sys, task::PARTTABLE_TMP, transport::multicast::udp_receiver_stream}
 
 #[derive(Clone, Display, Constructor)]
 #[display("multicast task")]
-pub(crate) struct MulticastTask {
+pub struct MulticastTask {
     task_id: i64,
 }
 

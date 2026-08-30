@@ -23,3 +23,9 @@ axum = { version = "0.8", optional = true }
 serde_json = { workspace = true, optional = true }
 sqlx = { version = "0.8.6", default-features = false, optional = true }
 tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
+imaged-shared = { path = ".", features = ["all", "serverfn", "axum-error", "sqlx-error"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }

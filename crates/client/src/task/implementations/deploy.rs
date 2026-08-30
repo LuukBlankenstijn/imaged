@@ -12,7 +12,7 @@ use crate::{sys, task::PARTTABLE_TMP};
 
 #[derive(Constructor, Clone, Display)]
 #[display("deploy task {task_id}")]
-pub(crate) struct DeployTask {
+pub struct DeployTask {
     task_id: i64,
 }
 

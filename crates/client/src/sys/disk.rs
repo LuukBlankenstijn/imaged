@@ -181,4 +181,211 @@ mod tests {
 
         assert!(disk.formatted_partitions().unwrap().is_empty());
     }
+
+    fn dev(json: &str) -> BlockDevice {
+        serde_json::from_str(json).expect("valid block device fixture")
+    }
+
+    #[test]
+    fn contains_root_detects_root_mounted_at_top_level() {
+        let d = dev(r#"{ "name": "sda", "size": 1, "mountpoint": "/" }"#);
+        assert!(contains_root(&d));
+    }
+
+    #[test]
+    fn contains_root_detects_root_in_a_child_partition() {
+        let d = dev(
+            r#"{ "name": "sda", "size": 1, "children": [
+                { "name": "sda1", "size": 1, "mountpoint": "/boot" },
+                { "name": "sda2", "size": 1, "mountpoint": "/" }
+            ] }"#,
+        );
+        assert!(contains_root(&d));
+    }
+
+    #[test]
+    fn contains_root_detects_root_in_a_nested_child() {
+        let d = dev(
+            r#"{ "name": "sda", "size": 1, "children": [
+                { "name": "sda1", "size": 1, "children": [
+                    { "name": "vg-root", "size": 1, "mountpoint": "/" }
+                ] }
+            ] }"#,
+        );
+        assert!(contains_root(&d));
+    }
+
+    #[test]
+    fn contains_root_is_false_when_no_partition_holds_root() {
+        let d = dev(
+            r#"{ "name": "sda", "size": 1, "children": [
+                { "name": "sda1", "size": 1, "mountpoint": "/boot" },
+                { "name": "sda2", "size": 1 }
+            ] }"#,
+        );
+        assert!(!contains_root(&d));
+    }
+
+    #[tokio::test]
+    async fn find_target_disk_never_returns_a_removable_usb_or_root_disk() {
+        match find_target_disk().await {
+            Ok(disk) => {
+                assert!(!disk.removable, "selected a removable disk: {}", disk.name);
+                assert_ne!(
+                    disk.transport.as_deref(),
+                    Some("usb"),
+                    "selected a usb disk: {}",
+                    disk.name
+                );
+                assert!(
+                    !contains_root(&disk),
+                    "selected the root disk: {}",
+                    disk.name
+                );
+            }
+            Err(e) => {
+                let m = e.to_string();
+                assert!(
+                    m.contains("no suitable disk found")
+                        || m.contains("multiple disks found")
+                        || m.contains("refusing to image"),
+                    "unexpected selection error: {m}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn find_partition_number_reads_single_digit_partitions() {
+        assert_eq!(dev(r#"{"name":"sda1","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"nvme0n1p1","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"mmcblk0p1","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"loop0p1","size":0}"#).find_partition_number().unwrap(), 1);
+    }
+
+    #[test]
+    fn find_partition_number_reverses_multi_digit_partitions_a_wrong_partition_hazard() {
+        assert_eq!(dev(r#"{"name":"sda10","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"nvme0n1p10","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"mmcblk0p10","size":0}"#).find_partition_number().unwrap(), 1);
+        assert_eq!(dev(r#"{"name":"sda12","size":0}"#).find_partition_number().unwrap(), 21);
+    }
+
+    #[test]
+    fn find_partition_number_is_correct_only_for_palindromic_multi_digit() {
+        assert_eq!(dev(r#"{"name":"nvme0n1p11","size":0}"#).find_partition_number().unwrap(), 11);
+    }
+
+    #[test]
+    fn find_partition_number_errors_without_trailing_digits() {
+        let e = dev(r#"{"name":"sda","size":0}"#).find_partition_number().unwrap_err();
+        assert!(e.to_string().contains("could not find partition number in sda"));
+        assert!(dev(r#"{"name":"","size":0}"#).find_partition_number().is_err());
+    }
+
+    #[test]
+    fn find_partition_number_parses_all_digit_names_reversed_not_an_error() {
+        assert_eq!(dev(r#"{"name":"123","size":0}"#).find_partition_number().unwrap(), 321);
+    }
+
+    #[test]
+    fn partclone_binary_maps_supported_filesystems() {
+        for fs in ["ext2", "ext3", "ext4"] {
+            let t = PartitionTarget { device: "/dev/x".into(), number: 1, fstype: fs.into(), size: 0 };
+            assert_eq!(t.partclone_binary().unwrap(), "partclone.extfs");
+        }
+        for fs in ["vfat", "fat32", "fat16"] {
+            let t = PartitionTarget { device: "/dev/x".into(), number: 1, fstype: fs.into(), size: 0 };
+            assert_eq!(t.partclone_binary().unwrap(), "partclone.vfat");
+        }
+    }
+
+    #[test]
+    fn partclone_binary_rejects_unmapped_filesystems() {
+        for fs in ["ntfs", "xfs", "btrfs", "swap", ""] {
+            let t = PartitionTarget { device: "/dev/x".into(), number: 1, fstype: fs.into(), size: 0 };
+            let e = t.partclone_binary().unwrap_err();
+            assert_eq!(e.to_string(), format!("filetype not supported: {fs}"));
+        }
+    }
+
+    #[test]
+    fn partclone_binary_is_case_sensitive() {
+        for fs in ["EXT4", "Ext4", "VFAT"] {
+            let t = PartitionTarget { device: "/dev/x".into(), number: 1, fstype: fs.into(), size: 0 };
+            let e = t.partclone_binary().unwrap_err();
+            assert_eq!(e.to_string(), format!("filetype not supported: {fs}"));
+        }
+    }
+
+    #[test]
+    fn formatted_partitions_follow_lsblk_order() {
+        let disk = dev(
+            r#"{ "name": "sdb", "size": 100, "children": [
+                { "name": "sdb2", "size": 20, "fstype": "ext4" },
+                { "name": "sdb1", "size": 10, "fstype": "vfat" }
+            ] }"#,
+        );
+        let targets = disk.formatted_partitions().unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].device, "/dev/sdb2");
+        assert_eq!(targets[0].number, 2);
+        assert_eq!(targets[0].fstype, "ext4");
+        assert_eq!(targets[1].device, "/dev/sdb1");
+        assert_eq!(targets[1].number, 1);
+    }
+
+    #[test]
+    fn formatted_partitions_error_on_unparseable_child_name() {
+        let disk = dev(
+            r#"{ "name": "sdb", "size": 100, "children": [
+                { "name": "sdb", "size": 10, "fstype": "ext4" }
+            ] }"#,
+        );
+        assert!(disk.formatted_partitions().is_err());
+    }
+
+    #[test]
+    fn formatted_partitions_ignore_nested_children() {
+        let disk = dev(
+            r#"{ "name": "sda", "size": 100, "children": [
+                { "name": "sda1", "size": 90, "fstype": "crypto_LUKS", "children": [
+                    { "name": "crypted", "size": 89, "fstype": "ext4" }
+                ] }
+            ] }"#,
+        );
+        let targets = disk.formatted_partitions().unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].device, "/dev/sda1");
+        assert_eq!(targets[0].fstype, "crypto_LUKS");
+    }
+
+    #[test]
+    fn partition_target_carries_device_number_fstype_and_byte_size() {
+        let disk = dev(
+            r#"{ "name": "sda", "size": 100, "children": [
+                { "name": "sda1", "size": 123456789, "fstype": "ext4" }
+            ] }"#,
+        );
+        let target = disk.partition_target(1, "ext4".to_string()).unwrap();
+        assert_eq!(target.device, "/dev/sda1");
+        assert_eq!(target.number, 1);
+        assert_eq!(target.fstype, "ext4");
+        assert_eq!(target.size, 123456789);
+    }
+
+    #[test]
+    fn partition_target_with_duplicate_numbers_silently_returns_the_first() {
+        let disk = dev(
+            r#"{ "name": "nvme0n1", "size": 100, "children": [
+                { "name": "nvme0n1p1", "size": 111 },
+                { "name": "nvme0n1p10", "size": 222 }
+            ] }"#,
+        );
+        assert_eq!(disk.children[0].find_partition_number().unwrap(), 1);
+        assert_eq!(disk.children[1].find_partition_number().unwrap(), 1);
+        let target = disk.partition_target(1, "ext4".to_string()).unwrap();
+        assert_eq!(target.device, "/dev/nvme0n1p1");
+        assert_eq!(target.size, 111);
+    }
 }

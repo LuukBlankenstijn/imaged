@@ -72,7 +72,7 @@ pub async fn build_di_container(
     ))
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub async fn build_test_container(dir: &std::path::Path) -> DIContainer {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).unwrap();
