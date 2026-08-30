@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use imaged_core::di::DIContainer;
 
@@ -199,11 +203,23 @@ impl TestServer {
     }
 }
 
-/// A live Server-Sent Events connection. Dropping it closes the underlying TCP
-/// connection, which drives the server-side `Registration` cleanup.
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+enum Inner {
+    Sse {
+        stream: BoxStream<'static, reqwest::Result<Bytes>>,
+        buf: Vec<u8>,
+    },
+    Ws(WsStream),
+}
+
+/// A live agent control connection (a WebSocket) or dashboard SSE feed.
+///
+/// Dropping it closes the underlying TCP connection: for the WebSocket that
+/// sends a FIN the server observes on its concurrent read, driving the
+/// server-side `Registration` cleanup promptly.
 pub struct EventStream {
-    stream: BoxStream<'static, reqwest::Result<Bytes>>,
-    buf: Vec<u8>,
+    inner: Inner,
 }
 
 pub async fn connect_agent_stream(
@@ -211,15 +227,13 @@ pub async fn connect_agent_stream(
     mac: &str,
     disk_size_bytes: u64,
 ) -> anyhow::Result<EventStream> {
-    let url = format!("{}/api/client/stream?disk_size_bytes={disk_size_bytes}", s.base_url);
-    let resp = s.http.get(url).header("X-Agent-Mac", mac).send().await?;
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("agent stream request failed with status {status}");
-    }
+    let ws_base = s.base_url.replacen("http://", "ws://", 1);
+    let url = format!("{ws_base}/api/client/stream?disk_size_bytes={disk_size_bytes}");
+    let mut request = url.into_client_request()?;
+    request.headers_mut().insert("X-Agent-Mac", mac.parse()?);
+    let (ws, _resp) = connect_async(request).await?;
     Ok(EventStream {
-        stream: resp.bytes_stream().boxed(),
-        buf: Vec::new(),
+        inner: Inner::Ws(ws),
     })
 }
 
@@ -231,51 +245,79 @@ pub async fn connect_connection_state(s: &TestServer) -> anyhow::Result<EventStr
         anyhow::bail!("connection-state request failed with status {status}");
     }
     Ok(EventStream {
-        stream: resp.bytes_stream().boxed(),
-        buf: Vec::new(),
+        inner: Inner::Sse {
+            stream: resp.bytes_stream().boxed(),
+            buf: Vec::new(),
+        },
     })
 }
 
 impl EventStream {
-    /// Return the next SSE event's JSON `data` payload, or `None` on timeout or
-    /// end of stream. Partial frames are buffered across chunk boundaries.
+    /// Return the next event's JSON payload, or `None` on timeout or end of
+    /// stream. For the WebSocket that is the next data frame's JSON — dioxus's
+    /// default `JsonEncoding` frames typed messages as Binary, so both Binary
+    /// and Text are decoded — with Ping/Pong control traffic transparently
+    /// ignored; for SSE it is the next event's `data` payload, buffered across
+    /// chunk boundaries.
     pub async fn next_event(&mut self, timeout: Duration) -> Option<serde_json::Value> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(event) = self.take_buffered_event() {
-                return Some(event);
-            }
-            let remaining = deadline.checked_duration_since(Instant::now())?;
-            match tokio::time::timeout(remaining, self.stream.next()).await {
-                Ok(Some(Ok(chunk))) => {
-                    self.buf.extend(chunk.iter().copied().filter(|&b| b != b'\r'));
+            match &mut self.inner {
+                Inner::Sse { stream, buf } => {
+                    if let Some(event) = take_buffered_event(buf) {
+                        return Some(event);
+                    }
+                    let remaining = deadline.checked_duration_since(Instant::now())?;
+                    match tokio::time::timeout(remaining, stream.next()).await {
+                        Ok(Some(Ok(chunk))) => {
+                            buf.extend(chunk.iter().copied().filter(|&b| b != b'\r'));
+                        }
+                        Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
+                    }
                 }
-                Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
+                Inner::Ws(ws) => {
+                    let remaining = deadline.checked_duration_since(Instant::now())?;
+                    match tokio::time::timeout(remaining, ws.next()).await {
+                        Ok(Some(Ok(Message::Text(text)))) => {
+                            if let Ok(value) = serde_json::from_str(text.as_str()) {
+                                return Some(value);
+                            }
+                        }
+                        Ok(Some(Ok(Message::Binary(bytes)))) => {
+                            if let Ok(value) = serde_json::from_slice(&bytes) {
+                                return Some(value);
+                            }
+                        }
+                        Ok(Some(Ok(Message::Close(_)))) => return None,
+                        Ok(Some(Ok(_))) => continue,
+                        Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
+                    }
+                }
             }
         }
     }
+}
 
-    fn take_buffered_event(&mut self) -> Option<serde_json::Value> {
-        loop {
-            let boundary = self.buf.windows(2).position(|w| w == b"\n\n")?;
-            let block = self.buf[..boundary].to_vec();
-            self.buf.drain(..boundary + 2);
+fn take_buffered_event(buf: &mut Vec<u8>) -> Option<serde_json::Value> {
+    loop {
+        let boundary = buf.windows(2).position(|w| w == b"\n\n")?;
+        let block = buf[..boundary].to_vec();
+        buf.drain(..boundary + 2);
 
-            let mut data = String::new();
-            for line in block.split(|&b| b == b'\n') {
-                if let Some(rest) = line.strip_prefix(b"data:") {
-                    let rest = rest.strip_prefix(b" ").unwrap_or(rest);
-                    if !data.is_empty() {
-                        data.push('\n');
-                    }
-                    data.push_str(&String::from_utf8_lossy(rest));
+        let mut data = String::new();
+        for line in block.split(|&b| b == b'\n') {
+            if let Some(rest) = line.strip_prefix(b"data:") {
+                let rest = rest.strip_prefix(b" ").unwrap_or(rest);
+                if !data.is_empty() {
+                    data.push('\n');
                 }
+                data.push_str(&String::from_utf8_lossy(rest));
             }
-
-            if data.is_empty() {
-                continue;
-            }
-            return serde_json::from_str(&data).ok();
         }
+
+        if data.is_empty() {
+            continue;
+        }
+        return serde_json::from_str(&data).ok();
     }
 }

@@ -26,17 +26,6 @@ async fn poll_until(mut pred: impl FnMut() -> bool, timeout: Duration) -> bool {
     }
 }
 
-async fn stream_status(s: &harness::TestServer, mac: &str) -> StatusCode {
-    let url = format!("{}/api/client/stream?disk_size_bytes={DISK}", s.base_url);
-    s.http
-        .get(url)
-        .header("X-Agent-Mac", mac)
-        .send()
-        .await
-        .expect("stream request")
-        .status()
-}
-
 #[tokio::test]
 async fn connecting_upserts_the_host_and_marks_it_connected() {
     let s = harness::server().await;
@@ -154,7 +143,7 @@ async fn live_events_fan_out_to_an_open_stream_in_order() {
 }
 
 #[tokio::test]
-async fn a_second_stream_for_the_same_host_is_refused() {
+async fn a_second_stream_displaces_the_first_and_keeps_the_host_connected() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
 
@@ -162,19 +151,33 @@ async fn a_second_stream_for_the_same_host_is_refused() {
         .await
         .expect("connect");
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
 
-    assert_eq!(stream_status(s, &mac).await, StatusCode::PRECONDITION_FAILED);
+    let mut second = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("a second stream for the same host displaces the first");
+
+    assert!(
+        first.next_event(Duration::from_secs(2)).await.is_none(),
+        "the displaced first connection is closed by the server"
+    );
+    assert!(
+        connected(s, host.id),
+        "the host stays connected across the displacement"
+    );
 
     s.container.host_registry.cancel_task(host.id, 999);
-    let event = first
+    let event = second
         .next_event(Duration::from_secs(2))
         .await
-        .expect("first stream still delivers after the refusal");
+        .expect("events after displacement are delivered to the new connection");
     assert_eq!(event["Cancel"], 999);
+
+    assert!(connected(s, host.id));
 }
 
 #[tokio::test]
-async fn dropping_the_stream_deregisters_after_the_next_write() {
+async fn dropping_the_stream_deregisters_promptly() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
 
@@ -184,22 +187,21 @@ async fn dropping_the_stream_deregisters_after_the_next_write() {
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
     assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
 
+    let dropped_at = Instant::now();
     drop(stream);
 
+    let mut latency = None;
     let deadline = Instant::now() + Duration::from_secs(2);
-    let mut deregistered = false;
     while Instant::now() < deadline {
-        s.container.host_registry.cancel_task(host.id, 1);
-        tokio::time::sleep(Duration::from_millis(25)).await;
         if !connected(s, host.id) {
-            deregistered = true;
+            latency = Some(dropped_at.elapsed());
             break;
         }
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    assert!(
-        deregistered,
-        "dropping the stream must deregister the host once the server attempts a write"
-    );
+    let latency =
+        latency.expect("a clean close deregisters the host without an induced write");
+    eprintln!("clean-close deregistration observed in {latency:?}");
 }
 
 #[tokio::test]
@@ -315,6 +317,61 @@ async fn an_ascii_mac_of_any_shape_is_accepted() {
         .await
         .expect("the arbitrary mac upserted a host");
     assert_eq!(host.disk_size, 4096);
+
+    drop(stream);
+}
+
+#[tokio::test]
+async fn an_unresponsive_agent_is_evicted_by_the_liveness_deadline() {
+    let s = harness::server().await;
+    let mac = harness::unique_mac();
+
+    // tungstenite only auto-pongs while its stream is polled, so holding the
+    // connection without ever calling `next_event` leaves the server's pings
+    // unanswered and lets its liveness deadline fire.
+    let held = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("connect");
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
+
+    let connected_at = Instant::now();
+    let mut latency = None;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if !connected(s, host.id) {
+            latency = Some(connected_at.elapsed());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let latency = latency.expect("an agent that stops answering pings is evicted");
+    eprintln!("liveness eviction observed in {latency:?}");
+
+    drop(held);
+}
+
+#[tokio::test]
+async fn a_responsive_agent_is_not_evicted() {
+    let s = harness::server().await;
+    let mac = harness::unique_mac();
+
+    let mut stream = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("connect");
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
+
+    // Polling the socket lets tungstenite auto-pong the server's pings; held
+    // open well past the liveness timeout, the host must never be evicted.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        let _ = stream.next_event(Duration::from_millis(100)).await;
+        assert!(
+            connected(s, host.id),
+            "a responsive agent must not be evicted"
+        );
+    }
 
     drop(stream);
 }

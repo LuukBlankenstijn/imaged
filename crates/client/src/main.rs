@@ -1,11 +1,9 @@
-use imaged_client::{shell, sys, task, transport};
+use imaged_client::{connection, shell, sys, task, transport};
 
 use std::sync::Arc;
 
 use clap::Parser;
 use dioxus_fullstack::reqwest::Url;
-use futures::StreamExt;
-use futures::pin_mut;
 use imaged_shared::setup_logging;
 
 #[derive(Parser)]
@@ -31,27 +29,16 @@ async fn main() -> anyhow::Result<()> {
     let disk = sys::disk::find_target_disk().await?;
 
     transport::setup_transport(args.server.clone(), mac, ip)?;
-    // create the state
     let state = Arc::new(task::ClientState::default());
-    // start the stream
+
     tracing::info!(
         server=%args.server.to_string(),
         mac=%mac.to_string(),
         ip=%ip.map(|ip| ip.to_string()).unwrap_or("unknown".to_string()),
-        "starting stream"
+        "starting imaged-client"
     );
-    let stream = api::event::start_stream(disk.size).await?;
-    pin_mut!(stream);
 
-    // start the handler for the shell
     tokio::spawn(shell::watch_for_shell_hotkey());
-    tracing::info!("starting imaged-client");
-    while let Some(message) = stream.next().await {
-        match message {
-            Ok(message) => task::handle_message(state.clone(), message).await,
-            Err(e) => tracing::error!(err=%e, "received stream error"),
-        }
-    }
 
-    Ok(())
+    connection::run(state, disk.size, connection::Backoff::PRODUCTION).await
 }

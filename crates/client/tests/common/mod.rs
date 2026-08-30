@@ -3,18 +3,21 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 use axum::body::Body;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::StreamExt;
+use axum::body::Bytes;
 use serde::Deserialize;
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
 
 use api::model::ImagePartition;
 use imaged_shared::ServerEvent;
@@ -32,6 +35,28 @@ pub enum Route {
     Stream,
 }
 
+/// What the stub does after streaming its configured events on each websocket connection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StreamBehavior {
+    /// Keep reading the socket (so axum auto-replies to pings) until the peer disconnects,
+    /// while honouring live [`StubCommand`]s pushed through the control channel.
+    #[default]
+    HoldOpen,
+    /// Close the socket from the server side once the events are delivered.
+    Close,
+    /// Hold the socket open but never read it, so incoming pings are never answered.
+    Silent,
+}
+
+/// A live instruction for an open websocket connection, pushed via [`StubServer::send_event`]
+/// or [`StubServer::close_connections`].
+#[derive(Debug, Clone)]
+pub enum StubCommand {
+    Send(ServerEvent),
+    Ping,
+    Close,
+}
+
 #[derive(Default, Clone)]
 pub struct StubConfig {
     pub parttable: Vec<u8>,
@@ -39,6 +64,7 @@ pub struct StubConfig {
     pub partition_data: HashMap<i64, Vec<u8>>,
     pub events: Vec<ServerEvent>,
     pub force_status: HashMap<Route, u16>,
+    pub stream_behavior: StreamBehavior,
 }
 
 impl StubConfig {
@@ -66,6 +92,11 @@ impl StubConfig {
         self
     }
 
+    pub fn stream_behavior(mut self, behavior: StreamBehavior) -> Self {
+        self.stream_behavior = behavior;
+        self
+    }
+
     pub fn force(mut self, route: Route, status: u16) -> Self {
         self.force_status.insert(route, status);
         self
@@ -84,6 +115,9 @@ struct AppState {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     finished: Arc<Mutex<Vec<i64>>>,
     failed: Arc<Mutex<Vec<(i64, String)>>>,
+    upgrades: Arc<AtomicUsize>,
+    control: broadcast::Sender<StubCommand>,
+    pongs: Arc<AtomicUsize>,
 }
 
 pub struct StubServer {
@@ -91,6 +125,9 @@ pub struct StubServer {
     pub requests: Arc<Mutex<Vec<RecordedRequest>>>,
     pub finished: Arc<Mutex<Vec<i64>>>,
     pub failed: Arc<Mutex<Vec<(i64, String)>>>,
+    upgrades: Arc<AtomicUsize>,
+    control: broadcast::Sender<StubCommand>,
+    pongs: Arc<AtomicUsize>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -106,6 +143,33 @@ impl StubServer {
     pub fn failed(&self) -> Vec<(i64, String)> {
         self.failed.lock().unwrap().clone()
     }
+
+    /// Number of websocket upgrades the stub has accepted (incremented once per connection,
+    /// after a control subscriber for that connection exists).
+    pub fn upgrades(&self) -> usize {
+        self.upgrades.load(Ordering::SeqCst)
+    }
+
+    /// Push a server event to every currently open websocket connection.
+    pub fn send_event(&self, event: ServerEvent) {
+        let _ = self.control.send(StubCommand::Send(event));
+    }
+
+    /// Ask every currently open websocket connection to close from the server side.
+    pub fn close_connections(&self) {
+        let _ = self.control.send(StubCommand::Close);
+    }
+
+    /// Ping every currently open websocket connection. The peer is expected to answer
+    /// with a pong, which [`StubServer::pongs`] counts.
+    pub fn ping_connections(&self) {
+        let _ = self.control.send(StubCommand::Ping);
+    }
+
+    /// Number of pong frames the stub has received across all connections.
+    pub fn pongs(&self) -> usize {
+        self.pongs.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for StubServer {
@@ -118,12 +182,18 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let finished = Arc::new(Mutex::new(Vec::new()));
     let failed = Arc::new(Mutex::new(Vec::new()));
+    let upgrades = Arc::new(AtomicUsize::new(0));
+    let (control, _) = broadcast::channel(32);
+    let pongs = Arc::new(AtomicUsize::new(0));
 
     let state = Arc::new(AppState {
         cfg,
         requests: requests.clone(),
         finished: finished.clone(),
         failed: failed.clone(),
+        upgrades: upgrades.clone(),
+        control: control.clone(),
+        pongs: pongs.clone(),
     });
 
     let app = Router::new()
@@ -153,6 +223,9 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
         requests,
         finished,
         failed,
+        upgrades,
+        control,
+        pongs,
         handle,
     }
 }
@@ -263,28 +336,70 @@ async fn disconnect(State(s): State<Arc<AppState>>) -> Response {
     StatusCode::OK.into_response()
 }
 
-async fn stream(State(s): State<Arc<AppState>>) -> Response {
+async fn stream(State(s): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
     if let Some(r) = forced(&s.cfg, Route::Stream) {
         return r;
     }
-    let frames: Vec<Result<Vec<u8>, std::io::Error>> = s
-        .cfg
-        .events
-        .iter()
-        .map(|ev| {
-            let json = serde_json::to_string(ev).unwrap();
-            Ok(format!("data: {json}\n\n").into_bytes())
-        })
-        .collect();
-    let body_stream = futures::stream::iter(frames).then(|frame| async move {
-        tokio::task::yield_now().await;
-        frame
-    });
+    ws.on_upgrade(move |socket| handle_socket(s, socket))
+}
 
-    Response::builder()
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .body(Body::from_stream(body_stream))
-        .unwrap()
+// The real server frames typed messages as Binary (dioxus-fullstack's `Sink for
+// TypedWebsocket`), so the stub does too: a Text-framing stub would still pass
+// because the client decodes both, and would stop exercising the real path.
+fn event_frame(event: &ServerEvent) -> Message {
+    let json = serde_json::to_vec(event).expect("serialize server event");
+    Message::Binary(json.into())
+}
+
+async fn handle_socket(s: Arc<AppState>, mut socket: WebSocket) {
+    // Subscribe before announcing the upgrade so a test that observes `upgrades()` is
+    // guaranteed a live subscriber for any command it then pushes.
+    let mut control = s.control.subscribe();
+    s.upgrades.fetch_add(1, Ordering::SeqCst);
+
+    for event in &s.cfg.events {
+        if socket.send(event_frame(event)).await.is_err() {
+            return;
+        }
+    }
+
+    match s.cfg.stream_behavior {
+        StreamBehavior::Close => {
+            let _ = socket.send(Message::Close(None)).await;
+        }
+        StreamBehavior::Silent => {
+            std::future::pending::<()>().await;
+        }
+        StreamBehavior::HoldOpen => loop {
+            tokio::select! {
+                command = control.recv() => match command {
+                    Ok(StubCommand::Send(event)) => {
+                        if socket.send(event_frame(&event)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(StubCommand::Ping) => {
+                        if socket.send(Message::Ping(Bytes::new())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(StubCommand::Close) => {
+                        let _ = socket.send(Message::Close(None)).await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                incoming = socket.recv() => match incoming {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(Message::Pong(_))) => {
+                        s.pongs.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Some(Ok(_)) => {}
+                },
+            }
+        },
+    }
 }
 
 static INIT_TRANSPORT: Once = Once::new();

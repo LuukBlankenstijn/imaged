@@ -13,10 +13,11 @@ imaged-core = { path = "../../core", optional = true }
 tracing = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 bytes = "1"
+tokio = { workspace = true, optional = true, features = ["time"] }
 
 [features]
 default = []
-server = ["dioxus-fullstack/server", "dep:dioxus-server", "dep:imaged-core", "dep:tracing", "dep:futures"]
+server = ["dioxus-fullstack/server", "dep:dioxus-server", "dep:imaged-core", "dep:tracing", "dep:futures", "dep:tokio"]
 
 [dev-dependencies]
 imaged-core = { path = "../../core", features = ["test-support"] }

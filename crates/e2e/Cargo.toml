@@ -19,6 +19,7 @@ axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "sync", "time"] }
 tokio-util = { workspace = true, features = ["io"] }
+tokio-tungstenite = "0.29"
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true

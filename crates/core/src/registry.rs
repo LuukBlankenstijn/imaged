@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tracing::error;
 
 use derive_more::Constructor;
 use imaged_shared::{ServerEvent, Task};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::domain::task::Task as DomainTask;
-use crate::error::Result;
 
 #[derive(Constructor)]
 pub struct Registration<T> {
@@ -59,14 +57,8 @@ impl Default for HostRegistry {
 }
 
 impl HostRegistry {
-    pub fn register(self: &Arc<Self>, id: i64) -> Result<Registration<ServerEvent>> {
+    pub fn register(self: &Arc<Self>, id: i64) -> Registration<ServerEvent> {
         let mut hosts = self.hosts.write().unwrap();
-        if hosts.map.contains_key(&id) {
-            error!("host {id} tried to register but was already registered");
-            return Err(crate::error::AppError::FailedPrecondition(
-                "host already connected".into(),
-            ));
-        }
         let generation = hosts.next_generation;
         hosts.next_generation += 1;
 
@@ -98,7 +90,7 @@ impl HostRegistry {
             }
         };
 
-        Ok(Registration::new(command_rx, Some(Box::new(cleanup))))
+        Registration::new(command_rx, Some(Box::new(cleanup)))
     }
 
     /// Explicitly drop a host's connection because the host told us it is about
@@ -145,7 +137,6 @@ impl HostRegistry {
 mod tests {
     use super::HostRegistry;
     use crate::domain::task::{Task as DomainTask, TaskType};
-    use crate::error::AppError;
     use chrono::Utc;
     use imaged_shared::ServerEvent;
     use std::sync::Arc;
@@ -168,7 +159,7 @@ mod tests {
         let registry = Arc::new(HostRegistry::default());
         let mut state_rx = registry.subscribe_state();
 
-        let mut reg = registry.register(1).unwrap();
+        let mut reg = registry.register(1);
 
         let event = state_rx.recv().await.unwrap();
         assert_eq!(event.id, 1);
@@ -191,35 +182,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_duplicate_register_is_rejected_without_a_second_connect_event() {
+    async fn a_duplicate_register_displaces_the_old_connection_with_one_more_connect_and_no_disconnect(
+    ) {
         let registry = Arc::new(HostRegistry::default());
         let mut state_rx = registry.subscribe_state();
 
-        let mut first = registry.register(1).unwrap();
+        let mut first = registry.register(1);
         let connect = state_rx.recv().await.unwrap();
         assert!(connect.connected);
 
-        assert!(matches!(
-            registry.register(1),
-            Err(AppError::FailedPrecondition(_))
-        ));
+        let mut second = registry.register(1);
 
+        let redisplace = state_rx.recv().await.unwrap();
+        assert_eq!(redisplace.id, 1);
+        assert!(redisplace.connected);
         assert!(matches!(state_rx.try_recv(), Err(TryRecvError::Empty)));
 
+        assert!(first.receiver.recv().await.is_none());
+
         registry.send_task(1, &domain_task(9, TaskType::Capture, None));
-        match first.receiver.recv().await.unwrap() {
+        match second.receiver.recv().await.unwrap() {
             ServerEvent::Task(t) => assert_eq!(t.id, 9),
-            other => panic!("expected a task event, got {other:?}"),
+            other => panic!("expected a task event on the new receiver, got {other:?}"),
         }
+        assert!(matches!(state_rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[tokio::test]
     async fn a_stale_registration_drop_does_not_evict_a_newer_registration_for_the_same_host() {
         let registry = Arc::new(HostRegistry::default());
 
-        let first = registry.register(1).unwrap();
-        registry.deregister(1);
-        let mut second = registry.register(1).unwrap();
+        let first = registry.register(1);
+        let mut second = registry.register(1);
 
         drop(first);
 
@@ -239,7 +233,7 @@ mod tests {
         let registry = Arc::new(HostRegistry::default());
         let mut state_rx = registry.subscribe_state();
 
-        let _reg = registry.register(2).unwrap();
+        let _reg = registry.register(2);
         assert!(state_rx.recv().await.unwrap().connected);
 
         registry.deregister(2);
@@ -263,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_and_send_deliver_the_expected_events_to_a_registered_host() {
         let registry = Arc::new(HostRegistry::default());
-        let mut reg = registry.register(5).unwrap();
+        let mut reg = registry.register(5);
 
         registry.cancel_task(5, 42);
         match reg.receiver.recv().await.unwrap() {
@@ -287,7 +281,7 @@ mod tests {
         let registry = Arc::new(HostRegistry::default());
         let mut state_rx = registry.subscribe_state();
 
-        let reg = registry.register(4).unwrap();
+        let reg = registry.register(4);
         assert!(state_rx.recv().await.unwrap().connected);
 
         drop(reg);
@@ -302,21 +296,27 @@ mod tests {
     async fn concurrent_register_and_deregister_churn_never_poisons_the_lock_and_ends_empty() {
         let registry = Arc::new(HostRegistry::default());
         let mut handles = Vec::new();
-        for host in 0..32i64 {
-            let registry = Arc::clone(&registry);
-            handles.push(tokio::spawn(async move {
-                for _ in 0..50 {
-                    let reg = registry.register(host).unwrap();
-                    registry.send_task(host, &domain_task(1, TaskType::Reboot, None));
-                    registry.cancel_task(host, 1);
-                    registry.deregister(host);
-                    drop(reg);
-                }
-            }));
+        for host in 0..8i64 {
+            for _ in 0..4 {
+                let registry = Arc::clone(&registry);
+                handles.push(tokio::spawn(async move {
+                    for _ in 0..50 {
+                        let reg = registry.register(host);
+                        registry.send_task(host, &domain_task(1, TaskType::Reboot, None));
+                        registry.cancel_task(host, 1);
+                        registry.deregister(host);
+                        drop(reg);
+                    }
+                }));
+            }
         }
         for handle in handles {
             handle.await.unwrap();
         }
         assert!(registry.get_current_state().is_empty());
+
+        let mut reg = registry.register(0);
+        registry.send_task(0, &domain_task(2, TaskType::Reboot, None));
+        assert!(reg.receiver.recv().await.is_some());
     }
 }

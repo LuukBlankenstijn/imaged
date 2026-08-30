@@ -204,7 +204,7 @@ async fn agent_api_contracts() {
     downloading_partitions_matches_the_repository_in_order(&c).await;
     capturing_the_partition_table_clears_prior_capture_data_and_starts_the_host(&c).await;
     uploading_partition_data_streams_to_disk_and_records_the_row(&c).await;
-    starting_a_stream_registers_the_host_and_refuses_a_second_connection(&c).await;
+    the_stream_endpoint_requires_a_websocket_upgrade(&c).await;
     disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_macs(&c).await;
     no_agent_can_act_on_another_agents_task_on_any_endpoint(&c).await;
 }
@@ -911,51 +911,27 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row(c: &DICont
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
-async fn starting_a_stream_registers_the_host_and_refuses_a_second_connection(c: &DIContainer) {
+async fn the_stream_endpoint_requires_a_websocket_upgrade(c: &DIContainer) {
     let mac = next_mac();
-    let request = Request::builder()
-        .method(Method::GET)
-        .uri("/api/client/stream?disk_size_bytes=2048")
-        .header("X-Agent-Mac", mac.as_str())
-        .header("X-Agent-Ip", "10.1.2.3")
-        .body(Body::empty())
-        .unwrap();
-    let response = agent_router().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let host = c.host_repo.get_by_mac(&mac).await.unwrap();
-    assert_eq!(host.ip.as_deref(), Some("10.1.2.3"));
+    let response = get("/api/client/stream?disk_size_bytes=2048", &mac).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(
-        c.host_registry
-            .get_current_state()
-            .iter()
-            .any(|e| e.id == host.id)
+        c.host_repo.get_by_mac(&mac).await.is_err(),
+        "a request that cannot be upgraded must not register a host"
     );
 
-    let second = get("/api/client/stream?disk_size_bytes=2048", &mac).await;
-    assert_eq!(second.status(), StatusCode::PRECONDITION_FAILED);
-
-    drop(response);
-
-    let mac2 = next_mac();
-    let response = get("/api/client/stream?disk_size_bytes=4096", &mac2).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let host2 = c.host_repo.get_by_mac(&mac2).await.unwrap();
-    assert_eq!(host2.ip, None);
-    assert!(
-        c.host_registry
-            .get_current_state()
-            .iter()
-            .any(|e| e.id == host2.id)
-    );
-    drop(response);
+    let anonymous = send(Method::GET, "/api/client/stream?disk_size_bytes=2048", None).await;
+    assert_eq!(anonymous.status(), StatusCode::BAD_REQUEST);
 }
 
 async fn disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_macs(c: &DIContainer) {
     let mac = next_mac();
-    let response = get("/api/client/stream?disk_size_bytes=1024", &mac).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let host = c.host_repo.get_by_mac(&mac).await.unwrap();
+    let host = c
+        .host_repo
+        .upsert_host(mac.clone(), 1024, None)
+        .await
+        .unwrap();
+    let _registration = c.host_registry.register(host.id);
     assert!(
         c.host_registry
             .get_current_state()
@@ -971,7 +947,6 @@ async fn disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_mac
             .iter()
             .any(|e| e.id == host.id)
     );
-    drop(response);
 
     let idle_mac = next_mac();
     c.host_repo

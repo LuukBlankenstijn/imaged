@@ -322,7 +322,7 @@ async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
             .unwrap();
         let dir = guard.0.join("images").join(format!("img-{}", img.id));
         assert!(dir.exists());
-        let mut conn = c.host_registry.register(host.id).unwrap();
+        let mut conn = c.host_registry.register(host.id);
 
         core::di::scope(c.clone(), crate::images::delete_image(img.id))
             .await
@@ -734,8 +734,8 @@ async fn cancelling_a_task_notifies_only_hosts_with_active_rows() {
         .unwrap();
     c.task_repo.mark_finished(task.id, finished.id).await.unwrap();
 
-    let mut active_conn = c.host_registry.register(active.id).unwrap();
-    let mut finished_conn = c.host_registry.register(finished.id).unwrap();
+    let mut active_conn = c.host_registry.register(active.id);
+    let mut finished_conn = c.host_registry.register(finished.id);
 
     core::di::scope(c.clone(), crate::tasks::cancel_task(task.id))
         .await
@@ -848,7 +848,7 @@ async fn retrying_a_task_that_is_not_next_for_a_host_does_not_send_it_to_that_ho
         .unwrap();
     c.task_repo.cancel(newer.id).await.unwrap();
 
-    let mut conn = c.host_registry.register(host.id).unwrap();
+    let mut conn = c.host_registry.register(host.id);
     core::di::scope(c.clone(), crate::tasks::retry_task(newer.id))
         .await
         .unwrap();
@@ -943,7 +943,7 @@ async fn removing_an_image_cancels_the_multicast_tasks_that_reference_it() {
         .create(TaskType::Multicast, vec![host.id], Some(img.id))
         .await
         .unwrap();
-    let mut conn = c.host_registry.register(host.id).unwrap();
+    let mut conn = c.host_registry.register(host.id);
 
     core::di::scope(c.clone(), crate::images::delete_image(img.id))
         .await
@@ -1005,7 +1005,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
         .unwrap();
     let img = c.image_repo.create_image("os".into()).await.unwrap();
 
-    let mut conn = c.host_registry.register(online.id).unwrap();
+    let mut conn = c.host_registry.register(online.id);
     let task = core::di::scope(
         c.clone(),
         crate::hosts::deploy(model::DeployRequest {
@@ -1078,8 +1078,8 @@ async fn multicasting_creates_one_task_for_all_members_and_notifies_registered_o
     let img = c.image_repo.create_image("cast".into()).await.unwrap();
     c.image_repo.mark_finished(img.id).await.unwrap();
 
-    let mut first_conn = c.host_registry.register(first.id).unwrap();
-    let mut second_conn = c.host_registry.register(second.id).unwrap();
+    let mut first_conn = c.host_registry.register(first.id);
+    let mut second_conn = c.host_registry.register(second.id);
 
     core::di::scope(
         c.clone(),
@@ -1116,7 +1116,7 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
         .upsert_host("aa:bb:cc:dd:ee:33".into(), 1_000_000, None)
         .await
         .unwrap();
-    let _conn = c.host_registry.register(host.id).unwrap();
+    let _conn = c.host_registry.register(host.id);
 
     let snapshot = c.host_registry.get_current_state();
     assert!(snapshot.iter().any(|e| e.id == host.id && e.connected));
@@ -1135,7 +1135,7 @@ async fn registering_a_host_after_subscription_emits_connect_then_disconnect_dif
         .unwrap();
 
     let mut updates = c.host_registry.subscribe_state();
-    let conn = c.host_registry.register(host.id).unwrap();
+    let conn = c.host_registry.register(host.id);
 
     let connected = updates.try_recv().unwrap();
     assert_eq!(connected.id, host.id);

@@ -24,6 +24,15 @@ use crate::multicast::MulticastManager;
 
 pub const DEAD_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Cadence and deadline for the agent control-connection liveness protocol.
+/// The timeout is a multiple of the interval so a single missed pong cannot
+/// evict a healthy agent; eviction requires two consecutive missed pings.
+#[derive(Clone, Copy)]
+pub struct AgentLiveness {
+    pub ping_interval: Duration,
+    pub timeout: Duration,
+}
+
 pub async fn setup_database(db_url: &str) -> Result<SqlitePool, Box<dyn std::error::Error>> {
     let sqlite_options = SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
@@ -61,6 +70,10 @@ pub async fn build_di_container(
         )
         .await?,
     );
+    let agent_liveness = AgentLiveness {
+        ping_interval: Duration::from_secs(1),
+        timeout: Duration::from_secs(3),
+    };
 
     Ok(DIContainer::new(
         host_repo,
@@ -71,6 +84,7 @@ pub async fn build_di_container(
         image_service,
         multicast_manager,
         bind_address,
+        agent_liveness,
     ))
 }
 
@@ -81,14 +95,19 @@ pub async fn build_test_container(dir: &std::path::Path) -> DIContainer {
     let pool = setup_database(&format!("sqlite://{}", dir.join("test.db").display()))
         .await
         .unwrap();
-    build_di_container(
+    let mut container = build_di_container(
         pool,
         dir.join("images").to_string_lossy().to_string(),
         "lo".to_string(),
         "127.0.0.1:8080".parse().unwrap(),
     )
     .await
-    .unwrap()
+    .unwrap();
+    container.agent_liveness = AgentLiveness {
+        ping_interval: Duration::from_millis(200),
+        timeout: Duration::from_millis(600),
+    };
+    container
 }
 
 pub async fn bind(address: SocketAddr) -> std::io::Result<impl Listener<Addr = SocketAddr>> {
