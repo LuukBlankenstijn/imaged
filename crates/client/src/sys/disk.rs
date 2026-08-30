@@ -42,13 +42,8 @@ impl BlockDevice {
     }
 
     pub fn find_partition_number(&self) -> Result<i64> {
-        let digits: String = self
-            .name
-            .chars()
-            .rev()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        digits
+        let leading = self.name.trim_end_matches(|c: char| c.is_ascii_digit());
+        self.name[leading.len()..]
             .parse()
             .with_context(|| format!("could not find partition number in {}", self.name))
     }
@@ -264,16 +259,19 @@ mod tests {
     }
 
     #[test]
-    fn find_partition_number_reverses_multi_digit_partitions_a_wrong_partition_hazard() {
-        assert_eq!(dev(r#"{"name":"sda10","size":0}"#).find_partition_number().unwrap(), 1);
-        assert_eq!(dev(r#"{"name":"nvme0n1p10","size":0}"#).find_partition_number().unwrap(), 1);
-        assert_eq!(dev(r#"{"name":"mmcblk0p10","size":0}"#).find_partition_number().unwrap(), 1);
-        assert_eq!(dev(r#"{"name":"sda12","size":0}"#).find_partition_number().unwrap(), 21);
+    fn find_partition_number_reads_multi_digit_partitions() {
+        assert_eq!(dev(r#"{"name":"sda10","size":0}"#).find_partition_number().unwrap(), 10);
+        assert_eq!(dev(r#"{"name":"nvme0n1p10","size":0}"#).find_partition_number().unwrap(), 10);
+        assert_eq!(dev(r#"{"name":"mmcblk0p10","size":0}"#).find_partition_number().unwrap(), 10);
+        assert_eq!(dev(r#"{"name":"sda12","size":0}"#).find_partition_number().unwrap(), 12);
+        assert_eq!(dev(r#"{"name":"nvme0n1p11","size":0}"#).find_partition_number().unwrap(), 11);
+        assert_eq!(dev(r#"{"name":"sda128","size":0}"#).find_partition_number().unwrap(), 128);
     }
 
     #[test]
-    fn find_partition_number_is_correct_only_for_palindromic_multi_digit() {
-        assert_eq!(dev(r#"{"name":"nvme0n1p11","size":0}"#).find_partition_number().unwrap(), 11);
+    fn find_partition_number_ignores_digits_that_are_not_a_trailing_run() {
+        assert_eq!(dev(r#"{"name":"nvme0n1p3","size":0}"#).find_partition_number().unwrap(), 3);
+        assert_eq!(dev(r#"{"name":"mmcblk1p2","size":0}"#).find_partition_number().unwrap(), 2);
     }
 
     #[test]
@@ -284,8 +282,8 @@ mod tests {
     }
 
     #[test]
-    fn find_partition_number_parses_all_digit_names_reversed_not_an_error() {
-        assert_eq!(dev(r#"{"name":"123","size":0}"#).find_partition_number().unwrap(), 321);
+    fn find_partition_number_reads_an_all_digit_name_as_written() {
+        assert_eq!(dev(r#"{"name":"123","size":0}"#).find_partition_number().unwrap(), 123);
     }
 
     #[test]
@@ -379,13 +377,23 @@ mod tests {
         let disk = dev(
             r#"{ "name": "nvme0n1", "size": 100, "children": [
                 { "name": "nvme0n1p1", "size": 111 },
-                { "name": "nvme0n1p10", "size": 222 }
+                { "name": "nvme0n1p1", "size": 222 }
             ] }"#,
         );
-        assert_eq!(disk.children[0].find_partition_number().unwrap(), 1);
-        assert_eq!(disk.children[1].find_partition_number().unwrap(), 1);
         let target = disk.partition_target(1, "ext4".to_string()).unwrap();
         assert_eq!(target.device, "/dev/nvme0n1p1");
         assert_eq!(target.size, 111);
+    }
+
+    #[test]
+    fn partition_target_distinguishes_single_from_multi_digit_siblings() {
+        let disk = dev(
+            r#"{ "name": "nvme0n1", "size": 100, "children": [
+                { "name": "nvme0n1p1", "size": 111 },
+                { "name": "nvme0n1p10", "size": 222 }
+            ] }"#,
+        );
+        assert_eq!(disk.partition_target(1, "ext4".to_string()).unwrap().size, 111);
+        assert_eq!(disk.partition_target(10, "ext4".to_string()).unwrap().size, 222);
     }
 }
