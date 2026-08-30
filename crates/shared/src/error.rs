@@ -91,20 +91,20 @@ impl From<sqlx::Error> for AppError {
                 Self::Database("database pool timed out - server under heavy load".into())
             }
             sqlx::Error::PoolClosed => Self::Internal("database pool was closed".into()),
-            sqlx::Error::Database(db_err) => {
-                if let Some(code) = db_err.code() {
-                    if code == "23505" {
-                        return Self::AlreadyExists(db_err.message().into());
-                    }
-                    if code == "23503" {
-                        return Self::FailedPrecondition(format!(
-                            "foreign key violation: {}",
-                            db_err.message()
-                        ));
-                    }
+            sqlx::Error::Database(db_err) => match db_err.kind() {
+                sqlx::error::ErrorKind::UniqueViolation => {
+                    Self::AlreadyExists(db_err.message().into())
                 }
-                Self::Database(db_err.message().into())
-            }
+                sqlx::error::ErrorKind::ForeignKeyViolation => Self::FailedPrecondition(format!(
+                    "foreign key violation: {}",
+                    db_err.message()
+                )),
+                sqlx::error::ErrorKind::NotNullViolation
+                | sqlx::error::ErrorKind::CheckViolation => {
+                    Self::InvalidArgument(db_err.message().into())
+                }
+                _ => Self::Database(db_err.message().into()),
+            },
             sqlx::Error::Io(e) => Self::Database(format!("IO error: {}", e)),
             sqlx::Error::Tls(e) => Self::Internal(format!("TLS error: {}", e)),
             sqlx::Error::Protocol(e) => Self::Internal(format!("protocol error: {}", e)),
@@ -269,7 +269,8 @@ mod tests {
 
     #[cfg(feature = "sqlx-error")]
     #[tokio::test]
-    async fn sqlite_unique_violation_maps_to_database_because_23505_is_a_postgres_only_sqlstate() {
+    async fn a_unique_violation_maps_to_already_exists_so_the_dashboard_sees_400() {
+        use dioxus_fullstack::AsStatusCode;
         let pool = mem_pool().await;
         sqlx::query("CREATE TABLE t (name TEXT UNIQUE)")
             .execute(&pool)
@@ -284,18 +285,15 @@ mod tests {
             .await
             .unwrap_err();
 
-        let code = match &err {
-            sqlx::Error::Database(db) => db.code().map(|c| c.into_owned()),
-            other => panic!("expected a database error, got {other:?}"),
-        };
-        assert_eq!(code.as_deref(), Some("2067"));
-        assert!(matches!(AppError::from(err), AppError::Database(_)));
+        let mapped = AppError::from(err);
+        assert!(matches!(mapped, AppError::AlreadyExists(_)), "got {mapped:?}");
+        assert_eq!(mapped.as_status_code(), dioxus_fullstack::http::StatusCode::BAD_REQUEST);
     }
 
     #[cfg(feature = "sqlx-error")]
     #[tokio::test]
-    async fn sqlite_foreign_key_violation_maps_to_database_because_23503_is_a_postgres_only_sqlstate()
-     {
+    async fn a_foreign_key_violation_maps_to_failed_precondition_so_the_dashboard_sees_412() {
+        use dioxus_fullstack::AsStatusCode;
         let pool = mem_pool().await;
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&pool)
@@ -314,12 +312,37 @@ mod tests {
             .await
             .unwrap_err();
 
-        let code = match &err {
-            sqlx::Error::Database(db) => db.code().map(|c| c.into_owned()),
-            other => panic!("expected a database error, got {other:?}"),
-        };
-        assert_eq!(code.as_deref(), Some("787"));
-        assert!(matches!(AppError::from(err), AppError::Database(_)));
+        let mapped = AppError::from(err);
+        assert!(
+            matches!(mapped, AppError::FailedPrecondition(_)),
+            "got {mapped:?}"
+        );
+        assert_eq!(
+            mapped.as_status_code(),
+            dioxus_fullstack::http::StatusCode::PRECONDITION_FAILED
+        );
+    }
+
+    #[cfg(feature = "sqlx-error")]
+    #[tokio::test]
+    async fn a_not_null_violation_maps_to_invalid_argument_so_the_dashboard_sees_400() {
+        use dioxus_fullstack::AsStatusCode;
+        let pool = mem_pool().await;
+        sqlx::query("CREATE TABLE t (name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = sqlx::query("INSERT INTO t (name) VALUES (NULL)")
+            .execute(&pool)
+            .await
+            .unwrap_err();
+
+        let mapped = AppError::from(err);
+        assert!(
+            matches!(mapped, AppError::InvalidArgument(_)),
+            "got {mapped:?}"
+        );
+        assert_eq!(mapped.as_status_code(), dioxus_fullstack::http::StatusCode::BAD_REQUEST);
     }
 
     #[cfg(feature = "sqlx-error")]
