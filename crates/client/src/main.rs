@@ -21,7 +21,10 @@ struct Args {
     log_level: String,
 }
 
-#[tokio::main]
+// dioxus-fullstack's native client wraps every response body in a `SendWrapper`,
+// which panics when polled from a thread other than the one that created it.
+// A single-threaded runtime keeps every poll on the thread that issued the request.
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     setup_logging!(args.log_level);
