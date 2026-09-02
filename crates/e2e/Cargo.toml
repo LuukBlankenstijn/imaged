@@ -17,7 +17,7 @@ imaged-api-ui = { path = "../api/ui", features = ["server"] }
 dioxus-server = "0.7"
 axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
-tokio = { workspace = true, features = ["fs", "io-util", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "sync", "time"] }
 tokio-util = { workspace = true, features = ["io"] }
 tokio-tungstenite = "0.29"
 futures.workspace = true

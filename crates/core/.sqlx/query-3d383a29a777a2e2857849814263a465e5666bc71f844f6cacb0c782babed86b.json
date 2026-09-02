@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT * FROM groups",
+  "query": "SELECT * FROM groups ORDER BY name",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "edcb1d8e096ca4e7fa84b546c244a0f19f6db3befb235a225531b62eb59ad68f"
+  "hash": "3d383a29a777a2e2857849814263a465e5666bc71f844f6cacb0c782babed86b"
 }

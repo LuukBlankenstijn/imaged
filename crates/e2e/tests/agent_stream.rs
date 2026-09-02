@@ -326,10 +326,7 @@ async fn an_unresponsive_agent_is_evicted_by_the_liveness_deadline() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
 
-    // tungstenite only auto-pongs while its stream is polled, so holding the
-    // connection without ever calling `next_event` leaves the server's pings
-    // unanswered and lets its liveness deadline fire.
-    let held = harness::connect_agent_stream(s, &mac, DISK)
+    let held = harness::connect_silent_agent(s, &mac, DISK)
         .await
         .expect("connect");
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();

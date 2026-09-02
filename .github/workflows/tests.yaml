@@ -31,6 +31,11 @@ jobs:
           nix build .#initramfs --print-build-logs
           install -Dm0644 ./result assets/initramfs.cpio.gz
 
+      # crates/web/src/app.rs references this through asset!, which resolves at
+      # compile time, but the generated stylesheet is not tracked.
+      - name: Generate the stylesheet
+        run: nix develop -c tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
+
       # sqlx's query! macros are checked at compile time against DATABASE_URL.
       - name: Prepare the database
         run: nix develop -c sqlx database setup --source crates/core/migrations

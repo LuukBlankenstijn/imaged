@@ -150,15 +150,9 @@ async fn multicast_creates_one_task_and_notifies_every_connected_agent() {
     assert_eq!(e2["Task"]["id"], task.id);
     assert_eq!(e2["Task"]["task_type"], "Multicast");
 
-    let next = s
-        .container
-        .task_repo
-        .get_next_multicast()
-        .await
-        .expect("get_next_multicast")
-        .expect("a pending multicast task");
-    assert_eq!(next.id, task.id);
-    assert!(next.hosts.iter().any(|h| h.state.is_pending()));
+    let stored = get_task(s, task.id).await;
+    assert_eq!(stored.task_type, TaskType::Multicast);
+    assert!(stored.hosts.iter().all(|h| h.state.is_pending()));
 }
 
 #[tokio::test]

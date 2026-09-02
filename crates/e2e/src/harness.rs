@@ -210,7 +210,30 @@ enum Inner {
         stream: BoxStream<'static, reqwest::Result<Bytes>>,
         buf: Vec<u8>,
     },
-    Ws(WsStream),
+    Ws {
+        events: tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        pump: tokio::task::JoinHandle<()>,
+    },
+}
+
+/// Reads the socket for as long as the test holds the stream, so tungstenite
+/// answers the server's liveness pings even while the test is busy elsewhere.
+/// A real agent behaves the same way: it hands work to a spawned task and
+/// returns to its receive loop immediately.
+async fn pump(mut ws: WsStream, events: tokio::sync::mpsc::UnboundedSender<serde_json::Value>) {
+    while let Some(Ok(message)) = ws.next().await {
+        let event = match message {
+            Message::Text(text) => serde_json::from_str(text.as_str()).ok(),
+            Message::Binary(bytes) => serde_json::from_slice(&bytes).ok(),
+            Message::Close(_) => return,
+            _ => None,
+        };
+        if let Some(event) = event
+            && events.send(event).is_err()
+        {
+            return;
+        }
+    }
 }
 
 /// A live agent control connection (a WebSocket) or dashboard SSE feed.
@@ -222,18 +245,50 @@ pub struct EventStream {
     inner: Inner,
 }
 
-pub async fn connect_agent_stream(
-    s: &TestServer,
-    mac: &str,
-    disk_size_bytes: u64,
-) -> anyhow::Result<EventStream> {
+impl Drop for EventStream {
+    fn drop(&mut self) {
+        if let Inner::Ws { pump, .. } = &self.inner {
+            pump.abort();
+        }
+    }
+}
+
+async fn connect_ws(s: &TestServer, mac: &str, disk_size_bytes: u64) -> anyhow::Result<WsStream> {
     let ws_base = s.base_url.replacen("http://", "ws://", 1);
     let url = format!("{ws_base}/api/client/stream?disk_size_bytes={disk_size_bytes}");
     let mut request = url.into_client_request()?;
     request.headers_mut().insert("X-Agent-Mac", mac.parse()?);
     let (ws, _resp) = connect_async(request).await?;
+    Ok(ws)
+}
+
+pub async fn connect_agent_stream(
+    s: &TestServer,
+    mac: &str,
+    disk_size_bytes: u64,
+) -> anyhow::Result<EventStream> {
+    let (tx, events) = tokio::sync::mpsc::unbounded_channel();
     Ok(EventStream {
-        inner: Inner::Ws(ws),
+        inner: Inner::Ws {
+            events,
+            pump: tokio::spawn(pump(connect_ws(s, mac, disk_size_bytes).await?, tx)),
+        },
+    })
+}
+
+/// An agent control connection nobody ever reads from, so tungstenite never
+/// answers the server's liveness pings.
+pub struct SilentAgent {
+    _ws: WsStream,
+}
+
+pub async fn connect_silent_agent(
+    s: &TestServer,
+    mac: &str,
+    disk_size_bytes: u64,
+) -> anyhow::Result<SilentAgent> {
+    Ok(SilentAgent {
+        _ws: connect_ws(s, mac, disk_size_bytes).await?,
     })
 }
 
@@ -256,9 +311,8 @@ impl EventStream {
     /// Return the next event's JSON payload, or `None` on timeout or end of
     /// stream. For the WebSocket that is the next data frame's JSON — dioxus's
     /// default `JsonEncoding` frames typed messages as Binary, so both Binary
-    /// and Text are decoded — with Ping/Pong control traffic transparently
-    /// ignored; for SSE it is the next event's `data` payload, buffered across
-    /// chunk boundaries.
+    /// and Text are decoded; for SSE it is the next event's `data` payload,
+    /// buffered across chunk boundaries.
     pub async fn next_event(&mut self, timeout: Duration) -> Option<serde_json::Value> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -275,23 +329,12 @@ impl EventStream {
                         Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
                     }
                 }
-                Inner::Ws(ws) => {
+                Inner::Ws { events, .. } => {
                     let remaining = deadline.checked_duration_since(Instant::now())?;
-                    match tokio::time::timeout(remaining, ws.next()).await {
-                        Ok(Some(Ok(Message::Text(text)))) => {
-                            if let Ok(value) = serde_json::from_str(text.as_str()) {
-                                return Some(value);
-                            }
-                        }
-                        Ok(Some(Ok(Message::Binary(bytes)))) => {
-                            if let Ok(value) = serde_json::from_slice(&bytes) {
-                                return Some(value);
-                            }
-                        }
-                        Ok(Some(Ok(Message::Close(_)))) => return None,
-                        Ok(Some(Ok(_))) => continue,
-                        Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
-                    }
+                    return tokio::time::timeout(remaining, events.recv())
+                        .await
+                        .ok()
+                        .flatten();
                 }
             }
         }
