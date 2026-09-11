@@ -1,87 +1,112 @@
+use std::net::{IpAddr, Ipv4Addr};
 use std::pin::Pin;
-use std::process::Stdio;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
-use imaged_shared::MULTICAST_RVD_ADDRESS;
-use tokio::io::{AsyncRead, ReadBuf};
-use tokio::process::{Child, ChildStdout, Command};
+use imaged_shared::MULTICAST_GROUP_ADDRESS;
+use scuttlecast::receiver::Receiver;
+use tokio::io::{AsyncRead, DuplexStream, ReadBuf};
+use tokio_util::task::AbortOnDropHandle;
+use tracing::{debug, warn};
 
-struct UdpReceiverStream {
-    stdout: ChildStdout,
-    _child: Child,
+use crate::sys;
+
+const JOIN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const PIPE_CAPACITY: usize = 1024 * 1024;
+
+struct MulticastStream {
+    pipe: DuplexStream,
+    _session: AbortOnDropHandle<()>,
 }
 
-impl AsyncRead for UdpReceiverStream {
+impl AsyncRead for MulticastStream {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().stdout).poll_read(cx, buf)
+        Pin::new(&mut self.get_mut().pipe).poll_read(cx, buf)
     }
 }
 
-pub async fn udp_receiver_stream(
-    port: u16,
-) -> anyhow::Result<impl AsyncRead + Send + Unpin + 'static> {
-    let rvd_address = MULTICAST_RVD_ADDRESS;
-    let mut cmd = Command::new("udp-receiver");
-    cmd.args([
-        "--portbase",
-        &port.to_string(),
-        "--nokbd",
-        "--mcast-rdv-address",
-        rvd_address,
-    ]);
-    spawn_receiver(cmd).await
+fn local_ipv4() -> anyhow::Result<Ipv4Addr> {
+    match sys::get_ip() {
+        Some(IpAddr::V4(v4)) => Ok(v4),
+        other => anyhow::bail!("no local IPv4 address to join the multicast group on: {other:?}"),
+    }
 }
 
-async fn spawn_receiver(mut cmd: Command) -> anyhow::Result<UdpReceiverStream> {
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()?;
+pub async fn multicast_stream(
+    port: u16,
+) -> anyhow::Result<impl AsyncRead + Send + Unpin + 'static> {
+    receiver_stream(local_ipv4()?, port).await
+}
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("udp-receiver stdout missing"))?;
+async fn receiver_stream(local_ip: Ipv4Addr, port: u16) -> anyhow::Result<MulticastStream> {
+    let receiver = Receiver::builder()
+        .socket(local_ip, MULTICAST_GROUP_ADDRESS, port)
+        .map_err(|e| anyhow::anyhow!("failed to bind multicast receiver on port {port}: {e}"))?
+        .max_wait(JOIN_TIMEOUT)
+        .build();
 
-    Ok(UdpReceiverStream {
-        stdout,
-        _child: child,
+    let (session_pipe, pipe) = tokio::io::duplex(PIPE_CAPACITY);
+    let session = tokio::spawn(async move {
+        match receiver.recv_to(session_pipe).await {
+            Ok(summary) => debug!(
+                total_bytes = summary.total_bytes,
+                blocks = summary.total_blocks,
+                duplicates = summary.duplicates,
+                late = summary.late,
+                naks_sent = summary.naks_sent,
+                loss = summary.loss(),
+                "multicast transfer complete"
+            ),
+            Err(e) => warn!(port, error = %e, "multicast transfer failed"),
+        }
+    });
+
+    Ok(MulticastStream {
+        pipe,
+        _session: AbortOnDropHandle::new(session),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use scuttlecast::sender::Sender;
+    use tokio::io::AsyncReadExt;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn drop_kills_receiver_child() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let marker =
-            std::env::temp_dir().join(format!("imaged-drop-{}-{nanos}", std::process::id()));
-        let _ = std::fs::remove_file(&marker);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_transfer_round_trips_every_byte_and_then_reports_eof() {
+        const PORT: u16 = 50_902;
+        let payload: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(format!("sleep 1 && touch {}", marker.display()));
+        let mut stream = receiver_stream(Ipv4Addr::LOCALHOST, PORT)
+            .await
+            .expect("bind receiver");
 
-        let stream = spawn_receiver(cmd).await.expect("spawn stub receiver");
-        drop(stream);
+        let sending = tokio::spawn({
+            let payload = payload.clone();
+            async move {
+                Sender::builder()
+                    .socket(Ipv4Addr::LOCALHOST, MULTICAST_GROUP_ADDRESS, PORT)
+                    .expect("bind sender")
+                    .min_receivers(1)
+                    .build()
+                    .send_stream(std::io::Cursor::new(payload))
+                    .await
+                    .expect("send")
+            }
+        });
 
-        std::thread::sleep(Duration::from_millis(1200));
-        assert!(
-            !marker.exists(),
-            "receiver child survived drop and created {}",
-            marker.display()
-        );
-        let _ = std::fs::remove_file(&marker);
+        let mut received = Vec::new();
+        stream
+            .read_to_end(&mut received)
+            .await
+            .expect("read to eof");
+        sending.await.expect("send task");
+
+        assert_eq!(received, payload);
     }
 }

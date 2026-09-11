@@ -2,18 +2,24 @@ use crate::{
     domain::task::{Task, TaskState, TaskType},
     error::{AppError, Result},
 };
-use imaged_shared::{MULTICAST_DATA_ADDRESS, MULTICAST_RVD_ADDRESS, get_multicast_port};
+use imaged_shared::{MULTICAST_GROUP_ADDRESS, get_multicast_port};
 use std::{
-    process::Stdio,
+    net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use tracing::{debug, error, info};
 
-use tokio::{process::Command, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use scuttlecast::{
+    sender::Sender,
+    state::{LimitingFactor, ReceiverState, TransferState},
+};
+use tokio::{sync::watch, task::JoinHandle};
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
 use crate::{
     domain::{image::ImageRepository, task::TaskRepository},
@@ -23,7 +29,7 @@ use crate::{
 struct RunningMulticastTask {
     id: i64,
     handle: JoinHandle<()>,
-    /// Cancels the in-flight `do_work` for `id`, killing the udp-sender child.
+    /// Cancels the in-flight `do_work` for `id`, dropping the running send.
     cancel: CancellationToken,
     /// Set by `notify_new` under the slot lock when work arrives while this
     /// worker is alive. The worker's exit path re-reads it under the same lock
@@ -122,8 +128,8 @@ impl MulticastManager {
 
     /// Cancel the in-flight multicast send if `task_id` is the one currently
     /// running. The caller is responsible for marking the task cancelled in the
-    /// DB first; this stops the detached sender loop's current `do_work` (and
-    /// its udp-sender child) so the loop moves on to the next queued task.
+    /// DB first; this stops the detached sender loop's current `do_work` so the
+    /// loop moves on to the next queued task.
     pub fn cancel(&self, task_id: i64) {
         let lock = self.current.lock().unwrap();
         if let Some(r) = lock.as_ref()
@@ -165,9 +171,9 @@ impl MulticastManager {
 
             tokio::select! {
                 biased;
-                // Cancel wins: dropping the do_work future drops the udp-sender
-                // Child, which is killed via kill_on_drop. The DB rows are
-                // already marked cancelled by the caller, so nothing to do here.
+                // Cancel wins: dropping the do_work future drops the sender and
+                // its socket. The DB rows are already marked cancelled by the
+                // caller, so nothing to do here.
                 _ = cancel.cancelled() => {
                     debug!(id=%t.id, "multicast task cancelled");
                 }
@@ -208,7 +214,7 @@ impl MulticastManager {
 
         let partition_table_path = self.image_service.get_partition_table_path(image_id);
 
-        upd_sender(
+        send_file(
             &partition_table_path,
             get_multicast_port(0),
             num_receivers,
@@ -222,7 +228,7 @@ impl MulticastManager {
             let partition_path = self
                 .image_service
                 .get_partition_path(image_id, p.partition_number);
-            upd_sender(
+            send_file(
                 &partition_path,
                 get_multicast_port(p.partition_number),
                 num_receivers,
@@ -235,100 +241,249 @@ impl MulticastManager {
     }
 }
 
-async fn upd_sender(file: &str, portbase: u16, num_receivers: usize, interface: &str) -> Result {
-    let rvd_address = MULTICAST_RVD_ADDRESS;
-    let data_address = MULTICAST_DATA_ADDRESS;
-    let status = Command::new("udp-sender")
-        .args([
-            "--file",
-            file,
-            "--portbase",
-            &portbase.to_string(),
-            "--mcast-rdv-address",
-            rvd_address,
-            "--mcast-data-address",
-            data_address,
-            "--min-receivers",
-            &num_receivers.to_string(),
-            "--nokbd",
-            "--autorate",
-            "--interface",
-            interface,
-        ])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| AppError::Internal(format!("failed to spawn udp-sender {e}")))?
-        .wait()
-        .await
-        .map_err(|_| AppError::Internal("udp-sender process failed to wait".to_string()))?;
+fn interface_address(name: &str) -> Result<Ipv4Addr> {
+    local_ip_address::list_afinet_netifas()
+        .map_err(|e| AppError::Internal(format!("failed to list network interfaces: {e}")))?
+        .into_iter()
+        .find_map(|(iface, address)| match address {
+            IpAddr::V4(v4) if iface == name => Some(v4),
+            _ => None,
+        })
+        .ok_or_else(|| AppError::Internal(format!("interface {name} has no IPv4 address")))
+}
 
-    if !status.success() {
-        return Err(AppError::Internal(
-            "udp-sender exited unsuccessfully".to_string(),
-        ));
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+fn limiting_receiver(state: &TransferState) -> Option<&ReceiverState> {
+    let id = match state.limiting {
+        LimitingFactor::WindowStalled { blocked_by, .. } => blocked_by,
+        LimitingFactor::RateLimited { worst, .. } => worst,
+        LimitingFactor::SinkStalled { receiver, .. } => receiver,
+        _ => return None,
+    };
+    state.receivers.iter().find(|r| r.receiver_id == id)
+}
+
+async fn log_progress(progress: watch::Receiver<TransferState>) {
+    let mut ticker = tokio::time::interval(PROGRESS_LOG_INTERVAL);
+    ticker.tick().await;
+    loop {
+        ticker.tick().await;
+        let state = progress.borrow();
+        let culprit = limiting_receiver(&state);
+        info!(
+            mbit_per_second = state.bytes_per_second() * 8.0 / 1e6,
+            blocks_sent = state.blocks_sent,
+            receivers = state.receivers.len(),
+            parity_shards = state.parity_shards,
+            draining = state.draining,
+            limiting = %state.limiting,
+            limiting_host = ?culprit.map(|r| r.address),
+            limiting_host_loss = ?culprit.map(|r| r.unrecovered_loss),
+            limiting_host_stall_ms = ?culprit.map(|r| r.sink_stall_ms),
+            slowest_host = ?state.slowest().map(|r| (r.address, r.slices_behind)),
+            "multicast transfer progress"
+        );
     }
+}
 
-    Ok(())
+async fn send_file(file: &str, port: u16, num_receivers: usize, interface: &str) -> Result {
+    let sender = Sender::builder()
+        .socket(interface_address(interface)?, MULTICAST_GROUP_ADDRESS, port)
+        .map_err(|e| AppError::Internal(format!("failed to bind multicast sender: {e}")))?
+        .min_receivers(num_receivers)
+        .build();
+
+    let _reporter = AbortOnDropHandle::new(tokio::spawn(log_progress(sender.progress())));
+
+    sender
+        .send_file(PathBuf::from(file))
+        .await
+        .map_err(|e| AppError::Internal(format!("multicast send of {file} failed: {e}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use scuttlecast::receiver::Receiver;
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
 
-    /// Spawns a child that only creates `marker` if it survives ~1s, mirroring
-    /// how `upd_sender` runs udp-sender: `kill_on_drop(true)` + `spawn().wait()`.
-    async fn run_child(marker: &std::path::Path) {
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!("sleep 1 && touch {}", marker.display()))
-            .kill_on_drop(true)
-            .spawn()
-            .expect("spawn sh")
-            .wait()
-            .await;
+    fn receiver_state(receiver_id: u64, address: &str) -> ReceiverState {
+        ReceiverState {
+            receiver_id,
+            address: address.parse().unwrap(),
+            windowed_loss: 0.0,
+            unrecovered_loss: 0.0,
+            lifetime_loss: 0.0,
+            next_needed_slice: 0,
+            slices_behind: 0,
+            naks: 0,
+            sink_stall_ms: 0,
+        }
     }
 
-    /// Regression test for the multicast cancel bug: cancelling a running send
-    /// must actually kill the sender child, not just flip the database. We drive
-    /// the same `select!(token.cancelled(), do_work)` shape as `handle_loop` and
-    /// prove the child is killed before it can finish its work.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cancel_kills_running_child() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let marker =
-            std::env::temp_dir().join(format!("imaged-cancel-{}-{nanos}", std::process::id()));
-        let _ = std::fs::remove_file(&marker);
+    #[test]
+    fn the_limiting_factor_is_resolved_to_the_host_holding_the_deploy_up() {
+        let state = TransferState {
+            receivers: vec![
+                receiver_state(11, "10.0.0.1:5000"),
+                receiver_state(22, "10.0.0.2:5000"),
+            ],
+            limiting: LimitingFactor::SinkStalled {
+                receiver: 22,
+                stall_ms: 80,
+            },
+            ..TransferState::default()
+        };
+
+        assert_eq!(
+            limiting_receiver(&state).map(|r| r.address.to_string()),
+            Some("10.0.0.2:5000".to_string())
+        );
+    }
+
+    #[test]
+    fn a_healthy_transfer_blames_no_host() {
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000")],
+            limiting: LimitingFactor::Unconstrained,
+            ..TransferState::default()
+        };
+
+        assert!(limiting_receiver(&state).is_none());
+    }
+
+    #[test]
+    fn a_server_side_bottleneck_blames_no_host() {
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000")],
+            limiting: LimitingFactor::SourceStarved { read_wait_ms: 40 },
+            ..TransferState::default()
+        };
+
+        assert!(limiting_receiver(&state).is_none());
+    }
+
+    const CANCEL_TEST_PORT: u16 = 50_900;
+    const CANCEL_TEST_BLOCKS_PER_SECOND: f64 = 200.0;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancelling_stops_the_transfer_on_the_wire() {
+        let payload = vec![0xA5u8; 4 * 1024 * 1024];
+        let payload_len = payload.len() as u64;
+
+        let receiver = Receiver::builder()
+            .socket(
+                Ipv4Addr::LOCALHOST,
+                MULTICAST_GROUP_ADDRESS,
+                CANCEL_TEST_PORT,
+            )
+            .expect("bind receiver")
+            .max_wait(Duration::from_secs(30))
+            .build();
+
+        let received = Arc::new(AtomicU64::new(0));
+        let (pipe, mut drain) = tokio::io::duplex(1024 * 1024);
+        let counter = received.clone();
+        let draining = tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = drain.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+                counter.fetch_add(n as u64, Ordering::SeqCst);
+            }
+        });
+        let receiving = tokio::spawn(receiver.recv_to(pipe));
 
         let token = CancellationToken::new();
-        let trigger = token.clone();
-        // Cancel once the child has spawned and is mid-sleep. Uses a plain thread
-        // so we don't depend on tokio's "time" feature.
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(200));
-            trigger.cancel();
+        let sending = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let sender = Sender::builder()
+                    .socket(
+                        Ipv4Addr::LOCALHOST,
+                        MULTICAST_GROUP_ADDRESS,
+                        CANCEL_TEST_PORT,
+                    )
+                    .expect("bind sender")
+                    .min_receivers(1)
+                    .max_rate(CANCEL_TEST_BLOCKS_PER_SECOND)
+                    .build();
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {}
+                    res = sender.send_stream(std::io::Cursor::new(payload)) => {
+                        panic!("send completed instead of being cancelled: {res:?}")
+                    }
+                }
+            }
         });
 
-        tokio::select! {
-            biased;
-            _ = token.cancelled() => {}
-            _ = run_child(&marker) => panic!("child completed instead of being cancelled"),
+        while received.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        token.cancel();
+        sending.await.expect("send task");
 
-        // Absent the kill, the child would `touch` the marker at ~1s. Wait past
-        // that and confirm it never happened.
-        std::thread::sleep(Duration::from_millis(1200));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let settled = received.load(Ordering::SeqCst);
         assert!(
-            !marker.exists(),
-            "child survived cancellation and created {}",
-            marker.display()
+            settled < payload_len,
+            "the whole payload arrived before cancellation could take effect, so this test proves nothing; lower CANCEL_TEST_BLOCKS_PER_SECOND"
         );
-        let _ = std::fs::remove_file(&marker);
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(
+            received.load(Ordering::SeqCst),
+            settled,
+            "bytes kept arriving after the send was cancelled"
+        );
+
+        receiving.abort();
+        draining.abort();
+    }
+
+    #[test]
+    fn the_loopback_interface_resolves_to_its_ipv4_address() {
+        assert_eq!(interface_address("lo").unwrap(), Ipv4Addr::LOCALHOST);
+    }
+
+    #[test]
+    fn an_unknown_interface_is_an_error_rather_than_a_silent_default() {
+        assert!(interface_address("definitely-not-an-interface").is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn send_file_delivers_the_whole_file_to_a_receiver_on_that_interface() {
+        const PORT: u16 = 50_904;
+        let payload: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
+
+        let path = std::env::temp_dir().join(format!("imaged-send-file-{}", std::process::id()));
+        std::fs::write(&path, &payload).expect("write payload");
+
+        let receiver = Receiver::builder()
+            .socket(Ipv4Addr::LOCALHOST, MULTICAST_GROUP_ADDRESS, PORT)
+            .expect("bind receiver")
+            .max_wait(Duration::from_secs(30))
+            .build();
+        let receiving = tokio::spawn(async move {
+            let mut received = Vec::new();
+            let summary = receiver.recv_to(&mut received).await.expect("receive");
+            (received, summary)
+        });
+
+        send_file(path.to_str().expect("utf8 path"), PORT, 1, "lo")
+            .await
+            .expect("send");
+
+        let (received, summary) = receiving.await.expect("receive task");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(received, payload);
+        assert_eq!(summary.total_bytes, payload.len() as u64);
     }
 
     use crate::di::DIContainer;

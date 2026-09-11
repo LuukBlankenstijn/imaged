@@ -34,7 +34,6 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-        udpcast = pkgs.callPackage ./nix/packages/udpcast.nix { };
         partclone = pkgs.callPackage ./nix/packages/partclone.nix { };
         kernel = pkgs.callPackage ./nix/packages/kernel.nix { };
 
@@ -78,7 +77,7 @@
 
         initramfsStaging = import ./nix/lib/initramfs-staging.nix {
           inherit (pkgs) pkgsStatic;
-          inherit udpcast partclone;
+          inherit partclone;
         };
         initramfs = pkgs.callPackage ./nix/packages/initramfs.nix {
           inherit imaged-client initramfsStaging;
@@ -96,7 +95,6 @@
       {
         packages = {
           inherit
-            udpcast
             kernel
             partclone
             imaged-client
@@ -116,7 +114,6 @@
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
           inherit
             kernel
-            udpcast
             build-initramfs
             run-vm
             run-vm-pxe
@@ -149,7 +146,6 @@
 
           services.imaged = {
             server.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
-            server.udpcast = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.udpcast;
             tftp.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-tftp;
           };
         };

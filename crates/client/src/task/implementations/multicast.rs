@@ -8,7 +8,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use super::ClientTaskExt;
-use crate::{sys, task::PARTTABLE_TMP, transport::multicast::udp_receiver_stream};
+use crate::{sys, task::PARTTABLE_TMP, transport::multicast::multicast_stream};
 
 #[derive(Clone, Display, Constructor)]
 #[display("multicast task")]
@@ -29,7 +29,7 @@ impl ClientTaskExt for MulticastTask {
 
         let port = get_multicast_port(0);
         let mut buffer: Vec<u8> = Vec::new();
-        let mut data_stream = udp_receiver_stream(port).await?;
+        let mut data_stream = multicast_stream(port).await?;
         if let Err(e) = data_stream.read_to_end(&mut buffer).await {
             anyhow::bail!("failed to read partition table stream to buffer: {e}");
         };
@@ -66,9 +66,9 @@ impl ClientTaskExt for MulticastTask {
         &self,
         partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
-        debug!(partition_number=%partition.number, "starting partition download with udp-receiver");
+        debug!(partition_number=%partition.number, "starting partition download over multicast");
         let port = get_multicast_port(partition.number);
-        let stream = udp_receiver_stream(port).await?;
+        let stream = multicast_stream(port).await?;
         let mut decoder = ZstdDecoder::new(BufReader::new(stream));
 
         info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
@@ -93,7 +93,7 @@ impl ClientTaskExt for MulticastTask {
 
         tokio::io::copy(&mut decoder, &mut child_stdin)
             .await
-            .map_err(|e| anyhow::anyhow!("failed piping udp-receiver into partclone: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed piping multicast stream into partclone: {e}"))?;
 
         // Close partclone's stdin so it observes EOF and can finish; otherwise
         // the still-open pipe and child.wait() deadlock each other.

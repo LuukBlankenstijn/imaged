@@ -11,7 +11,7 @@ path = "src/lib.rs"
 tokio-stream.workspace = true
 derive_more = { workspace = true, features = ["display", "from_str", "is_variant"] }
 tracing.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 futures.workspace = true
 serde.workspace = true
 imaged-shared = { workspace = true, features = ["all", "axum-error", "sqlx-error"] }
@@ -27,9 +27,12 @@ async-trait = "0.1.89"
 bytes = "1.11.1"
 tower-http = { version = "0.6.8", features = ["trace"] }
 socket2 = { version = "0.6", features = ["all"] }
+scuttlecast.workspace = true
+local-ip-address = "0.6.13"
 
 [features]
 test-support = []
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true, features = ["time", "io-util"] }

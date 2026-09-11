@@ -16,10 +16,6 @@ in
       type = types.package;
       description = "The imaged-server package to use.";
     };
-    udpcast = mkOption {
-      type = types.package;
-      description = "Package providing udp-sender, used for multicast deploys.";
-    };
     dataDir = mkOption {
       type = types.path;
       default = "/var/lib/imaged";
@@ -37,7 +33,7 @@ in
     multicastInterface = mkOption {
       type = types.str;
       default = "lo";
-      description = "Network interface udp-sender binds for multicast deploys.";
+      description = "Network interface used for multicast deploys.";
     };
     webBindAddress = mkOption {
       type = types.nullOr types.str;
@@ -58,7 +54,6 @@ in
       description = "imaged server backend";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
-      path = [ cfg.udpcast ];
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}";
         WorkingDirectory = cfg.dataDir;

@@ -28,7 +28,7 @@ writeShellApplication {
 
     if ! iptables -C INPUT -i "$bridge" -p udp --dport 50000:50127 -j ACCEPT 2>/dev/null; then
       iptables -I INPUT 1 -i "$bridge" -p udp --dport 50000:50127 -j ACCEPT
-      echo "opened udp 50000:50127 on $bridge for udpcast"
+      echo "opened udp 50000:50127 on $bridge for multicast"
     fi
 
     if ! ip link show "$tap" >/dev/null 2>&1; then

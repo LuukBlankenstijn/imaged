@@ -88,7 +88,7 @@ async fn a_reboot_task_for_an_unconnected_host_is_persisted() {
 
 // The `/api/ui/groups/multicast` HTTP route calls `multicast_mgr.notify_new`,
 // which detaches a `do_work` that starts every host row and then blocks in a
-// real `udp-sender` on the immortal server runtime. Driving it over HTTP both
+// real multicast send on the immortal server runtime. Driving it over HTTP both
 // leaks a blocked sender and races the pending-host assertion, so this test
 // exercises the deterministic, synchronous half of the route (task creation +
 // registry fan-out) directly and leaves `notify_new` alone.

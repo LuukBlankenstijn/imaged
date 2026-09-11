@@ -9,7 +9,7 @@ mod multicast;
 mod types;
 
 #[cfg(feature = "multicast")]
-pub use multicast::{MULTICAST_DATA_ADDRESS, MULTICAST_RVD_ADDRESS, get_multicast_port};
+pub use multicast::{MULTICAST_GROUP_ADDRESS, get_multicast_port};
 #[cfg(feature = "types")]
 pub use types::{ServerEvent, Task, TaskType};
 

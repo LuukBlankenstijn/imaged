@@ -3,7 +3,6 @@
   mkShell,
   rustToolchain,
   kernel,
-  udpcast,
   build-initramfs,
   run-vm,
   run-vm-pxe,
@@ -25,7 +24,6 @@ mkShell {
     run-vm-pxe
     setup-net
     teardown-net
-    udpcast
     sqlx-cli
     dioxus-cli
     tailwindcss_4
