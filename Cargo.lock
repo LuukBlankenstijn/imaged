@@ -3940,9 +3940,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scuttlecast"
-version = "0.2.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab67f808be9fa9ac03b14e89e67c6435d26efb53f74abce0c933dbd06f7c2cc"
+checksum = "961e14b43e35be9dec1176ceec5d7eaf306192d4cc41ae0439ae27f663d0025a"
 dependencies = [
  "async-stream",
  "bincode",
@@ -3951,6 +3951,7 @@ dependencies = [
  "derive_more",
  "futures-core",
  "futures-util",
+ "libc",
  "rand 0.10.2",
  "reed-solomon-erasure",
  "socket2",
