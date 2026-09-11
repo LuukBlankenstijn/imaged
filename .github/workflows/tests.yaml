@@ -24,40 +24,12 @@ jobs:
           name: luukblankenstijn
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Cache the cargo build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain*', 'flake.lock') }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain*', 'flake.lock') }}-
-            cargo-${{ runner.os }}-
-
-      # crates/core/src/pxe.rs embeds this via include_bytes! but it is not
-      # tracked, so core does not compile without it.
-      - name: Materialise the embedded initramfs
+      # Both passes are crane derivations, so their dependency builds come from
+      # cachix instead of being recompiled on every run. nix builds them in
+      # parallel. See nix/packages/imaged-tests.nix for why the agent needs a
+      # pass of its own.
+      - name: Tests
         run: |
-          nix build .#initramfs --print-build-logs
-          install -Dm0644 ./result assets/initramfs.cpio.gz
-
-      # crates/web/src/app.rs references this through asset!, which resolves at
-      # compile time, but the generated stylesheet is not tracked.
-      - name: Generate the stylesheet
-        run: nix develop -c tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
-
-      # sqlx's query! macros are checked at compile time against DATABASE_URL.
-      - name: Prepare the database
-        run: nix develop -c sqlx database setup --source crates/core/migrations
-
-      # The dioxus server-fn macro compiles either an HTTP client call or a
-      # direct in-process call depending on imaged-api-client/server, and cargo
-      # unifies features per invocation, so the agent needs its own pass.
-      - name: Server and dashboard tests
-        run: nix develop -c cargo test-native
-
-      - name: Agent tests
-        run: nix develop -c cargo test-agent
+          nix build --print-build-logs \
+            .#checks.x86_64-linux.native-tests \
+            .#checks.x86_64-linux.agent-tests

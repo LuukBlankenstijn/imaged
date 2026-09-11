@@ -1,6 +1,6 @@
 .direnv
 http-root
-result
+result*
 target
 imaged.db*
 node_modules

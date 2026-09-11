@@ -91,8 +91,17 @@
         run-vm-pxe = pkgs.callPackage ./nix/scripts/run-vm-pxe.nix { };
         setup-net = pkgs.callPackage ./nix/scripts/setup-net.nix { };
         teardown-net = pkgs.callPackage ./nix/scripts/teardown-net.nix { };
+
+        imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
+          inherit craneLib initramfs;
+        };
       in
       {
+        checks = {
+          agent-tests = imaged-tests.agent;
+          native-tests = imaged-tests.native;
+        };
+
         packages = {
           inherit
             kernel
