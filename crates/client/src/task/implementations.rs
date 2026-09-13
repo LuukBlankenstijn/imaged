@@ -13,6 +13,10 @@ use enum_dispatch::enum_dispatch;
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
+#[allow(
+    async_fn_in_trait,
+    reason = "trait is internal to client, only driven on a single-threaded executor"
+)]
 #[enum_dispatch]
 pub trait ClientTaskExt: std::fmt::Display {
     async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {

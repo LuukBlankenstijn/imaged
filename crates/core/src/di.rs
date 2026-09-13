@@ -4,6 +4,7 @@ use std::sync::Arc;
 use derive_more::Constructor;
 use injectable::{install_injectable_container, register_injectable};
 
+use crate::AgentLiveness;
 use crate::domain::group::GroupRepository;
 use crate::domain::host::HostRepository;
 use crate::domain::image::ImageRepository;
@@ -11,8 +12,8 @@ use crate::domain::task::TaskRepository;
 use crate::multicast::MulticastManager;
 use crate::registry::HostRegistry;
 use crate::service::image::ImageService;
-use crate::AgentLiveness;
 
+#[allow(clippy::too_many_arguments)]
 #[derive(Clone, Constructor)]
 pub struct DIContainer {
     pub host_repo: Arc<dyn HostRepository>,

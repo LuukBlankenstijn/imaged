@@ -3,6 +3,10 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::task::implementations::ClientTaskExt;
 
+#[allow(
+    async_fn_in_trait,
+    reason = "trait is internal to client, only driven on a single-threaded executor"
+)]
 pub trait RunnableClientTask: ClientTaskExt {
     async fn run(&self) -> Result<()> {
         let disk = crate::sys::disk::find_target_disk().await?;

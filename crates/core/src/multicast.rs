@@ -28,7 +28,7 @@ use crate::{
 
 struct RunningMulticastTask {
     id: i64,
-    handle: JoinHandle<()>,
+    _handle: JoinHandle<()>,
     /// Cancels the in-flight `do_work` for `id`, dropping the running send.
     cancel: CancellationToken,
     /// Set by `notify_new` under the slot lock when work arrives while this
@@ -115,7 +115,7 @@ impl MulticastManager {
         });
 
         *lock = Some(RunningMulticastTask {
-            handle,
+            _handle: handle,
             // this id can be incorrect since the loop fetches the task for himself
             id: task_id,
             cancel: CancellationToken::new(),
@@ -657,7 +657,10 @@ mod tests {
         }
     }
 
-    fn build_manager(task_repo: Arc<FakeTaskRepo>, image_repo: Arc<FakeImageRepo>) -> MulticastManager {
+    fn build_manager(
+        task_repo: Arc<FakeTaskRepo>,
+        image_repo: Arc<FakeImageRepo>,
+    ) -> MulticastManager {
         MulticastManager {
             task_repo: task_repo as Arc<dyn TaskRepository>,
             image_repo: image_repo as Arc<dyn ImageRepository>,
@@ -726,7 +729,7 @@ mod tests {
         let handle = tokio::spawn(std::future::pending::<()>());
         *manager.current.lock().unwrap() = Some(RunningMulticastTask {
             id: 42,
-            handle,
+            _handle: handle,
             cancel: token.clone(),
             pending: false,
             generation: 0,
@@ -745,7 +748,7 @@ mod tests {
         );
 
         if let Some(r) = manager.current.lock().unwrap().as_ref() {
-            r.handle.abort();
+            r._handle.abort();
         }
     }
 
@@ -939,10 +942,12 @@ mod tests {
         manager.notify_new(1).unwrap();
         assert!(wait_for(|| repo.parked_at_empty.load(Ordering::SeqCst)).await);
 
-        repo.queue
-            .lock()
-            .unwrap()
-            .push_back(mk_task(2, TaskType::Multicast, TaskState::Pending, None));
+        repo.queue.lock().unwrap().push_back(mk_task(
+            2,
+            TaskType::Multicast,
+            TaskState::Pending,
+            None,
+        ));
         manager.notify_new(2).unwrap();
 
         repo.release_park.store(true, Ordering::SeqCst);
