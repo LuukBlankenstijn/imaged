@@ -5,14 +5,17 @@ use std::time::Duration;
 
 use imaged_shared::MULTICAST_GROUP_ADDRESS;
 use scuttlecast::receiver::Receiver;
+use scuttlecast::state::ReceiveState;
 use tokio::io::{AsyncRead, DuplexStream, ReadBuf};
+use tokio::sync::watch;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 use crate::sys;
 
 const JOIN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PIPE_CAPACITY: usize = 1024 * 1024;
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 
 struct MulticastStream {
     pipe: DuplexStream,
@@ -36,6 +39,27 @@ fn local_ipv4() -> anyhow::Result<Ipv4Addr> {
     }
 }
 
+async fn log_progress(port: u16, progress: watch::Receiver<ReceiveState>) {
+    let mut ticker = tokio::time::interval(PROGRESS_LOG_INTERVAL);
+    loop {
+        ticker.tick().await;
+        let state = progress.borrow().clone();
+        if state.transfer_id == 0 {
+            continue;
+        }
+
+        info!(
+            port,
+            progress = %state.progress(),
+            received = %state.received(),
+            rate = %state.rate(),
+            eta = %state.eta(),
+            naks = state.naks,
+            "multicast transfer progress"
+        );
+    }
+}
+
 pub async fn multicast_stream(
     port: u16,
 ) -> anyhow::Result<impl AsyncRead + Send + Unpin + 'static> {
@@ -49,10 +73,15 @@ async fn receiver_stream(local_ip: Ipv4Addr, port: u16) -> anyhow::Result<Multic
         .max_wait(JOIN_TIMEOUT)
         .build();
 
+    let reporter = AbortOnDropHandle::new(tokio::spawn(log_progress(port, receiver.progress())));
+
     let (session_pipe, pipe) = tokio::io::duplex(PIPE_CAPACITY);
+    info!(port, "joining multicast group");
     let session = tokio::spawn(async move {
+        let _reporter = reporter;
         match receiver.recv_to(session_pipe).await {
-            Ok(summary) => debug!(
+            Ok(summary) => info!(
+                port,
                 total_bytes = summary.total_bytes,
                 blocks = summary.total_blocks,
                 duplicates = summary.duplicates,
@@ -80,7 +109,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_transfer_round_trips_every_byte_and_then_reports_eof() {
         const PORT: u16 = 50_902;
-        let payload: Vec<u8> = (0..512 * 1024).map(|i| (i % 251) as u8).collect();
+        const PAYLOAD_BYTES: usize = 512 * 1024;
+        let payload: Vec<u8> = (0..PAYLOAD_BYTES).map(|i| (i % 251) as u8).collect();
 
         let mut stream = receiver_stream(Ipv4Addr::LOCALHOST, PORT)
             .await
@@ -94,7 +124,7 @@ mod tests {
                     .expect("bind sender")
                     .min_receivers(1)
                     .build()
-                    .send_stream(std::io::Cursor::new(payload))
+                    .send_stream(std::io::Cursor::new(payload), Some(PAYLOAD_BYTES as u64))
                     .await
                     .expect("send")
             }

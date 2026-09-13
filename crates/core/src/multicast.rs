@@ -415,7 +415,7 @@ mod tests {
                 tokio::select! {
                     biased;
                     _ = token.cancelled() => {}
-                    res = sender.send_stream(std::io::Cursor::new(payload)) => {
+                    res = sender.send_stream(std::io::Cursor::new(payload), Some(payload_len)) => {
                         panic!("send completed instead of being cancelled: {res:?}")
                     }
                 }
