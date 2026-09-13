@@ -195,14 +195,17 @@ mod tests {
     #[tokio::test]
     async fn save_partition_table_overwrites_rather_than_appends() {
         let (svc, _d) = service();
-        svc.save_partition_table(3, b"first version longer").await.unwrap();
+        svc.save_partition_table(3, b"first version longer")
+            .await
+            .unwrap();
         svc.save_partition_table(3, b"second").await.unwrap();
         let back = svc.read_partition_table(3).await.unwrap();
         assert_eq!(back, b"second");
     }
 
     #[tokio::test]
-    async fn read_partition_table_for_a_missing_image_returns_an_internal_error_and_does_not_panic() {
+    async fn read_partition_table_for_a_missing_image_returns_an_internal_error_and_does_not_panic()
+    {
         let (svc, _d) = service();
         let err = svc.read_partition_table(999).await.unwrap_err();
         assert!(matches!(err, AppError::Internal(_)), "got {err:?}");
@@ -248,7 +251,9 @@ mod tests {
             .await;
         assert!(res.is_err());
         assert!(
-            !tokio::fs::try_exists(svc.get_partition_path(5, 1)).await.unwrap(),
+            !tokio::fs::try_exists(svc.get_partition_path(5, 1))
+                .await
+                .unwrap(),
             "destination partition file must not exist after a mid-stream error"
         );
         no_temp_files_remain(&svc, 5).await;
@@ -282,7 +287,9 @@ mod tests {
         svc.save_partition_data(11, 1, futures::stream::iter(chunks))
             .await
             .unwrap();
-        let written = tokio::fs::read(svc.get_partition_path(11, 1)).await.unwrap();
+        let written = tokio::fs::read(svc.get_partition_path(11, 1))
+            .await
+            .unwrap();
         assert_eq!(written, b"zzzz");
     }
 
@@ -306,14 +313,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_partition_data_for_a_missing_file_surfaces_an_error_rather_than_an_empty_stream() {
+    async fn read_partition_data_for_a_missing_file_surfaces_an_error_rather_than_an_empty_stream()
+    {
         let (svc, _d) = service();
         let err = svc.read_partition_data(6, 99).await.err();
         assert!(matches!(err, Some(AppError::Internal(_))), "got {err:?}");
     }
 
     #[tokio::test]
-    async fn deleting_the_partition_file_after_the_stream_is_created_does_not_truncate_the_already_open_read() {
+    async fn deleting_the_partition_file_after_the_stream_is_created_does_not_truncate_the_already_open_read()
+     {
         let (svc, _d) = service();
         svc.save_partition_table(8, b"table").await.unwrap();
         let chunks = vec![Ok(Bytes::from_static(b"payload-bytes"))];
@@ -321,7 +330,9 @@ mod tests {
             .await
             .unwrap();
         let mut stream = svc.read_partition_data(8, 1).await.unwrap();
-        tokio::fs::remove_file(svc.get_partition_path(8, 1)).await.unwrap();
+        tokio::fs::remove_file(svc.get_partition_path(8, 1))
+            .await
+            .unwrap();
         let mut out = Vec::new();
         while let Some(chunk) = stream.next().await {
             out.extend_from_slice(&chunk.unwrap());
@@ -333,9 +344,17 @@ mod tests {
     async fn clear_image_data_removes_the_image_dir() {
         let (svc, _d) = service();
         svc.save_partition_table(1, b"table").await.unwrap();
-        assert!(tokio::fs::try_exists(format!("{}/img-1", svc.images_path)).await.unwrap());
+        assert!(
+            tokio::fs::try_exists(format!("{}/img-1", svc.images_path))
+                .await
+                .unwrap()
+        );
         svc.clear_image_data(1).await.unwrap();
-        assert!(!tokio::fs::try_exists(format!("{}/img-1", svc.images_path)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(format!("{}/img-1", svc.images_path))
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -350,7 +369,15 @@ mod tests {
         svc.save_partition_table(1, b"one").await.unwrap();
         svc.save_partition_table(10, b"ten").await.unwrap();
         svc.clear_image_data(1).await.unwrap();
-        assert!(!tokio::fs::try_exists(format!("{}/img-1", svc.images_path)).await.unwrap());
-        assert!(tokio::fs::try_exists(format!("{}/img-10", svc.images_path)).await.unwrap());
+        assert!(
+            !tokio::fs::try_exists(format!("{}/img-1", svc.images_path))
+                .await
+                .unwrap()
+        );
+        assert!(
+            tokio::fs::try_exists(format!("{}/img-10", svc.images_path))
+                .await
+                .unwrap()
+        );
     }
 }

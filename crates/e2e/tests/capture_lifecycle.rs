@@ -106,7 +106,16 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
     let comp1 = seed::zstd(&plain1).await;
     let comp2 = seed::zstd(&plain2).await;
 
-    let resp = upload_partition(s, task_id, &mac, 1, "ext4", plain1.len(), split(&comp1, 1024)).await;
+    let resp = upload_partition(
+        s,
+        task_id,
+        &mac,
+        1,
+        "ext4",
+        plain1.len(),
+        split(&comp1, 1024),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let resp = upload_partition(s, task_id, &mac, 2, "xfs", plain2.len(), split(&comp2, 700)).await;
@@ -318,10 +327,9 @@ async fn parttable_on_a_fresh_capture_wipes_the_prior_partial_captures_data() {
             .is_empty()
     );
     assert!(!tokio::fs::try_exists(&blob_path).await.unwrap());
-    let table_now =
-        tokio::fs::read(s.container.image_service.get_partition_table_path(image_id))
-            .await
-            .expect("new parttable");
+    let table_now = tokio::fs::read(s.container.image_service.get_partition_table_path(image_id))
+        .await
+        .expect("new parttable");
     assert_eq!(table_now, b"table-two");
 }
 

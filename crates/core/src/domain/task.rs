@@ -280,11 +280,23 @@ mod tests {
 
     #[test]
     fn a_single_host_task_aggregates_to_that_hosts_state() {
-        assert_eq!(task(&[TaskState::Pending]).aggregate_state(), TaskState::Pending);
-        assert_eq!(task(&[TaskState::Running]).aggregate_state(), TaskState::Running);
+        assert_eq!(
+            task(&[TaskState::Pending]).aggregate_state(),
+            TaskState::Pending
+        );
+        assert_eq!(
+            task(&[TaskState::Running]).aggregate_state(),
+            TaskState::Running
+        );
         assert_eq!(task(&[TaskState::Done]).aggregate_state(), TaskState::Done);
-        assert_eq!(task(&[TaskState::Failed]).aggregate_state(), TaskState::Failed);
-        assert_eq!(task(&[TaskState::Cancelled]).aggregate_state(), TaskState::Cancelled);
+        assert_eq!(
+            task(&[TaskState::Failed]).aggregate_state(),
+            TaskState::Failed
+        );
+        assert_eq!(
+            task(&[TaskState::Cancelled]).aggregate_state(),
+            TaskState::Cancelled
+        );
     }
 
     #[test]
@@ -338,9 +350,18 @@ mod tests {
 
     #[test]
     fn task_type_from_string_is_case_insensitive_as_derive_more_implements_it() {
-        assert_eq!(TaskType::from_string("Capture".to_string()).unwrap(), TaskType::Capture);
-        assert_eq!(TaskType::from_string("CAPTURE".to_string()).unwrap(), TaskType::Capture);
-        assert_eq!(TaskType::from_string("dEpLoY".to_string()).unwrap(), TaskType::Deploy);
+        assert_eq!(
+            TaskType::from_string("Capture".to_string()).unwrap(),
+            TaskType::Capture
+        );
+        assert_eq!(
+            TaskType::from_string("CAPTURE".to_string()).unwrap(),
+            TaskType::Capture
+        );
+        assert_eq!(
+            TaskType::from_string("dEpLoY".to_string()).unwrap(),
+            TaskType::Deploy
+        );
     }
 
     #[test]

@@ -246,7 +246,11 @@ mod tests {
     #[tokio::test]
     async fn get_by_mac_unknown_mac_is_not_found() {
         let (c, _guard) = container().await;
-        let err = c.host_repo.get_by_mac("ff:ff:ff:ff:ff:ff").await.unwrap_err();
+        let err = c
+            .host_repo
+            .get_by_mac("ff:ff:ff:ff:ff:ff")
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
     }
 
@@ -340,7 +344,11 @@ mod tests {
             .await
             .unwrap();
 
-        let renamed = c.host_repo.update_name(host.id, "lab-01".into()).await.unwrap();
+        let renamed = c
+            .host_repo
+            .update_name(host.id, "lab-01".into())
+            .await
+            .unwrap();
         assert_eq!(renamed.id, host.id);
         assert_eq!(renamed.name, "lab-01");
         assert_eq!(renamed.mac_address, "aa:bb:cc:dd:ee:0b");
@@ -351,7 +359,11 @@ mod tests {
     #[tokio::test]
     async fn update_name_unknown_id_is_not_found() {
         let (c, _guard) = container().await;
-        let err = c.host_repo.update_name(999_999, "nope".into()).await.unwrap_err();
+        let err = c
+            .host_repo
+            .update_name(999_999, "nope".into())
+            .await
+            .unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
     }
 

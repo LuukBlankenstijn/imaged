@@ -145,7 +145,10 @@ async fn a_dashboard_deploy_reaches_a_connected_agent() {
         .await
         .expect("connect");
     assert!(
-        stream.next_event(Duration::from_millis(300)).await.is_none(),
+        stream
+            .next_event(Duration::from_millis(300))
+            .await
+            .is_none(),
         "no task should be queued yet"
     );
 
@@ -258,7 +261,10 @@ async fn another_hosts_mac_is_refused_on_every_endpoint() {
     }
 
     let resp = s
-        .agent_post_empty(&format!("/api/client/tasks/{task_id}/finished"), &intruder_mac)
+        .agent_post_empty(
+            &format!("/api/client/tasks/{task_id}/finished"),
+            &intruder_mac,
+        )
         .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 

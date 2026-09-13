@@ -38,7 +38,10 @@ pub async fn image_with_data(
 
     for &(number, fstype, plain) in partitions {
         let compressed = zstd(plain).await;
-        let path = s.container.image_service.get_partition_path(image.id, number);
+        let path = s
+            .container
+            .image_service
+            .get_partition_path(image.id, number);
         tokio::fs::write(&path, &compressed)
             .await
             .expect("write partition data");
@@ -99,6 +102,9 @@ pub async fn unzstd(compressed: &[u8]) -> Vec<u8> {
     use async_compression::tokio::bufread::ZstdDecoder;
     let mut decoder = ZstdDecoder::new(BufReader::new(compressed));
     let mut out = Vec::new();
-    decoder.read_to_end(&mut out).await.expect("zstd decompress");
+    decoder
+        .read_to_end(&mut out)
+        .await
+        .expect("zstd decompress");
     out
 }

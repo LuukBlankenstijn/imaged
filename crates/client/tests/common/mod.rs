@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Request, State};
 use axum::http::{StatusCode, header};
@@ -14,7 +15,6 @@ use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use axum::body::Bytes;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
@@ -427,7 +427,8 @@ impl FakeBins {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("imaged-fakebins-{}-{nanos}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("imaged-fakebins-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create fake bin dir");
 
         let dir_str = dir.to_str().expect("utf8 fake bin dir").to_string();

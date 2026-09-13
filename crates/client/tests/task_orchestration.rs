@@ -173,7 +173,10 @@ async fn cancel_with_a_stale_id_is_ignored() {
     handle_message(state.clone(), ServerEvent::Cancel(999)).await;
 
     assert!(!cancel.is_cancelled());
-    assert_eq!(state.current_task.lock().await.as_ref().unwrap().task_id, 100);
+    assert_eq!(
+        state.current_task.lock().await.as_ref().unwrap().task_id,
+        100
+    );
 }
 
 #[tokio::test]

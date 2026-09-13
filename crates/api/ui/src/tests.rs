@@ -9,9 +9,9 @@ use imaged_core as core;
 use tower::ServiceExt as _;
 
 use core::di::DIContainer;
-use core::domain::task::TaskType;
 use core::domain::image::ImageStatus;
 use core::domain::task::TaskState;
+use core::domain::task::TaskType;
 use imaged_shared::ServerEvent;
 
 use crate::model;
@@ -329,7 +329,12 @@ async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
             .unwrap();
 
         assert!(
-            c.task_repo.get(task.id).await.unwrap().aggregate_state().is_cancelled(),
+            c.task_repo
+                .get(task.id)
+                .await
+                .unwrap()
+                .aggregate_state()
+                .is_cancelled(),
             "{ttype:?} task referencing a deleted image should be cancelled"
         );
         match conn.receiver.try_recv() {
@@ -338,7 +343,12 @@ async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
         }
         assert!(!dir.exists(), "image data directory should be cleared");
         assert!(
-            c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != img.id),
+            c.image_repo
+                .get_all()
+                .await
+                .unwrap()
+                .iter()
+                .all(|i| i.id != img.id),
             "soft-deleted image should not be listed"
         );
     }
@@ -607,11 +617,21 @@ async fn deleting_a_capturing_image_cancels_its_task_and_succeeds(c: &DIContaine
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
-        c.task_repo.get(task.id).await.unwrap().aggregate_state().is_cancelled(),
+        c.task_repo
+            .get(task.id)
+            .await
+            .unwrap()
+            .aggregate_state()
+            .is_cancelled(),
         "capture task should be cancelled when its image is deleted"
     );
     assert!(
-        c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != image.id),
+        c.image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != image.id),
         "deleted image should not be listed"
     );
 }
@@ -732,7 +752,10 @@ async fn cancelling_a_task_notifies_only_hosts_with_active_rows() {
         .create(TaskType::Reboot, vec![active.id, finished.id], None)
         .await
         .unwrap();
-    c.task_repo.mark_finished(task.id, finished.id).await.unwrap();
+    c.task_repo
+        .mark_finished(task.id, finished.id)
+        .await
+        .unwrap();
 
     let mut active_conn = c.host_registry.register(active.id);
     let mut finished_conn = c.host_registry.register(finished.id);
@@ -878,7 +901,10 @@ async fn retrying_a_partial_task_resets_only_the_failed_and_cancelled_host_rows(
         .create(TaskType::Reboot, vec![done_host.id, failed_host.id], None)
         .await
         .unwrap();
-    c.task_repo.mark_finished(task.id, done_host.id).await.unwrap();
+    c.task_repo
+        .mark_finished(task.id, done_host.id)
+        .await
+        .unwrap();
     c.task_repo
         .mark_failed(task.id, failed_host.id, "boom")
         .await
@@ -889,14 +915,7 @@ async fn retrying_a_partial_task_resets_only_the_failed_and_cancelled_host_rows(
         .unwrap();
 
     let after = c.task_repo.get(task.id).await.unwrap();
-    let state_of = |hid: i64| {
-        after
-            .hosts
-            .iter()
-            .find(|h| h.host_id == hid)
-            .unwrap()
-            .state
-    };
+    let state_of = |hid: i64| after.hosts.iter().find(|h| h.host_id == hid).unwrap().state;
     assert_eq!(state_of(done_host.id), TaskState::Done);
     assert_eq!(state_of(failed_host.id), TaskState::Pending);
 }
@@ -959,7 +978,12 @@ async fn removing_an_image_cancels_the_multicast_tasks_that_reference_it() {
         other => panic!("registered host expected Cancel event, got {other:?}"),
     }
     assert!(
-        c.image_repo.get_all().await.unwrap().iter().all(|i| i.id != img.id),
+        c.image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != img.id),
         "soft-deleted image should not be listed"
     );
 }

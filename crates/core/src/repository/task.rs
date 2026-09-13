@@ -452,7 +452,10 @@ mod tests {
             .create(TaskType::Reboot, vec![999_999], None)
             .await
             .unwrap_err();
-        assert!(matches!(err, AppError::FailedPrecondition(_)), "got {err:?}");
+        assert!(
+            matches!(err, AppError::FailedPrecondition(_)),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -463,7 +466,10 @@ mod tests {
             .create(TaskType::Reboot, vec![999_999], None)
             .await;
         let all = c.task_repo.get_all().await.unwrap();
-        assert!(all.is_empty(), "a failed create must not leave a task row behind");
+        assert!(
+            all.is_empty(),
+            "a failed create must not leave a task row behind"
+        );
     }
 
     #[tokio::test]
@@ -685,7 +691,10 @@ mod tests {
             .await
             .unwrap();
         c.task_repo.start(t.id, h).await.unwrap();
-        c.task_repo.mark_failed(t.id, h, "disk exploded").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, h, "disk exploded")
+            .await
+            .unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         let r = host_row(&got, h);
         assert_eq!(r.state, TaskState::Failed);
@@ -735,7 +744,10 @@ mod tests {
             .await
             .unwrap();
         c.task_repo.mark_finished(t.id, h).await.unwrap();
-        c.task_repo.mark_failed(t.id, h, "late failure").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, h, "late failure")
+            .await
+            .unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         let r = host_row(&got, h);
         assert_eq!(r.state, TaskState::Done);
@@ -752,7 +764,10 @@ mod tests {
             .await
             .unwrap();
         c.task_repo.cancel(t.id).await.unwrap();
-        c.task_repo.mark_failed(t.id, h, "late failure").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, h, "late failure")
+            .await
+            .unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         let r = host_row(&got, h);
         assert_eq!(r.state, TaskState::Cancelled);
@@ -790,7 +805,10 @@ mod tests {
             .await
             .unwrap();
         c.task_repo.mark_finished(t.id, done_h).await.unwrap();
-        c.task_repo.mark_failed(t.id, failed_h, "boom").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, failed_h, "boom")
+            .await
+            .unwrap();
         c.task_repo.mark_all_finished(t.id).await.unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         assert_eq!(host_row(&got, done_h).state, TaskState::Done);
@@ -899,7 +917,10 @@ mod tests {
             .create(TaskType::Deploy, vec![failed_h, pending_h], None)
             .await
             .unwrap();
-        c.task_repo.mark_failed(t.id, failed_h, "boom").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, failed_h, "boom")
+            .await
+            .unwrap();
         c.task_repo.cancel(t.id).await.unwrap();
         let got = c.task_repo.get(t.id).await.unwrap();
         assert_eq!(host_row(&got, failed_h).state, TaskState::Failed);
@@ -937,7 +958,10 @@ mod tests {
             .unwrap();
         c.task_repo.start(t.id, failed_h).await.unwrap();
         c.task_repo.mark_finished(t.id, done_h).await.unwrap();
-        c.task_repo.mark_failed(t.id, failed_h, "boom").await.unwrap();
+        c.task_repo
+            .mark_failed(t.id, failed_h, "boom")
+            .await
+            .unwrap();
         c.task_repo.cancel(t.id).await.unwrap();
 
         let before = c.task_repo.get(t.id).await.unwrap();

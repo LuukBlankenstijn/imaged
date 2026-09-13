@@ -182,8 +182,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_duplicate_register_displaces_the_old_connection_with_one_more_connect_and_no_disconnect(
-    ) {
+    async fn a_duplicate_register_displaces_the_old_connection_with_one_more_connect_and_no_disconnect()
+     {
         let registry = Arc::new(HostRegistry::default());
         let mut state_rx = registry.subscribe_state();
 

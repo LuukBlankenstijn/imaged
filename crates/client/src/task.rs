@@ -2,8 +2,8 @@ pub mod implementations;
 pub mod types;
 
 use std::{ops::Deref, sync::Arc};
-pub use types::{ClientState, RunnableClientTask};
 use types::RunningTask;
+pub use types::{ClientState, RunnableClientTask};
 
 pub use implementations::{
     CaptureTask, ClientTaskExt, DeployTask, MulticastTask, RebootTask, Task,

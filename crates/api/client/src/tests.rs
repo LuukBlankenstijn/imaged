@@ -333,7 +333,10 @@ async fn a_missing_malformed_or_unknown_agent_mac_is_handled() {
     let malformed = Request::builder()
         .method(Method::GET)
         .uri("/api/client/tasks/1/partitions")
-        .header("X-Agent-Mac", HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap())
+        .header(
+            "X-Agent-Mac",
+            HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap(),
+        )
         .body(Body::empty())
         .unwrap();
     let malformed = agent_router().oneshot(malformed).await.unwrap();
@@ -675,11 +678,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk(c: &DIContai
     std::fs::write(&path, &payload).unwrap();
     let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
 
-    let resp = get(
-        &format!("/api/client/tasks/{task}/partitions/1/data"),
-        &mac,
-    )
-    .await;
+    let resp = get(&format!("/api/client/tasks/{task}/partitions/1/data"), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -813,7 +812,13 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     assert_eq!(resp.status(), StatusCode::OK);
 
     assert!(!Path::new(&part_path).exists());
-    assert!(c.image_repo.get_partitions(image.id).await.unwrap().is_empty());
+    assert!(
+        c.image_repo
+            .get_partitions(image.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(std::fs::read(&table_path).unwrap(), second_table);
 
     let running_mac = next_mac();

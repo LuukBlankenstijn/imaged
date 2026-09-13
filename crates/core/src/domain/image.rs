@@ -110,9 +110,18 @@ mod tests {
 
     #[test]
     fn image_status_from_string_is_case_insensitive_as_derive_more_implements_it() {
-        assert_eq!(ImageStatus::from_string("Empty".to_string()).unwrap(), ImageStatus::Empty);
-        assert_eq!(ImageStatus::from_string("READY".to_string()).unwrap(), ImageStatus::Ready);
-        assert_eq!(ImageStatus::from_string("cApTuRiNg".to_string()).unwrap(), ImageStatus::Capturing);
+        assert_eq!(
+            ImageStatus::from_string("Empty".to_string()).unwrap(),
+            ImageStatus::Empty
+        );
+        assert_eq!(
+            ImageStatus::from_string("READY".to_string()).unwrap(),
+            ImageStatus::Ready
+        );
+        assert_eq!(
+            ImageStatus::from_string("cApTuRiNg".to_string()).unwrap(),
+            ImageStatus::Capturing
+        );
     }
 
     #[test]

@@ -28,7 +28,9 @@ fn install_blocking_lsblk(dir: &Path) {
     let path = dir.join("lsblk");
     std::fs::write(&path, "#!/bin/sh\nsleep 30\necho '{\"blockdevices\":[]}'\n")
         .expect("write fake lsblk");
-    let mut perms = std::fs::metadata(&path).expect("stat fake lsblk").permissions();
+    let mut perms = std::fs::metadata(&path)
+        .expect("stat fake lsblk")
+        .permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&path, perms).expect("chmod fake lsblk");
 }
@@ -94,7 +96,11 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
     let driver = async {
         // The pending Task sent on connect reaches handle_message and lands in ClientState.
         wait_for_task(&state, Some(TASK_ID)).await;
-        assert_eq!(server.upgrades(), 1, "the agent connected exactly once so far");
+        assert_eq!(
+            server.upgrades(),
+            1,
+            "the agent connected exactly once so far"
+        );
         let token = running_token(&state)
             .await
             .expect("the delivered task must be registered as the running task");

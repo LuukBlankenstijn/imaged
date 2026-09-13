@@ -127,7 +127,11 @@ async fn multicast_creates_one_task_and_notifies_every_connected_agent() {
     let task = s
         .container
         .task_repo
-        .create(TaskType::Multicast, vec![h1.id, h2.id, h3.id], Some(image_id))
+        .create(
+            TaskType::Multicast,
+            vec![h1.id, h2.id, h3.id],
+            Some(image_id),
+        )
         .await
         .expect("create multicast task");
     for id in [h1.id, h2.id, h3.id] {
@@ -141,12 +145,18 @@ async fn multicast_creates_one_task_and_notifies_every_connected_agent() {
     expected.sort_unstable();
     assert_eq!(covered, expected);
 
-    let e1 = s1.next_event(Duration::from_secs(5)).await.expect("h1 event");
+    let e1 = s1
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("h1 event");
     assert_eq!(e1["Task"]["id"], task.id);
     assert_eq!(e1["Task"]["task_type"], "Multicast");
     assert_eq!(e1["Task"]["image_id"], image_id);
 
-    let e2 = s2.next_event(Duration::from_secs(5)).await.expect("h2 event");
+    let e2 = s2
+        .next_event(Duration::from_secs(5))
+        .await
+        .expect("h2 event");
     assert_eq!(e2["Task"]["id"], task.id);
     assert_eq!(e2["Task"]["task_type"], "Multicast");
 
@@ -251,7 +261,12 @@ async fn cancelling_a_terminal_task_is_rejected_but_a_pending_task_is_cancelled(
         .ui_post("/api/ui/tasks/cancel", &json!({ "id": pending.id }))
         .await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(get_task(s, pending.id).await.aggregate_state().is_cancelled());
+    assert!(
+        get_task(s, pending.id)
+            .await
+            .aggregate_state()
+            .is_cancelled()
+    );
 }
 
 #[tokio::test]
@@ -361,7 +376,10 @@ async fn a_retried_task_reaches_a_host_only_when_it_is_that_hosts_next_task() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     assert!(
-        stream.next_event(Duration::from_millis(400)).await.is_none(),
+        stream
+            .next_event(Duration::from_millis(400))
+            .await
+            .is_none(),
         "the retried task is not this host's next task, so no event is sent"
     );
     assert!(host_state(&get_task(s, newer.id).await, host.id).is_pending());

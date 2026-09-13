@@ -95,10 +95,9 @@ impl From<sqlx::Error> for AppError {
                 sqlx::error::ErrorKind::UniqueViolation => {
                     Self::AlreadyExists(db_err.message().into())
                 }
-                sqlx::error::ErrorKind::ForeignKeyViolation => Self::FailedPrecondition(format!(
-                    "foreign key violation: {}",
-                    db_err.message()
-                )),
+                sqlx::error::ErrorKind::ForeignKeyViolation => {
+                    Self::FailedPrecondition(format!("foreign key violation: {}", db_err.message()))
+                }
                 sqlx::error::ErrorKind::NotNullViolation
                 | sqlx::error::ErrorKind::CheckViolation => {
                     Self::InvalidArgument(db_err.message().into())
@@ -163,7 +162,10 @@ mod tests {
 
     #[test]
     fn display_renders_the_documented_prefix_for_every_variant() {
-        assert_eq!(AppError::NotFound(msg()).to_string(), "not found: the message");
+        assert_eq!(
+            AppError::NotFound(msg()).to_string(),
+            "not found: the message"
+        );
         assert_eq!(
             AppError::InvalidArgument(msg()).to_string(),
             "invalid argument: the message"
@@ -176,8 +178,14 @@ mod tests {
             AppError::FailedPrecondition(msg()).to_string(),
             "failed precondition: the message"
         );
-        assert_eq!(AppError::Internal(msg()).to_string(), "internal: the message");
-        assert_eq!(AppError::Database(msg()).to_string(), "database: the message");
+        assert_eq!(
+            AppError::Internal(msg()).to_string(),
+            "internal: the message"
+        );
+        assert_eq!(
+            AppError::Database(msg()).to_string(),
+            "database: the message"
+        );
     }
 
     #[test]
@@ -286,8 +294,14 @@ mod tests {
             .unwrap_err();
 
         let mapped = AppError::from(err);
-        assert!(matches!(mapped, AppError::AlreadyExists(_)), "got {mapped:?}");
-        assert_eq!(mapped.as_status_code(), dioxus_fullstack::http::StatusCode::BAD_REQUEST);
+        assert!(
+            matches!(mapped, AppError::AlreadyExists(_)),
+            "got {mapped:?}"
+        );
+        assert_eq!(
+            mapped.as_status_code(),
+            dioxus_fullstack::http::StatusCode::BAD_REQUEST
+        );
     }
 
     #[cfg(feature = "sqlx-error")]
@@ -342,7 +356,10 @@ mod tests {
             matches!(mapped, AppError::InvalidArgument(_)),
             "got {mapped:?}"
         );
-        assert_eq!(mapped.as_status_code(), dioxus_fullstack::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            mapped.as_status_code(),
+            dioxus_fullstack::http::StatusCode::BAD_REQUEST
+        );
     }
 
     #[cfg(feature = "sqlx-error")]

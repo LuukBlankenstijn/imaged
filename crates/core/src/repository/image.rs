@@ -286,11 +286,8 @@ mod tests {
 
     async fn container() -> (DIContainer, TestDir) {
         let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "imaged-repoimage-{}-{}",
-            std::process::id(),
-            id
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("imaged-repoimage-{}-{}", std::process::id(), id));
         let c = crate::build_test_container(&dir).await;
         (c, TestDir(dir))
     }
@@ -341,7 +338,14 @@ mod tests {
         let a = c.image_repo.create_image("a".into()).await.unwrap();
         let b = c.image_repo.create_image("b".into()).await.unwrap();
         let cc = c.image_repo.create_image("c".into()).await.unwrap();
-        let ids: Vec<i64> = c.image_repo.get_all().await.unwrap().iter().map(|i| i.id).collect();
+        let ids: Vec<i64> = c
+            .image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect();
         assert_eq!(ids, vec![a.id, b.id, cc.id]);
     }
 
@@ -350,10 +354,22 @@ mod tests {
         let (c, _g) = container().await;
         let img1 = c.image_repo.create_image("one".into()).await.unwrap();
         let img2 = c.image_repo.create_image("two".into()).await.unwrap();
-        c.image_repo.save_partition(img1.id, 3, "ext4", 30).await.unwrap();
-        c.image_repo.save_partition(img1.id, 1, "vfat", 10).await.unwrap();
-        c.image_repo.save_partition(img1.id, 2, "ext4", 20).await.unwrap();
-        c.image_repo.save_partition(img2.id, 1, "ext4", 99).await.unwrap();
+        c.image_repo
+            .save_partition(img1.id, 3, "ext4", 30)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img1.id, 1, "vfat", 10)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img1.id, 2, "ext4", 20)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img2.id, 1, "ext4", 99)
+            .await
+            .unwrap();
 
         let all = c.image_repo.get_all().await.unwrap();
         let one = all.iter().find(|i| i.id == img1.id).unwrap();
@@ -372,7 +388,14 @@ mod tests {
         let gone = c.image_repo.create_image("gone".into()).await.unwrap();
         c.image_repo.delete_image(gone.id).await.unwrap();
 
-        let ids: Vec<i64> = c.image_repo.get_all().await.unwrap().iter().map(|i| i.id).collect();
+        let ids: Vec<i64> = c
+            .image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.id)
+            .collect();
         assert!(ids.contains(&keep.id));
         assert!(!ids.contains(&gone.id));
     }
@@ -381,7 +404,10 @@ mod tests {
     async fn save_partition_round_trips_fstype_and_size_through_get_partitions() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 1, "ext4", 4096).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", 4096)
+            .await
+            .unwrap();
 
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(parts.len(), 1);
@@ -394,9 +420,18 @@ mod tests {
     async fn get_partitions_orders_by_partition_number() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 5, "ext4", 1).await.unwrap();
-        c.image_repo.save_partition(img.id, 2, "ext4", 1).await.unwrap();
-        c.image_repo.save_partition(img.id, 8, "ext4", 1).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 5, "ext4", 1)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img.id, 2, "ext4", 1)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img.id, 8, "ext4", 1)
+            .await
+            .unwrap();
 
         let nums: Vec<i64> = c
             .image_repo
@@ -413,7 +448,11 @@ mod tests {
     async fn save_partition_return_value_reports_the_partition_number_it_was_given() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        let returned = c.image_repo.save_partition(img.id, 7, "ext4", 1).await.unwrap();
+        let returned = c
+            .image_repo
+            .save_partition(img.id, 7, "ext4", 1)
+            .await
+            .unwrap();
         assert_eq!(returned.partition_number, 7);
         let stored = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(stored[0].partition_number, 7);
@@ -423,9 +462,15 @@ mod tests {
     async fn re_saving_the_same_partition_number_errors_on_the_unique_constraint() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 1, "ext4", 10).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", 10)
+            .await
+            .unwrap();
         let again = c.image_repo.save_partition(img.id, 1, "vfat", 20).await;
-        assert!(again.is_err(), "expected UNIQUE(image_id, partition_number) violation");
+        assert!(
+            again.is_err(),
+            "expected UNIQUE(image_id, partition_number) violation"
+        );
 
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(parts.len(), 1);
@@ -437,7 +482,10 @@ mod tests {
     async fn size_bytes_near_i64_max_round_trips_as_u64() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 1, "ext4", i64::MAX).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", i64::MAX)
+            .await
+            .unwrap();
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(parts[0].size_bytes, i64::MAX as u64);
     }
@@ -446,7 +494,10 @@ mod tests {
     async fn a_negative_size_bytes_is_reachable_and_wraps_to_a_huge_u64() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 1, "ext4", -1).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", -1)
+            .await
+            .unwrap();
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
         assert_eq!(parts[0].size_bytes, u64::MAX);
     }
@@ -455,7 +506,11 @@ mod tests {
     async fn a_freshly_inserted_partition_always_has_a_non_null_id() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        let returned = c.image_repo.save_partition(img.id, 1, "ext4", 1).await.unwrap();
+        let returned = c
+            .image_repo
+            .save_partition(img.id, 1, "ext4", 1)
+            .await
+            .unwrap();
         assert!(returned.id > 0);
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
         assert!(parts.iter().all(|p| p.id > 0));
@@ -496,7 +551,10 @@ mod tests {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Capturing);
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Capturing
+        );
     }
 
     #[tokio::test]
@@ -505,7 +563,10 @@ mod tests {
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Ready);
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Ready
+        );
         let reloaded = find_in_get_all(&c, img.id).await.unwrap();
         assert!(reloaded.captured_at.is_some());
     }
@@ -515,8 +576,14 @@ mod tests {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
-        c.image_repo.mark_faulted(img.id, "disk exploded").await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Faulted);
+        c.image_repo
+            .mark_faulted(img.id, "disk exploded")
+            .await
+            .unwrap();
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Faulted
+        );
         let reloaded = find_in_get_all(&c, img.id).await.unwrap();
         assert_eq!(reloaded.error.as_deref(), Some("disk exploded"));
     }
@@ -526,7 +593,10 @@ mod tests {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Ready);
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Ready
+        );
     }
 
     #[tokio::test]
@@ -534,22 +604,43 @@ mod tests {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
-        c.image_repo.mark_faulted(img.id, "regressed").await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Faulted);
+        c.image_repo
+            .mark_faulted(img.id, "regressed")
+            .await
+            .unwrap();
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Faulted
+        );
     }
 
     #[tokio::test]
     async fn start_capture_atomically_clears_partitions_and_flips_status_to_capturing() {
         let (c, _g) = container().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.save_partition(img.id, 1, "ext4", 10).await.unwrap();
-        c.image_repo.save_partition(img.id, 2, "vfat", 20).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", 10)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img.id, 2, "vfat", 20)
+            .await
+            .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
 
         c.image_repo.start_capture(img.id).await.unwrap();
 
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Capturing);
-        assert!(c.image_repo.get_partitions(img.id).await.unwrap().is_empty());
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Capturing
+        );
+        assert!(
+            c.image_repo
+                .get_partitions(img.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let reloaded = find_in_get_all(&c, img.id).await.unwrap();
         assert_eq!(reloaded.status, ImageStatus::Capturing);
         assert!(reloaded.partitions.is_empty());
@@ -579,7 +670,9 @@ mod tests {
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
-        assert_eq!(c.image_repo.get_status(img.id).await.unwrap(), ImageStatus::Ready);
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Ready
+        );
     }
-
 }

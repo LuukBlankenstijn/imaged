@@ -199,8 +199,7 @@ async fn dropping_the_stream_deregisters_promptly() {
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    let latency =
-        latency.expect("a clean close deregisters the host without an induced write");
+    let latency = latency.expect("a clean close deregisters the host without an induced write");
     eprintln!("clean-close deregistration observed in {latency:?}");
 }
 

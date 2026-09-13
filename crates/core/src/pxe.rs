@@ -117,7 +117,9 @@ mod tests {
     async fn manifest_body(uri: &str) -> String {
         let resp = get(uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
@@ -127,7 +129,10 @@ mod tests {
             script.lines().any(|l| l.trim() == "boot"),
             "missing boot line: {script}"
         );
-        assert!(script.contains("/boot/vmlinuz"), "missing kernel url: {script}");
+        assert!(
+            script.contains("/boot/vmlinuz"),
+            "missing kernel url: {script}"
+        );
         assert!(
             script.contains("/boot/initramfs.cpio.gz"),
             "missing initramfs url: {script}"
@@ -138,28 +143,40 @@ mod tests {
     async fn manifest_selects_the_vm_console_line_for_a_qemu_product() {
         let script = manifest_body("/boot/manifest.ipxe?product=QEMU%20Standard").await;
         assert_common_ipxe_invariants(&script);
-        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+        assert!(
+            script.contains("console=tty0 console=ttyS0,115200n8"),
+            "{script}"
+        );
     }
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_standard_pc_product() {
         let script = manifest_body("/boot/manifest.ipxe?product=Standard%20PC%20(i440FX)").await;
         assert_common_ipxe_invariants(&script);
-        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+        assert!(
+            script.contains("console=tty0 console=ttyS0,115200n8"),
+            "{script}"
+        );
     }
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_qemu_manufacturer() {
         let script = manifest_body("/boot/manifest.ipxe?manufacturer=QEMU").await;
         assert_common_ipxe_invariants(&script);
-        assert!(script.contains("console=tty0 console=ttyS0,115200n8"), "{script}");
+        assert!(
+            script.contains("console=tty0 console=ttyS0,115200n8"),
+            "{script}"
+        );
     }
 
     #[tokio::test]
     async fn manifest_selects_the_physical_console_line_by_default() {
         let script = manifest_body("/boot/manifest.ipxe?product=Dell%20Inc.").await;
         assert_common_ipxe_invariants(&script);
-        assert!(script.contains("console=ttyS0,115200n8 console=tty0"), "{script}");
+        assert!(
+            script.contains("console=ttyS0,115200n8 console=tty0"),
+            "{script}"
+        );
     }
 
     #[tokio::test]
@@ -174,7 +191,9 @@ mod tests {
             resp.headers().get(header::CONTENT_LENGTH).unwrap(),
             VMLINUZ_ASSET.len().to_string().as_str()
         );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(bytes.len(), VMLINUZ_ASSET.len());
     }
 
@@ -190,7 +209,9 @@ mod tests {
             resp.headers().get(header::CONTENT_LENGTH).unwrap(),
             INITRAMFS_ASSET.len().to_string().as_str()
         );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert_eq!(bytes.len(), INITRAMFS_ASSET.len());
     }
 }

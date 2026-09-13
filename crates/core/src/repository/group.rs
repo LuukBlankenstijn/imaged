@@ -257,7 +257,10 @@ mod tests {
             .update_group_members(group.id, &[b, 999_999])
             .await
             .unwrap_err();
-        assert!(matches!(err, AppError::FailedPrecondition(_)), "got {err:?}");
+        assert!(
+            matches!(err, AppError::FailedPrecondition(_)),
+            "got {err:?}"
+        );
 
         assert_eq!(member_ids(&c, group.id).await, vec![a]);
     }
