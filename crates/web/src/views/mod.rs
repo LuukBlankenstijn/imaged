@@ -2,7 +2,7 @@
 //! view against the server functions in `crate::api` and the DTOs in
 //! `crate::model`.
 
-mod groups;
+pub(crate) mod groups;
 mod hosts;
 mod images;
 mod tasks;

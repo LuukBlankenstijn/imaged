@@ -1,6 +1,8 @@
 //! Unit tests for the pure, presentational components and formatting helpers,
 //! rendered to HTML with `dioxus-ssr`.
 
+use std::collections::HashSet;
+
 use dioxus::prelude::*;
 
 use crate::components::icons::Icon;
@@ -9,6 +11,7 @@ use crate::components::ui::{
 };
 use crate::format::{format_bytes, format_relative};
 use crate::model::{ImageStatus, TaskState, TaskType};
+use crate::views::groups::{all_selected, toggle_visible};
 
 fn render(el: Element) -> String {
     dioxus_ssr::render_element(el)
@@ -187,4 +190,31 @@ fn empty_state_renders_the_hint_paragraph_only_when_a_hint_is_present() {
     let without_hint = render(rsx! { EmptyState { title: "No images" } });
     assert!(without_hint.contains("No images"), "{without_hint}");
     assert!(!without_hint.contains("<p"), "{without_hint}");
+}
+
+#[test]
+fn selecting_all_only_touches_the_hosts_the_search_leaves_visible() {
+    let mut selected = HashSet::from([5]);
+    let visible = [1, 2];
+
+    toggle_visible(&mut selected, &visible);
+    assert_eq!(selected, HashSet::from([1, 2, 5]));
+
+    toggle_visible(&mut selected, &visible);
+    assert_eq!(selected, HashSet::from([5]));
+}
+
+#[test]
+fn the_select_all_control_flips_to_clear_only_when_every_visible_host_is_selected() {
+    let all = HashSet::from([1, 2]);
+    assert!(all_selected(&all, &[1, 2]));
+    assert!(!all_selected(&HashSet::from([1]), &[1, 2]));
+    assert!(!all_selected(&all, &[]));
+}
+
+#[test]
+fn selecting_all_with_nothing_visible_changes_nothing() {
+    let mut selected = HashSet::from([5]);
+    toggle_visible(&mut selected, &[]);
+    assert_eq!(selected, HashSet::from([5]));
 }

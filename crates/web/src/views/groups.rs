@@ -111,6 +111,18 @@ pub fn Groups() -> Element {
     }
 }
 
+pub(crate) fn all_selected(selected: &HashSet<i64>, visible: &[i64]) -> bool {
+    !visible.is_empty() && visible.iter().all(|id| selected.contains(id))
+}
+
+pub(crate) fn toggle_visible(selected: &mut HashSet<i64>, visible: &[i64]) {
+    if all_selected(selected, visible) {
+        selected.retain(|id| !visible.contains(id));
+    } else {
+        selected.extend(visible.iter().copied());
+    }
+}
+
 #[component]
 fn HostPicker(hosts: Vec<Host>, selected: Signal<HashSet<i64>>) -> Element {
     let mut search = use_signal(String::new);
@@ -125,6 +137,9 @@ fn HostPicker(hosts: Vec<Host>, selected: Signal<HashSet<i64>>) -> Element {
         .cloned()
         .collect();
     let count = selected().len();
+    let visible_ids: Vec<i64> = filtered.iter().map(|h| h.id).collect();
+    let all_visible_selected = all_selected(&selected.read(), &visible_ids);
+    let toggle_label = if all_visible_selected { "Clear" } else { "Select all" };
 
     rsx! {
         div { class: "max-w-sm",
@@ -144,33 +159,54 @@ fn HostPicker(hosts: Vec<Host>, selected: Signal<HashSet<i64>>) -> Element {
                     span { class: "px-1 py-2 text-xs text-fog-600", "No hosts" }
                 }
                 for h in filtered.iter() {
-                    {
-                        let id = h.id;
-                        let active = selected().contains(&id);
-                        let chip = if active {
-                            "border-amber-500/50 bg-amber-500/15 text-amber-300"
-                        } else {
-                            "border-ink-600 text-fog-400 hover:border-ink-500 hover:text-fog-200"
-                        };
-                        rsx! {
-                            button {
-                                key: "{id}",
-                                class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip}",
-                                onclick: move |_| {
-                                    let mut selected = selected;
-                                    if selected.read().contains(&id) {
-                                        selected.write().remove(&id);
-                                    } else {
-                                        selected.write().insert(id);
-                                    }
-                                },
-                                "{h.name}"
-                            }
-                        }
-                    }
+                    HostChip { key: "{h.id}", host: h.clone(), selected }
                 }
             }
-            div { class: "mt-1.5 font-mono text-[11px] text-fog-600", "{count} selected" }
+            div { class: "mt-1.5 flex items-center justify-between",
+                span { class: "font-mono text-[11px] text-fog-600", "{count} selected" }
+                Button {
+                    variant: ButtonVariant::Subtle,
+                    disabled: visible_ids.is_empty(),
+                    onclick: move |_| {
+                        let mut selected = selected;
+                        toggle_visible(&mut selected.write(), &visible_ids);
+                    },
+                    "{toggle_label}"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn HostChip(host: Host, selected: Signal<HashSet<i64>>) -> Element {
+    let id = host.id;
+    let connected = use_connection(id);
+    let active = selected().contains(&id);
+    let chip = if active {
+        "border-amber-500/50 bg-amber-500/15 text-amber-300"
+    } else {
+        "border-ink-600 text-fog-400 hover:border-ink-500 hover:text-fog-200"
+    };
+    let tip = match &host.ip {
+        Some(ip) => format!("{ip} · {}", host.mac_address),
+        None => host.mac_address.clone(),
+    };
+
+    rsx! {
+        button {
+            class: "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {chip}",
+            title: "{tip}",
+            onclick: move |_| {
+                let mut selected = selected;
+                if selected.read().contains(&id) {
+                    selected.write().remove(&id);
+                } else {
+                    selected.write().insert(id);
+                }
+            },
+            StatusDot { connected }
+            span { "{host.name}" }
         }
     }
 }
