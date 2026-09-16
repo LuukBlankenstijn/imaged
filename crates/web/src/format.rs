@@ -16,6 +16,15 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+pub fn format_duration(seconds: u64) -> String {
+    let (hours, minutes, seconds) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    match (hours, minutes) {
+        (0, 0) => format!("{seconds}s"),
+        (0, _) => format!("{minutes}m {seconds:02}s"),
+        _ => format!("{hours}h {minutes:02}m"),
+    }
+}
+
 #[cfg(feature = "web")]
 fn now_millis() -> i64 {
     js_sys::Date::now() as i64

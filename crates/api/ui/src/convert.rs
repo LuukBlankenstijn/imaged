@@ -4,6 +4,7 @@ use imaged_core::domain::{
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
     task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
 };
+use imaged_core::multicast::MulticastProgress as DProgress;
 use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
 
 use crate::model;
@@ -34,6 +35,20 @@ impl From<DChange> for model::ConnectionUpdate {
         match c {
             DChange::Connected(hosts) => Self::Connected(hosts),
             DChange::Changed(event) => Self::Changed(event.into()),
+        }
+    }
+}
+
+impl From<DProgress> for model::MulticastProgress {
+    fn from(p: DProgress) -> Self {
+        Self {
+            task_id: p.task_id,
+            fraction: p.fraction,
+            bytes_per_second: p.bytes_per_second,
+            receivers: p.receivers,
+            step: p.step,
+            steps: p.steps,
+            eta_seconds: p.eta.map(|eta| eta.as_secs()),
         }
     }
 }

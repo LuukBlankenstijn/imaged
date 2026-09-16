@@ -4,6 +4,7 @@ use crate::{
 };
 use imaged_shared::{MULTICAST_GROUP_ADDRESS, get_multicast_port};
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     sync::{
@@ -22,7 +23,7 @@ use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
 use crate::{
-    domain::{image::ImageRepository, task::TaskRepository},
+    domain::{host::HostRepository, image::ImageRepository, task::TaskRepository},
     service::image::ImageService,
 };
 
@@ -56,30 +57,77 @@ impl Drop for SlotGuard {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct MulticastProgress {
+    pub task_id: i64,
+    pub fraction: f64,
+    pub bytes_per_second: f64,
+    pub receivers: usize,
+    pub step: usize,
+    pub steps: usize,
+    pub eta: Option<Duration>,
+}
+
+#[derive(Clone, Copy)]
+struct TransferStep {
+    task_id: i64,
+    step: usize,
+    steps: usize,
+    bytes_before: u64,
+    total_bytes: u64,
+}
+
+impl TransferStep {
+    fn progress(&self, state: &TransferState) -> MulticastProgress {
+        let sent = self.bytes_before + state.bytes_sent();
+        let left = self.total_bytes.saturating_sub(sent);
+        let bytes_per_second = state.bytes_per_second();
+        MulticastProgress {
+            task_id: self.task_id,
+            fraction: match self.total_bytes {
+                0 => 0.0,
+                total => (sent as f64 / total as f64).min(1.0),
+            },
+            bytes_per_second,
+            receivers: state.receivers.len(),
+            step: self.step,
+            steps: self.steps,
+            eta: (bytes_per_second > 0.0)
+                .then(|| Duration::try_from_secs_f64(left as f64 / bytes_per_second).ok())
+                .flatten(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MulticastManager {
+    host_repo: Arc<dyn HostRepository>,
     task_repo: Arc<dyn TaskRepository>,
     image_repo: Arc<dyn ImageRepository>,
     image_service: Arc<ImageService>,
     interface: String,
     current: Arc<Mutex<Option<RunningMulticastTask>>>,
     next_generation: Arc<AtomicU64>,
+    progress: Arc<watch::Sender<Option<MulticastProgress>>>,
 }
 
 impl MulticastManager {
     pub async fn new(
+        host_repo: Arc<dyn HostRepository>,
         task_repo: Arc<dyn TaskRepository>,
         image_repo: Arc<dyn ImageRepository>,
         image_service: Arc<ImageService>,
         interface: String,
     ) -> Result<Self> {
         let new = Self {
+            host_repo,
             task_repo: task_repo.clone(),
             image_repo,
             image_service,
             interface,
             current: Arc::new(Mutex::new(None)),
             next_generation: Arc::new(AtomicU64::new(0)),
+            progress: Arc::new(watch::Sender::new(None)),
         };
         // mark all tasks that are already started as error
         let error = String::from("Server stopped while task was running");
@@ -187,6 +235,7 @@ impl MulticastManager {
                     }
                 }
             }
+            self.progress.send_replace(None);
         }
     }
 
@@ -211,33 +260,105 @@ impl MulticastManager {
         }
 
         let num_receivers = task.hosts.len();
-
-        let partition_table_path = self.image_service.get_partition_table_path(image_id);
-
-        send_file(
-            &partition_table_path,
-            get_multicast_port(0),
-            num_receivers,
-            &self.interface,
-        )
-        .await?;
-
+        let targets = Arc::new(self.target_names(&task).await);
         let partitions = self.image_repo.get_partitions(image_id).await?;
-        for p in partitions.into_iter() {
-            info!(task_id=%task.id, image_id=%image_id, partition_number=%p.partition_number, "sending partition over multicast");
-            let partition_path = self
-                .image_service
-                .get_partition_path(image_id, p.partition_number);
-            send_file(
-                &partition_path,
+
+        let mut plan = vec![(
+            self.image_service.get_partition_table_path(image_id),
+            get_multicast_port(0),
+            0u64,
+        )];
+        for p in &partitions {
+            plan.push((
+                self.image_service
+                    .get_partition_path(image_id, p.partition_number),
                 get_multicast_port(p.partition_number),
+                0,
+            ));
+        }
+        for entry in plan.iter_mut() {
+            entry.2 = tokio::fs::metadata(&entry.0)
+                .await
+                .map(|m| m.len())
+                .unwrap_or_default();
+        }
+
+        let total_bytes = plan.iter().map(|(_, _, size)| size).sum();
+        let steps = plan.len();
+        let mut bytes_before = 0;
+        for (step, (path, port, size)) in plan.into_iter().enumerate() {
+            info!(task_id=%task.id, image_id=%image_id, step=%step, steps=%steps, "sending file over multicast");
+            self.send_file(
+                &path,
+                port,
                 num_receivers,
-                &self.interface,
+                TransferStep {
+                    task_id: task.id,
+                    step: step + 1,
+                    steps,
+                    bytes_before,
+                    total_bytes,
+                },
+                Arc::clone(&targets),
             )
             .await?;
+            bytes_before += size;
         }
 
         Ok(())
+    }
+
+    pub fn progress(&self) -> watch::Receiver<Option<MulticastProgress>> {
+        self.progress.subscribe()
+    }
+
+    async fn target_names(&self, task: &Task) -> HashMap<IpAddr, String> {
+        let hosts = match self.host_repo.get_all(None).await {
+            Ok(hosts) => hosts,
+            Err(e) => {
+                error!(err=%e, "could not resolve multicast receivers to hosts");
+                return HashMap::new();
+            }
+        };
+        hosts
+            .into_iter()
+            .filter(|host| task.hosts.iter().any(|h| h.host_id == host.id))
+            .filter_map(|host| {
+                let ip = host.ip.as_ref()?.parse().ok()?;
+                Some((ip, format!("{} (#{})", host.name, host.id)))
+            })
+            .collect()
+    }
+
+    async fn send_file(
+        &self,
+        file: &str,
+        port: u16,
+        num_receivers: usize,
+        step: TransferStep,
+        targets: Arc<HashMap<IpAddr, String>>,
+    ) -> Result {
+        let sender = Sender::builder()
+            .socket(
+                interface_address(&self.interface)?,
+                MULTICAST_GROUP_ADDRESS,
+                port,
+            )
+            .map_err(|e| AppError::Internal(format!("failed to bind multicast sender: {e}")))?
+            .min_receivers(num_receivers)
+            .build();
+
+        let _reporter = AbortOnDropHandle::new(tokio::spawn(report_progress(
+            sender.progress(),
+            Arc::clone(&self.progress),
+            step,
+            targets,
+        )));
+
+        sender
+            .send_file(PathBuf::from(file))
+            .await
+            .map_err(|e| AppError::Internal(format!("multicast send of {file} failed: {e}")))
     }
 }
 
@@ -253,6 +374,7 @@ fn interface_address(name: &str) -> Result<Ipv4Addr> {
 }
 
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
+const PROGRESS_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 
 fn limiting_receiver(state: &TransferState) -> Option<&ReceiverState> {
     let id = match state.limiting {
@@ -264,42 +386,49 @@ fn limiting_receiver(state: &TransferState) -> Option<&ReceiverState> {
     state.receivers.iter().find(|r| r.receiver_id == id)
 }
 
-async fn log_progress(progress: watch::Receiver<TransferState>) {
-    let mut ticker = tokio::time::interval(PROGRESS_LOG_INTERVAL);
-    ticker.tick().await;
+async fn report_progress(
+    transfer: watch::Receiver<TransferState>,
+    publisher: Arc<watch::Sender<Option<MulticastProgress>>>,
+    step: TransferStep,
+    targets: Arc<HashMap<IpAddr, String>>,
+) {
+    let mut publish = tokio::time::interval(PROGRESS_PUBLISH_INTERVAL);
+    let mut log = tokio::time::interval(PROGRESS_LOG_INTERVAL);
+    log.tick().await;
     loop {
-        ticker.tick().await;
-        let state = progress.borrow();
-        let culprit = limiting_receiver(&state);
-        info!(
-            mbit_per_second = state.bytes_per_second() * 8.0 / 1e6,
-            blocks_sent = state.blocks_sent,
-            receivers = state.receivers.len(),
-            parity_shards = state.parity_shards,
-            draining = state.draining,
-            limiting = %state.limiting,
-            limiting_host = ?culprit.map(|r| r.address),
-            limiting_host_loss = ?culprit.map(|r| r.unrecovered_loss),
-            limiting_host_stall_ms = ?culprit.map(|r| r.sink_stall_ms),
-            slowest_host = ?state.slowest().map(|r| (r.address, r.slices_behind)),
-            "multicast transfer progress"
-        );
+        tokio::select! {
+            _ = publish.tick() => {
+                publisher.send_replace(Some(step.progress(&transfer.borrow())));
+            }
+            _ = log.tick() => log_progress(&transfer.borrow(), step.task_id, &targets),
+        }
     }
 }
 
-async fn send_file(file: &str, port: u16, num_receivers: usize, interface: &str) -> Result {
-    let sender = Sender::builder()
-        .socket(interface_address(interface)?, MULTICAST_GROUP_ADDRESS, port)
-        .map_err(|e| AppError::Internal(format!("failed to bind multicast sender: {e}")))?
-        .min_receivers(num_receivers)
-        .build();
+fn receiver_name(targets: &HashMap<IpAddr, String>, receiver: &ReceiverState) -> String {
+    targets
+        .get(&receiver.address.ip())
+        .cloned()
+        .unwrap_or_else(|| receiver.address.ip().to_string())
+}
 
-    let _reporter = AbortOnDropHandle::new(tokio::spawn(log_progress(sender.progress())));
-
-    sender
-        .send_file(PathBuf::from(file))
-        .await
-        .map_err(|e| AppError::Internal(format!("multicast send of {file} failed: {e}")))
+fn log_progress(state: &TransferState, task_id: i64, targets: &HashMap<IpAddr, String>) {
+    let culprit = limiting_receiver(state);
+    info!(
+        task_id,
+        mbit_per_second = state.bytes_per_second() * 8.0 / 1e6,
+        percent_complete = ?state.fraction_complete().map(|f| f * 100.0),
+        blocks_sent = state.blocks_sent,
+        receivers = state.receivers.len(),
+        parity_shards = state.parity_shards,
+        draining = state.draining,
+        limiting = %state.limiting,
+        limiting_host = ?culprit.map(|r| receiver_name(targets, r)),
+        limiting_host_loss = ?culprit.map(|r| r.unrecovered_loss),
+        limiting_host_stall_ms = ?culprit.map(|r| r.sink_stall_ms),
+        slowest_host = ?state.slowest().map(|r| (receiver_name(targets, r), r.slices_behind)),
+        "multicast transfer progress"
+    );
 }
 
 #[cfg(test)]
@@ -364,6 +493,82 @@ mod tests {
         };
 
         assert!(limiting_receiver(&state).is_none());
+    }
+
+    fn sending_state(blocks_sent: u64, blocks_per_second: f64) -> TransferState {
+        TransferState {
+            block_size: 100,
+            blocks_sent,
+            blocks_per_second,
+            receivers: vec![receiver_state(11, "10.0.0.1:5000")],
+            ..TransferState::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_progress_log_names_receivers_by_host_instead_of_a_bare_address() {
+        let manager = build_manager_with_hosts(
+            Arc::new(FakeTaskRepo::new()),
+            Arc::new(FakeImageRepo),
+            vec![
+                Host::new(7, "lab-07".into(), "aa:bb".into(), 0, Some("10.0.0.1".into())),
+                Host::new(9, "lab-09".into(), "cc:dd".into(), 0, Some("10.0.0.9".into())),
+            ],
+        );
+        let mut task = mk_task(1, TaskType::Multicast, TaskState::Pending, Some(1));
+        task.hosts[0].host_id = 7;
+
+        let targets = manager.target_names(&task).await;
+
+        assert_eq!(
+            receiver_name(&targets, &receiver_state(11, "10.0.0.1:5000")),
+            "lab-07 (#7)"
+        );
+        assert_eq!(
+            receiver_name(&targets, &receiver_state(22, "10.0.0.9:5000")),
+            "10.0.0.9",
+            "a host that is not part of the task keeps its raw address"
+        );
+        assert_eq!(
+            receiver_name(&targets, &receiver_state(33, "10.0.0.5:5000")),
+            "10.0.0.5"
+        );
+    }
+
+    fn step(bytes_before: u64, total_bytes: u64) -> TransferStep {
+        TransferStep {
+            task_id: 4,
+            step: 2,
+            steps: 3,
+            bytes_before,
+            total_bytes,
+        }
+    }
+
+    #[test]
+    fn progress_covers_the_whole_task_rather_than_the_file_being_sent() {
+        let reported = step(1000, 4000).progress(&sending_state(10, 5.0));
+
+        assert_eq!(reported.task_id, 4);
+        assert_eq!(reported.fraction, 0.5);
+        assert_eq!(reported.bytes_per_second, 500.0);
+        assert_eq!(reported.eta, Some(Duration::from_secs(4)));
+        assert_eq!((reported.step, reported.steps), (2, 3));
+        assert_eq!(reported.receivers, 1);
+    }
+
+    #[test]
+    fn a_stalled_transfer_reports_progress_without_an_eta() {
+        let reported = step(1000, 4000).progress(&sending_state(0, 0.0));
+
+        assert_eq!(reported.fraction, 0.25);
+        assert_eq!(reported.eta, None);
+    }
+
+    #[test]
+    fn progress_stays_in_range_when_sizes_are_unknown_or_overshot() {
+        assert_eq!(step(0, 0).progress(&sending_state(10, 1.0)).fraction, 0.0);
+        assert_eq!(step(0, 500).progress(&sending_state(10, 1.0)).fraction, 1.0);
     }
 
     const CANCEL_TEST_PORT: u16 = 50_900;
@@ -475,9 +680,28 @@ mod tests {
             (received, summary)
         });
 
-        send_file(path.to_str().expect("utf8 path"), PORT, 1, "lo")
+        let manager = build_manager(Arc::new(FakeTaskRepo::new()), Arc::new(FakeImageRepo));
+        manager
+            .send_file(
+                path.to_str().unwrap_or_default(),
+                PORT,
+                1,
+                TransferStep {
+                    task_id: 1,
+                    step: 1,
+                    steps: 1,
+                    bytes_before: 0,
+                    total_bytes: payload.len() as u64,
+                },
+                Arc::new(HashMap::new()),
+            )
             .await
             .expect("send");
+
+        assert_eq!(
+            manager.progress().borrow().as_ref().map(|p| p.task_id),
+            Some(1)
+        );
 
         let (received, summary) = receiving.await.expect("receive task");
         let _ = std::fs::remove_file(&path);
@@ -487,6 +711,7 @@ mod tests {
     }
 
     use crate::di::DIContainer;
+    use crate::domain::host::Host;
     use crate::domain::image::{Image, ImagePartition, ImageStatus};
     use crate::domain::task::TaskHost;
     use chrono::Utc;
@@ -657,17 +882,58 @@ mod tests {
         }
     }
 
+    struct FakeHostRepo(Vec<Host>);
+
+    impl FakeHostRepo {
+        fn unused() -> AppError {
+            AppError::Internal("unused by this test".to_string())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HostRepository for FakeHostRepo {
+        async fn upsert_host(&self, _: String, _: u64, _: Option<String>) -> Result<Host> {
+            Err(Self::unused())
+        }
+        async fn update_name(&self, _: i64, _: String) -> Result<Host> {
+            Err(Self::unused())
+        }
+        async fn get_all(&self, _: Option<i64>) -> Result<Vec<Host>> {
+            Ok(self
+                .0
+                .iter()
+                .map(|h| Host::new(h.id, h.name.clone(), h.mac_address.clone(), h.disk_size, h.ip.clone()))
+                .collect())
+        }
+        async fn delete(&self, _: i64) -> Result {
+            Err(Self::unused())
+        }
+        async fn get_by_mac(&self, _: &str) -> Result<Host> {
+            Err(Self::unused())
+        }
+    }
+
     fn build_manager(
         task_repo: Arc<FakeTaskRepo>,
         image_repo: Arc<FakeImageRepo>,
     ) -> MulticastManager {
+        build_manager_with_hosts(task_repo, image_repo, Vec::new())
+    }
+
+    fn build_manager_with_hosts(
+        task_repo: Arc<FakeTaskRepo>,
+        image_repo: Arc<FakeImageRepo>,
+        hosts: Vec<Host>,
+    ) -> MulticastManager {
         MulticastManager {
+            host_repo: Arc::new(FakeHostRepo(hosts)),
             task_repo: task_repo as Arc<dyn TaskRepository>,
             image_repo: image_repo as Arc<dyn ImageRepository>,
             image_service: Arc::new(ImageService::new("/tmp/imaged-mcmgr-unused".to_string())),
             interface: "lo".to_string(),
             current: Arc::new(Mutex::new(None)),
             next_generation: Arc::new(AtomicU64::new(0)),
+            progress: Arc::new(watch::Sender::new(None)),
         }
     }
 
@@ -905,6 +1171,7 @@ mod tests {
             .unwrap();
 
         let _manager = MulticastManager::new(
+            c.host_repo.clone(),
             c.task_repo.clone(),
             c.image_repo.clone(),
             c.image_service.clone(),

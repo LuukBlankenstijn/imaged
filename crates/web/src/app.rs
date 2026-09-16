@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 use crate::components::connection::use_connection_provider;
 use crate::components::icons::Icon;
+use crate::components::multicast::use_transfer_provider;
 use crate::components::toast::Toaster;
 use crate::views::{Groups, Hosts, Images, Tasks};
 
@@ -22,6 +23,7 @@ pub enum Route {
 #[component]
 pub fn App() -> Element {
     use_connection_provider();
+    use_transfer_provider();
 
     rsx! {
         document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }
@@ -56,7 +58,7 @@ fn Shell() -> Element {
                         NavItem { to: Route::Tasks {}, icon: "tasks", label: "Tasks" }
                     }
                     div { class: "border-t border-line px-5 py-4 font-mono text-[10px] text-fog-600",
-                        "imaged · v0.1"
+                        {format!("imaged · v{}", env!("CARGO_PKG_VERSION"))}
                     }
                 }
             }

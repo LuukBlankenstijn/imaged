@@ -63,6 +63,7 @@ pub async fn build_di_container(
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
     let multicast_manager = Arc::new(
         MulticastManager::new(
+            host_repo.clone(),
             task_repo.clone(),
             image_repo.clone(),
             image_service.clone(),

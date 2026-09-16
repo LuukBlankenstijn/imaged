@@ -21,6 +21,17 @@ pub enum ConnectionUpdate {
     Changed(HostConnectionEvent),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MulticastProgress {
+    pub task_id: i64,
+    pub fraction: f64,
+    pub bytes_per_second: f64,
+    pub receivers: usize,
+    pub step: usize,
+    pub steps: usize,
+    pub eta_seconds: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageStatus {

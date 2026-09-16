@@ -4,12 +4,13 @@ use crate::api::tasks::{cancel_task, get_all_tasks, retry_task};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
+use crate::components::multicast::use_transfer;
 use crate::components::toast::toast_error;
 use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge, TaskTypeBadge,
 };
-use crate::format::format_relative;
-use crate::model::{Task, TaskState, TaskType};
+use crate::format::{format_bytes, format_duration, format_relative};
+use crate::model::{MulticastProgress, Task, TaskState, TaskType};
 
 fn select_class() -> &'static str {
     "rounded-md border border-ink-600 bg-ink-900 px-3 py-1.5 text-sm text-fog-200 focus:outline-none focus-visible:glow-amber"
@@ -147,6 +148,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         .unwrap_or_else(|| "\u{2014}".to_string());
     let host_count = task.hosts.len();
     let hosts = task.hosts.clone();
+    let transfer = use_transfer(task_id);
 
     let do_cancel = move || {
         spawn(async move {
@@ -207,6 +209,9 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                     }
                 }
             }
+            if let Some(progress) = transfer {
+                TransferBar { progress }
+            }
             if expanded() {
                 div { class: "border-t border-line/60 px-4 py-3",
                     div { class: "flex flex-col gap-2",
@@ -241,5 +246,86 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                 oncancel: move |_| cancel_open.set(false),
             }
         }
+    }
+}
+
+#[component]
+fn TransferBar(progress: MulticastProgress) -> Element {
+    let percent = (progress.fraction * 100.0).clamp(0.0, 100.0);
+    let rate = format_bytes(progress.bytes_per_second as u64);
+
+    rsx! {
+        div { class: "border-t border-line/60 px-4 py-2.5",
+            div { class: "flex items-center gap-3",
+                div { class: "h-1.5 flex-1 overflow-hidden rounded-full bg-ink-700",
+                    div {
+                        class: "h-full rounded-full bg-run transition-all duration-500",
+                        style: "width: {percent}%",
+                    }
+                }
+                span { class: "w-10 text-right font-mono text-xs text-fog-300", "{percent:.0}%" }
+            }
+            div { class: "mt-1.5 flex flex-wrap items-center gap-3 font-mono text-[11px] text-fog-500",
+                span { "{rate}/s" }
+                span { "{progress.receivers} receiver(s)" }
+                span { "file {progress.step}/{progress.steps}" }
+                if let Some(eta) = progress.eta_seconds {
+                    span { "eta {format_duration(eta)}" }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render(el: Element) -> String {
+        dioxus_ssr::render_element(el)
+    }
+
+    #[test]
+    fn the_transfer_bar_shows_the_task_wide_percentage_rate_and_eta() {
+        let html = render(rsx! {
+            TransferBar {
+                progress: MulticastProgress {
+                    task_id: 3,
+                    fraction: 0.42,
+                    bytes_per_second: 1024.0 * 1024.0,
+                    receivers: 4,
+                    step: 2,
+                    steps: 5,
+                    eta_seconds: Some(90),
+                },
+            }
+        });
+
+        assert!(html.contains("width: 42%"), "{html}");
+        assert!(html.contains("42%"), "{html}");
+        assert!(html.contains("1.00 MiB/s"), "{html}");
+        assert!(html.contains("4 receiver(s)"), "{html}");
+        assert!(html.contains("file 2/5"), "{html}");
+        assert!(html.contains("eta 1m 30s"), "{html}");
+    }
+
+    #[test]
+    fn a_transfer_without_an_eta_omits_it_and_clamps_the_bar() {
+        let html = render(rsx! {
+            TransferBar {
+                progress: MulticastProgress {
+                    task_id: 3,
+                    fraction: 1.5,
+                    bytes_per_second: 0.0,
+                    receivers: 1,
+                    step: 1,
+                    steps: 1,
+                    eta_seconds: None,
+                },
+            }
+        });
+
+        assert!(html.contains("width: 100%"), "{html}");
+        assert!(!html.contains("eta"), "{html}");
     }
 }
