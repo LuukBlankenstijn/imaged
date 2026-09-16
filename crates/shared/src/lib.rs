@@ -14,4 +14,6 @@ pub use multicast::{MULTICAST_GROUP_ADDRESS, get_multicast_port};
 pub use types::{ServerEvent, Task, TaskType};
 
 #[cfg(feature = "logging")]
+pub use logging::log_filter;
+#[cfg(feature = "logging")]
 pub use tracing_subscriber::{EnvFilter, fmt};

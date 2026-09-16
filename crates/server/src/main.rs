@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let args = Args::parse();
-    imaged_shared::setup_logging!(args.log_level);
+    imaged_shared::setup_logging!(args.log_level, ["imaged_core"]);
 
     let pool = core::setup_database("sqlite://imaged.db").await?;
     let container = core::build_di_container(
