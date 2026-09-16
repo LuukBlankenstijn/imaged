@@ -1,7 +1,7 @@
 use dioxus::fullstack::ServerEvents;
 use dioxus::prelude::*;
 
-use crate::model::HostConnectionEvent;
+use crate::model::ConnectionUpdate;
 
 #[cfg(feature = "server")]
 use injectable::inject;
@@ -11,18 +11,12 @@ use imaged_core::di::Registry;
 
 #[get("/api/ui/connection-state")]
 #[inject(registry: Registry)]
-pub async fn connection_state() -> ServerFnResult<ServerEvents<HostConnectionEvent>> {
-    let initial = registry.get_current_state();
-    let mut updates = registry.subscribe_state();
+pub async fn connection_state() -> ServerFnResult<ServerEvents<ConnectionUpdate>> {
+    let mut feed = registry.watch();
     Ok(ServerEvents::new(move |mut tx| async move {
-        for event in initial {
-            if tx.send(event.into()).await.is_err() {
+        while let Some(change) = feed.next().await {
+            if tx.send(change.into()).await.is_err() {
                 return;
-            }
-        }
-        while let Ok(update) = updates.recv().await {
-            if tx.send(update.into()).await.is_err() {
-                break;
             }
         }
     }))

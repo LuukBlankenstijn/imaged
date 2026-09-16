@@ -2542,6 +2542,7 @@ dependencies = [
  "imaged-shared",
  "injectable",
  "local-ip-address",
+ "parking_lot",
  "scuttlecast",
  "serde",
  "socket2",

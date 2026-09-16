@@ -6,11 +6,23 @@ use reqwest::StatusCode;
 const DISK: u64 = 6 * 1024 * 1024 * 1024;
 
 fn connected(s: &harness::TestServer, id: i64) -> bool {
-    s.container
-        .host_registry
-        .get_current_state()
-        .iter()
-        .any(|e| e.id == id && e.connected)
+    s.container.host_registry.connected_hosts().contains(&id)
+}
+
+async fn feed_state(feed: &mut harness::EventStream, id: i64, timeout: Duration) -> Option<bool> {
+    let deadline = Instant::now() + timeout;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        let event = feed.next_event(remaining).await?;
+        if let Some(hosts) = event.get("Connected").and_then(|v| v.as_array()) {
+            return Some(hosts.iter().any(|h| h.as_i64() == Some(id)));
+        }
+        if let Some(change) = event.get("Changed")
+            && change.get("id").and_then(|v| v.as_i64()) == Some(id)
+        {
+            return change.get("connected").and_then(|v| v.as_bool());
+        }
+    }
+    None
 }
 
 async fn poll_until(mut pred: impl FnMut() -> bool, timeout: Duration) -> bool {
@@ -370,4 +382,62 @@ async fn a_responsive_agent_is_not_evicted() {
     }
 
     drop(stream);
+}
+
+#[tokio::test]
+async fn the_dashboard_feed_opens_with_the_hosts_that_are_already_connected() {
+    let s = harness::server().await;
+    let mac = harness::unique_mac();
+
+    let _agent = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("connect");
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
+
+    let mut feed = harness::connect_connection_state(s)
+        .await
+        .expect("dashboard feed");
+    assert_eq!(
+        feed_state(&mut feed, host.id, Duration::from_secs(2)).await,
+        Some(true),
+        "the feed must open with a snapshot naming the connected host"
+    );
+}
+
+#[tokio::test]
+async fn a_reconnect_never_reports_the_host_as_disconnected_on_the_dashboard_feed() {
+    let s = harness::server().await;
+    let mac = harness::unique_mac();
+
+    let first = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("connect");
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
+
+    let mut feed = harness::connect_connection_state(s)
+        .await
+        .expect("dashboard feed");
+    assert_eq!(
+        feed_state(&mut feed, host.id, Duration::from_secs(2)).await,
+        Some(true)
+    );
+
+    let _second = harness::connect_agent_stream(s, &mac, DISK)
+        .await
+        .expect("a reconnect overrides the previous connection");
+    assert_eq!(
+        feed_state(&mut feed, host.id, Duration::from_secs(2)).await,
+        Some(true),
+        "the displacing connection must be reported as connected"
+    );
+
+    drop(first);
+    assert_ne!(
+        feed_state(&mut feed, host.id, Duration::from_secs(1)).await,
+        Some(false),
+        "tearing down the displaced connection must not disconnect the host"
+    );
+    assert!(connected(s, host.id));
 }

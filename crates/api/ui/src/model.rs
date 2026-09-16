@@ -15,6 +15,12 @@ pub struct HostConnectionEvent {
     pub connected: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConnectionUpdate {
+    Connected(Vec<i64>),
+    Changed(HostConnectionEvent),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageStatus {

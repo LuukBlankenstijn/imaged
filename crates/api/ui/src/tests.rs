@@ -1142,31 +1142,9 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
         .unwrap();
     let _conn = c.host_registry.register(host.id);
 
-    let snapshot = c.host_registry.get_current_state();
-    assert!(snapshot.iter().any(|e| e.id == host.id && e.connected));
+    assert!(c.host_registry.connected_hosts().contains(&host.id));
 
     let stream = core::di::scope(c.clone(), crate::realtime::connection_state()).await;
     assert!(stream.is_ok());
 }
 
-#[tokio::test]
-async fn registering_a_host_after_subscription_emits_connect_then_disconnect_diffs() {
-    let (c, _guard) = container().await;
-    let host = c
-        .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:34".into(), 1_000_000, None)
-        .await
-        .unwrap();
-
-    let mut updates = c.host_registry.subscribe_state();
-    let conn = c.host_registry.register(host.id);
-
-    let connected = updates.try_recv().unwrap();
-    assert_eq!(connected.id, host.id);
-    assert!(connected.connected);
-
-    drop(conn);
-    let disconnected = updates.try_recv().unwrap();
-    assert_eq!(disconnected.id, host.id);
-    assert!(!disconnected.connected);
-}

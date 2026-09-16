@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use derive_more::Constructor;
 use imaged_shared::{ServerEvent, Task};
@@ -25,6 +27,38 @@ impl<T> Drop for Registration<T> {
 pub struct HostConnectionEvent {
     pub id: i64,
     pub connected: bool,
+}
+
+#[derive(Debug)]
+pub enum ConnectionChange {
+    Connected(Vec<i64>),
+    Changed(HostConnectionEvent),
+}
+
+pub struct ConnectionFeed {
+    registry: Arc<HostRegistry>,
+    updates: broadcast::Receiver<HostConnectionEvent>,
+    connected: Option<Vec<i64>>,
+}
+
+impl ConnectionFeed {
+    /// Resubscribes with a fresh snapshot whenever it falls behind, so a
+    /// consumer applying every change ends up with the registry's state.
+    pub async fn next(&mut self) -> Option<ConnectionChange> {
+        loop {
+            if let Some(connected) = self.connected.take() {
+                return Some(ConnectionChange::Connected(connected));
+            }
+            match self.updates.recv().await {
+                Ok(event) => return Some(ConnectionChange::Changed(event)),
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let resynced = self.registry.watch();
+                    *self = resynced;
+                }
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    }
 }
 
 struct HostEntry {
@@ -58,7 +92,7 @@ impl Default for HostRegistry {
 
 impl HostRegistry {
     pub fn register(self: &Arc<Self>, id: i64) -> Registration<ServerEvent> {
-        let mut hosts = self.hosts.write().unwrap();
+        let mut hosts = self.hosts.write();
         let generation = hosts.next_generation;
         hosts.next_generation += 1;
 
@@ -75,7 +109,7 @@ impl HostRegistry {
 
         let hub = Arc::clone(self);
         let cleanup = move || {
-            let mut hosts = hub.hosts.write().unwrap();
+            let mut hosts = hub.hosts.write();
             // Only tear down if *this* connection is still the registered one.
             if hosts
                 .map
@@ -96,7 +130,7 @@ impl HostRegistry {
     /// Explicitly drop a host's connection because the host told us it is about
     /// to disconnect (e.g. it is rebooting).
     pub fn deregister(&self, id: i64) {
-        let mut hosts = self.hosts.write().unwrap();
+        let mut hosts = self.hosts.write();
         if hosts.map.remove(&id).is_some() {
             tracing::debug!(id, "host requested disconnect");
             let _ = self.broadcast.send(HostConnectionEvent::new(id, false));
@@ -104,43 +138,67 @@ impl HostRegistry {
     }
 
     pub fn cancel_task(&self, host_id: i64, task_id: i64) {
-        let hosts = self.hosts.read().unwrap();
+        let hosts = self.hosts.read();
         if let Some(entry) = hosts.map.get(&host_id) {
             let _ = entry.sender.send(task_id.into());
         }
     }
 
     pub fn send_task(&self, host_id: i64, task: &DomainTask) {
-        let hosts = self.hosts.read().unwrap();
+        let hosts = self.hosts.read();
         if let Some(entry) = hosts.map.get(&host_id) {
             let msg = Task::new(task.id, task.task_type.into(), task.image_id);
             let _ = entry.sender.send(msg.into());
         }
     }
 
-    pub fn subscribe_state(&self) -> broadcast::Receiver<HostConnectionEvent> {
-        self.broadcast.subscribe()
+    pub fn connected_hosts(&self) -> Vec<i64> {
+        self.hosts.read().map.keys().copied().collect()
     }
 
-    // gets the current connection state as a set of diffs
-    pub fn get_current_state(&self) -> Vec<HostConnectionEvent> {
-        let hosts = self.hosts.read().unwrap();
-        hosts
-            .map
-            .keys()
-            .map(|k| HostConnectionEvent::new(*k, true))
-            .collect()
+    /// Subscribes with no gap: changes broadcast under the write lock.
+    pub fn watch(self: &Arc<Self>) -> ConnectionFeed {
+        let hosts = self.hosts.read();
+        ConnectionFeed {
+            registry: Arc::clone(self),
+            updates: self.broadcast.subscribe(),
+            connected: Some(hosts.map.keys().copied().collect()),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::HostRegistry;
+    use super::{ConnectionChange, ConnectionFeed, HostConnectionEvent, HostRegistry};
     use crate::domain::task::{Task as DomainTask, TaskType};
     use chrono::Utc;
     use imaged_shared::ServerEvent;
     use std::sync::Arc;
-    use tokio::sync::broadcast::error::TryRecvError;
+    use std::time::Duration;
+
+    async fn watch(registry: &Arc<HostRegistry>, connected: &[i64]) -> ConnectionFeed {
+        let mut feed = registry.watch();
+        match feed.next().await {
+            Some(ConnectionChange::Connected(mut hosts)) => {
+                hosts.sort_unstable();
+                assert_eq!(hosts, connected);
+            }
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+        feed
+    }
+
+    async fn change(feed: &mut ConnectionFeed) -> HostConnectionEvent {
+        match feed.next().await {
+            Some(ConnectionChange::Changed(event)) => event,
+            other => panic!("expected a change, got {other:?}"),
+        }
+    }
+
+    async fn assert_quiet(feed: &mut ConnectionFeed) {
+        let next = tokio::time::timeout(Duration::from_millis(50), feed.next()).await;
+        assert!(next.is_err(), "unexpected change: {:?}", next.unwrap());
+    }
 
     fn domain_task(id: i64, task_type: TaskType, image_id: Option<i64>) -> DomainTask {
         DomainTask {
@@ -157,18 +215,15 @@ mod tests {
     #[tokio::test]
     async fn register_delivers_tasks_lists_the_host_and_broadcasts_a_connect_event() {
         let registry = Arc::new(HostRegistry::default());
-        let mut state_rx = registry.subscribe_state();
+        let mut feed = watch(&registry, &[]).await;
 
         let mut reg = registry.register(1);
 
-        let event = state_rx.recv().await.unwrap();
+        let event = change(&mut feed).await;
         assert_eq!(event.id, 1);
         assert!(event.connected);
 
-        let state = registry.get_current_state();
-        assert_eq!(state.len(), 1);
-        assert_eq!(state[0].id, 1);
-        assert!(state[0].connected);
+        assert_eq!(registry.connected_hosts(), vec![1]);
 
         registry.send_task(1, &domain_task(7, TaskType::Deploy, Some(3)));
         match reg.receiver.recv().await.unwrap() {
@@ -185,18 +240,17 @@ mod tests {
     async fn a_duplicate_register_displaces_the_old_connection_with_one_more_connect_and_no_disconnect()
      {
         let registry = Arc::new(HostRegistry::default());
-        let mut state_rx = registry.subscribe_state();
+        let mut feed = watch(&registry, &[]).await;
 
         let mut first = registry.register(1);
-        let connect = state_rx.recv().await.unwrap();
-        assert!(connect.connected);
+        assert!(change(&mut feed).await.connected);
 
         let mut second = registry.register(1);
 
-        let redisplace = state_rx.recv().await.unwrap();
+        let redisplace = change(&mut feed).await;
         assert_eq!(redisplace.id, 1);
         assert!(redisplace.connected);
-        assert!(matches!(state_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_quiet(&mut feed).await;
 
         assert!(first.receiver.recv().await.is_none());
 
@@ -205,7 +259,7 @@ mod tests {
             ServerEvent::Task(t) => assert_eq!(t.id, 9),
             other => panic!("expected a task event on the new receiver, got {other:?}"),
         }
-        assert!(matches!(state_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_quiet(&mut feed).await;
     }
 
     #[tokio::test]
@@ -217,9 +271,7 @@ mod tests {
 
         drop(first);
 
-        let state = registry.get_current_state();
-        assert_eq!(state.len(), 1);
-        assert_eq!(state[0].id, 1);
+        assert_eq!(registry.connected_hosts(), vec![1]);
 
         registry.send_task(1, &domain_task(7, TaskType::Deploy, Some(3)));
         match second.receiver.recv().await.unwrap() {
@@ -231,19 +283,19 @@ mod tests {
     #[tokio::test]
     async fn deregister_removes_the_host_broadcasts_disconnect_and_is_a_noop_for_unknown_ids() {
         let registry = Arc::new(HostRegistry::default());
-        let mut state_rx = registry.subscribe_state();
+        let mut feed = watch(&registry, &[]).await;
 
         let _reg = registry.register(2);
-        assert!(state_rx.recv().await.unwrap().connected);
+        assert!(change(&mut feed).await.connected);
 
         registry.deregister(2);
-        let event = state_rx.recv().await.unwrap();
+        let event = change(&mut feed).await;
         assert_eq!(event.id, 2);
         assert!(!event.connected);
-        assert!(registry.get_current_state().is_empty());
+        assert!(registry.connected_hosts().is_empty());
 
         registry.deregister(999);
-        assert!(matches!(state_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_quiet(&mut feed).await;
     }
 
     #[tokio::test]
@@ -251,7 +303,7 @@ mod tests {
         let registry = Arc::new(HostRegistry::default());
         registry.send_task(999, &domain_task(1, TaskType::Deploy, None));
         registry.cancel_task(999, 1);
-        assert!(registry.get_current_state().is_empty());
+        assert!(registry.connected_hosts().is_empty());
     }
 
     #[tokio::test]
@@ -279,17 +331,17 @@ mod tests {
     #[tokio::test]
     async fn dropping_a_live_registration_removes_the_host_and_broadcasts_disconnect() {
         let registry = Arc::new(HostRegistry::default());
-        let mut state_rx = registry.subscribe_state();
+        let mut feed = watch(&registry, &[]).await;
 
         let reg = registry.register(4);
-        assert!(state_rx.recv().await.unwrap().connected);
+        assert!(change(&mut feed).await.connected);
 
         drop(reg);
 
-        let event = state_rx.recv().await.unwrap();
+        let event = change(&mut feed).await;
         assert_eq!(event.id, 4);
         assert!(!event.connected);
-        assert!(registry.get_current_state().is_empty());
+        assert!(registry.connected_hosts().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -313,10 +365,47 @@ mod tests {
         for handle in handles {
             handle.await.unwrap();
         }
-        assert!(registry.get_current_state().is_empty());
+        assert!(registry.connected_hosts().is_empty());
 
         let mut reg = registry.register(0);
         registry.send_task(0, &domain_task(2, TaskType::Reboot, None));
         assert!(reg.receiver.recv().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn watch_hands_out_the_connected_hosts_and_only_the_changes_after_them() {
+        let registry = Arc::new(HostRegistry::default());
+        let _first = registry.register(1);
+
+        let mut feed = watch(&registry, &[1]).await;
+        assert_quiet(&mut feed).await;
+
+        let second = registry.register(2);
+        let connect = change(&mut feed).await;
+        assert_eq!(connect.id, 2);
+        assert!(connect.connected);
+
+        drop(second);
+        let disconnect = change(&mut feed).await;
+        assert_eq!(disconnect.id, 2);
+        assert!(!disconnect.connected);
+        assert_eq!(registry.connected_hosts(), vec![1]);
+    }
+
+    #[tokio::test]
+    async fn a_feed_that_falls_behind_is_resynced_with_a_fresh_snapshot() {
+        let registry = Arc::new(HostRegistry::default());
+        let mut feed = watch(&registry, &[]).await;
+
+        let registrations: Vec<_> = (0..64).map(|id| registry.register(id)).collect();
+
+        match feed.next().await {
+            Some(ConnectionChange::Connected(mut hosts)) => {
+                hosts.sort_unstable();
+                assert_eq!(hosts, (0..64).collect::<Vec<_>>());
+            }
+            other => panic!("expected a resync snapshot, got {other:?}"),
+        }
+        drop(registrations);
     }
 }

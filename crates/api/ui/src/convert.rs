@@ -4,7 +4,7 @@ use imaged_core::domain::{
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
     task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
 };
-use imaged_core::registry::HostConnectionEvent as DConn;
+use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
 
 use crate::model;
 
@@ -25,6 +25,15 @@ impl From<DConn> for model::HostConnectionEvent {
         Self {
             id: e.id,
             connected: e.connected,
+        }
+    }
+}
+
+impl From<DChange> for model::ConnectionUpdate {
+    fn from(c: DChange) -> Self {
+        match c {
+            DChange::Connected(hosts) => Self::Connected(hosts),
+            DChange::Changed(event) => Self::Changed(event.into()),
         }
     }
 }

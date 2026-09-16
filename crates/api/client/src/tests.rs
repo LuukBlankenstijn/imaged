@@ -937,21 +937,11 @@ async fn disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_mac
         .await
         .unwrap();
     let _registration = c.host_registry.register(host.id);
-    assert!(
-        c.host_registry
-            .get_current_state()
-            .iter()
-            .any(|e| e.id == host.id)
-    );
+    assert!(c.host_registry.connected_hosts().contains(&host.id));
 
     let resp = post("/api/client/stream/disconnect", &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(
-        !c.host_registry
-            .get_current_state()
-            .iter()
-            .any(|e| e.id == host.id)
-    );
+    assert!(!c.host_registry.connected_hosts().contains(&host.id));
 
     let idle_mac = next_mac();
     c.host_repo
