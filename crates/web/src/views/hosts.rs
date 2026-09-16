@@ -4,7 +4,7 @@ use crate::api::hosts::{
     delete_host, deploy, get_all_hosts, reboot, update_host_name, wake_on_lan,
 };
 use crate::api::images::get_all_images;
-use crate::components::connection::use_connection;
+use crate::components::connection::{Connections, use_connection};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
@@ -19,10 +19,14 @@ use crate::model::{DeployRequest, Host, Image, ImageStatus, UpdateName};
 #[component]
 pub fn Hosts() -> Element {
     let mut hosts = use_poll(4000, || async move { get_all_hosts().await });
+    let conns = use_context::<Connections>().0;
+    let mut query = use_signal(String::new);
+    let mut show_online = use_signal(|| false);
+    let mut show_offline = use_signal(|| false);
 
     rsx! {
         PageHeader { title: "Hosts", subtitle: "Registered machines on the netboot fabric" }
-        Card { class: "overflow-x-auto",
+        Card { class: "overflow-hidden",
             {
                 match &*hosts.read() {
                     Some(Ok(list)) if list.is_empty() => rsx! {
@@ -31,30 +35,95 @@ pub fn Hosts() -> Element {
                             hint: "Machines appear here once they PXE-boot and register.",
                         }
                     },
-                    Some(Ok(list)) => rsx! {
-                        table { class: "w-full text-sm",
-                            thead {
-                                tr { class: "text-fog-500",
-                                    th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider w-10" }
-                                    th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Host" }
-                                    th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "MAC address" }
-                                    th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "IP" }
-                                    th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Disk" }
-                                    th { class: "px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider" }
+                    Some(Ok(list)) => {
+                        let total = list.len();
+                        let needle = query().trim().to_lowercase();
+                        let want_online = show_online();
+                        let want_offline = show_offline();
+                        let (online, visible) = {
+                            let map = conns.read();
+                            let connected = |id: i64| map.get(&id).copied().unwrap_or(false);
+                            let online = list.iter().filter(|h| connected(h.id)).count();
+                            let visible = visible_hosts(
+                                list,
+                                &needle,
+                                want_online,
+                                want_offline,
+                                &connected,
+                            );
+                            (online, visible)
+                        };
+                        rsx! {
+                            div { class: "flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3",
+                                div { class: "relative min-w-0 max-w-sm flex-1",
+                                    span { class: "pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fog-600",
+                                        Icon { name: "search", class: "w-4 h-4" }
+                                    }
+                                    input {
+                                        class: "w-full rounded-md border border-ink-600 bg-ink-900 py-1.5 pl-8 pr-3 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                                        placeholder: "Search name, MAC or IP",
+                                        value: "{query}",
+                                        oninput: move |e| query.set(e.value()),
+                                    }
+                                }
+                                div { class: "flex shrink-0 items-center gap-3",
+                                    div { class: "flex items-center gap-1.5",
+                                        span { class: "font-mono text-[11px] uppercase tracking-wider text-fog-600",
+                                            "Connection"
+                                        }
+                                        button {
+                                            class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(want_online)}",
+                                            onclick: move |_| show_online.toggle(),
+                                            "Online"
+                                        }
+                                        button {
+                                            class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(want_offline)}",
+                                            onclick: move |_| show_offline.toggle(),
+                                            "Offline"
+                                        }
+                                    }
+                                    div { class: "ml-2 flex items-center gap-1.5",
+                                        StatusDot { connected: online > 0 }
+                                        span { class: "font-mono text-xs text-fog-300", "{online} / {total}" }
+                                        span { class: "text-[11px] uppercase tracking-wider text-fog-500",
+                                            "online"
+                                        }
+                                    }
                                 }
                             }
-                            tbody {
-                                for (i , h) in list.iter().enumerate() {
-                                    HostRow {
-                                        key: "{h.id}",
-                                        host: h.clone(),
-                                        index: i,
-                                        on_changed: move |_| hosts.restart(),
+                            if visible.is_empty() {
+                                EmptyState {
+                                    title: "No matching hosts",
+                                    hint: "Adjust the search term or the connection filter.",
+                                }
+                            } else {
+                                div { class: "overflow-x-auto",
+                                    table { class: "w-full text-sm",
+                                        thead {
+                                            tr { class: "text-fog-500",
+                                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider w-10" }
+                                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Host" }
+                                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "MAC address" }
+                                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "IP" }
+                                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Disk" }
+                                                th { class: "px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider" }
+                                            }
+                                        }
+                                        tbody {
+                                            for (i , h) in visible.iter().enumerate() {
+                                                HostRow {
+                                                    key: "{h.id}",
+                                                    host: h.clone(),
+                                                    index: i,
+                                                    on_changed: move |_| hosts.restart(),
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                    },
+                    }
                     Some(Err(e)) => rsx! {
                         EmptyState { title: "Failed to load hosts", hint: e.to_string() }
                     },
@@ -65,6 +134,40 @@ pub fn Hosts() -> Element {
             }
         }
     }
+}
+
+fn chip_classes(active: bool) -> &'static str {
+    if active {
+        "border-amber-500/50 bg-amber-500/15 text-amber-300"
+    } else {
+        "border-ink-600 text-fog-400 hover:border-ink-500 hover:text-fog-100"
+    }
+}
+
+pub(crate) fn connection_allows(want_online: bool, want_offline: bool, connected: bool) -> bool {
+    want_online == want_offline || want_online == connected
+}
+
+pub(crate) fn visible_hosts(
+    hosts: &[Host],
+    needle: &str,
+    want_online: bool,
+    want_offline: bool,
+    connected: impl Fn(i64) -> bool,
+) -> Vec<Host> {
+    hosts
+        .iter()
+        .filter(|h| connection_allows(want_online, want_offline, connected(h.id)))
+        .filter(|h| host_matches(h, needle))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn host_matches(host: &Host, needle: &str) -> bool {
+    needle.is_empty()
+        || host.name.to_lowercase().contains(needle)
+        || host.mac_address.to_lowercase().contains(needle)
+        || matches!(&host.ip, Some(ip) if ip.to_lowercase().contains(needle))
 }
 
 #[component]
@@ -310,5 +413,106 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{connection_allows, host_matches, visible_hosts};
+    use crate::model::Host;
+
+    fn host(id: i64, name: &str, mac: &str, ip: Option<&str>) -> Host {
+        Host {
+            id,
+            mac_address: mac.to_string(),
+            name: name.to_string(),
+            disk_size_bytes: 0,
+            ip: ip.map(str::to_string),
+        }
+    }
+
+    fn fleet() -> Vec<Host> {
+        vec![
+            host(1, "alpha", "AA:BB:CC:00:00:01", Some("192.168.1.10")),
+            host(2, "beta", "11:22:33:00:00:02", Some("10.0.0.7")),
+            host(3, "gamma", "aa:bb:cc:00:00:03", None),
+        ]
+    }
+
+    fn names(hosts: &[Host]) -> Vec<&str> {
+        hosts.iter().map(|h| h.name.as_str()).collect()
+    }
+
+    #[test]
+    fn host_matches_is_case_insensitive_across_name_mac_and_ip() {
+        let hosts = fleet();
+        assert!(host_matches(&hosts[0], "lph"));
+        assert!(host_matches(&hosts[0], "aa:bb"));
+        assert!(host_matches(&hosts[2], "aa:bb"));
+        assert!(host_matches(&hosts[0], "192.168"));
+        assert!(!host_matches(&hosts[1], "192.168"));
+        assert!(!host_matches(&hosts[2], "192.168"));
+        assert!(host_matches(&hosts[1], ""));
+    }
+
+    #[test]
+    fn connection_filter_is_inert_when_both_toggles_agree() {
+        for connected in [true, false] {
+            assert!(connection_allows(false, false, connected));
+            assert!(connection_allows(true, true, connected));
+        }
+        assert!(connection_allows(true, false, true));
+        assert!(!connection_allows(true, false, false));
+        assert!(connection_allows(false, true, false));
+        assert!(!connection_allows(false, true, true));
+    }
+
+    #[test]
+    fn visible_hosts_narrows_by_mac_ip_and_name() {
+        let hosts = fleet();
+        let all = |_: i64| true;
+        assert_eq!(
+            names(&visible_hosts(&hosts, "aa:bb", false, false, all)),
+            ["alpha", "gamma"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "192.168", false, false, all)),
+            ["alpha"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "amm", false, false, all)),
+            ["gamma"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "", false, false, all)),
+            ["alpha", "beta", "gamma"]
+        );
+    }
+
+    #[test]
+    fn visible_hosts_composes_connection_toggles_with_the_search_term() {
+        let hosts = fleet();
+        let connected = |id: i64| id == 1 || id == 2;
+        assert_eq!(
+            names(&visible_hosts(&hosts, "", true, false, connected)),
+            ["alpha", "beta"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "", false, true, connected)),
+            ["gamma"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "", true, true, connected)),
+            ["alpha", "beta", "gamma"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "aa:bb", true, false, connected)),
+            ["alpha"]
+        );
+        assert_eq!(
+            names(&visible_hosts(&hosts, "aa:bb", false, true, connected)),
+            ["gamma"]
+        );
+        assert!(visible_hosts(&hosts, "beta", false, true, connected).is_empty());
     }
 }
