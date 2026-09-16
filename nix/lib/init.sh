@@ -4,6 +4,12 @@
 /bin/busybox mount -t sysfs none /sys
 /bin/busybox mount -t devtmpfs none /dev
 
+for backlight in /sys/class/backlight/*; do
+    [ -f "$backlight/max_brightness" ] || continue
+    [ "$(cat "$backlight/brightness")" = "0" ] || continue
+    cat "$backlight/max_brightness" > "$backlight/brightness"
+done
+
 echo "Running dhcp to get an ip"
 /bin/ipconfig -d all
 if [ -f /run/net-eth0.conf ]; then
