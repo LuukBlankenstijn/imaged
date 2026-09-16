@@ -22,7 +22,7 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    setup_logging!(args.log_level);
+    setup_logging!(args.log_level, ["scuttlecast"]);
 
     let mac = sys::get_mac()?;
     let ip = sys::get_ip();
