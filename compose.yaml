@@ -8,6 +8,8 @@ services:
       - NET_ADMIN
     volumes:
       - ./dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./assets/ipxe.efi:/tftp/ipxe.efi:ro
+      - ./assets/undionly.kpxe:/tftp/undionly.kpxe:ro
     restart: unless-stopped
 
 networks:
