@@ -13,8 +13,8 @@ pub struct Backoff {
 
 impl Backoff {
     pub const PRODUCTION: Backoff = Backoff {
-        start: Duration::from_secs(1),
-        cap: Duration::from_secs(30),
+        start: Duration::from_millis(250),
+        cap: Duration::from_secs(5),
     };
 }
 
