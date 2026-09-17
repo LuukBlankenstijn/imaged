@@ -10,6 +10,13 @@ for backlight in /sys/class/backlight/*; do
     cat "$backlight/max_brightness" > "$backlight/brightness"
 done
 
+# USB NICs enumerate after init starts, so a dongle is not there yet.
+i=0
+while [ -z "$(ls /sys/class/net | grep -vx lo)" ] && [ "$i" -lt 10 ]; do
+    i=$((i + 1))
+    sleep 1
+done
+
 echo "Running dhcp to get an ip"
 /bin/ipconfig -d all
 if [ -f /run/net-eth0.conf ]; then
