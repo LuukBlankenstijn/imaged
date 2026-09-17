@@ -10,13 +10,21 @@ for backlight in /sys/class/backlight/*; do
     cat "$backlight/max_brightness" > "$backlight/brightness"
 done
 
+i=0
+while [ "$i" -lt 10 ]; do
+    linked=
+    for iface in /sys/class/net/*; do
+        [ "${iface##*/}" = "lo" ] && continue
+        ip link set "${iface##*/}" up
+        [ "$(cat "$iface/carrier" 2>/dev/null)" = "1" ] && linked=1
+    done
+    [ -n "$linked" ] && break
+    i=$((i + 1))
+    sleep 1
+done
+
 echo "Running dhcp to get an ip"
 /bin/ipconfig -d all
-if [ -f /run/net-eth0.conf ]; then
-    . /run/net-eth0.conf
-    [ -n "$IPV4DNS0" ] && [ "$IPV4DNS0" != "0.0.0.0" ] && echo "nameserver $IPV4DNS0" > /etc/resolv.conf
-    echo "$ROOTSERVER" > /run/imaging_server
-fi
 
 for arg in $(cat /proc/cmdline); do
     case "$arg" in
