@@ -12,7 +12,7 @@ struct Args {
     /// Base url of the imaged server to connect to
     #[arg(default_value_t = Url::parse("https://192.168.0.1:8080").expect("invalid url"))]
     server: Url,
-    #[arg(short, long, default_value = "debug")]
+    #[arg(short, long, default_value = "info")]
     log_level: String,
 }
 
