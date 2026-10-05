@@ -6,7 +6,7 @@ use crate::model::{CreateGroupRequest, Group, MulticastRequest, UpdateGroupReque
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{GroupRepo, MulticastMgr, Registry, TaskRepo};
+use imaged_core::di::{GroupRepo, MulticastMgr, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 use imaged_shared::error::Result;
@@ -49,18 +49,11 @@ pub async fn delete_group(id: i64) -> Result<()> {
 }
 
 #[post("/api/ui/groups/multicast")]
-#[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr, registry: Registry)]
+#[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
 pub async fn multicast(req: MulticastRequest) -> Result<()> {
-    let task = task_repo
-        .create(
-            TaskType::Multicast,
-            req.host_ids.clone(),
-            Some(req.image_id),
-        )
+    task_repo
+        .create(TaskType::Multicast, req.host_ids, Some(req.image_id))
         .await?;
-    multicast_mgr.notify_new(task.id)?;
-    for id in req.host_ids {
-        registry.send_task(id, &task);
-    }
+    multicast_mgr.wake();
     Ok(())
 }

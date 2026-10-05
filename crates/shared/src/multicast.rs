@@ -1,12 +1,11 @@
 use std::net::Ipv4Addr;
+use std::time::Duration;
 
 /// Base port for a single file in a multicast transfer.
 ///
 /// Every file (partition table + each partition) gets its own port so a
 /// transfer never rendezvouses on a port a previous file's receiver just tore
-/// down. Only one multicast session runs at a time (the manager is
-/// single-slot and the group address is fixed), so a fixed base is safe.
-/// slot 0 is the partition table; slot N is partition number N.
+/// down. slot 0 is the partition table; slot N is partition number N.
 ///
 /// A transfer occupies two ports: the sender binds `port` and the group
 /// carries traffic on `port + 1`. Slots are therefore spaced two apart so no
@@ -29,7 +28,14 @@ pub fn get_multicast_port(slot: i64) -> u16 {
     }
 }
 
-pub const MULTICAST_GROUP_ADDRESS: Ipv4Addr = Ipv4Addr::new(239, 16, 16, 16);
+pub const MULTICAST_JOIN_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+const ORGANIZATION_LOCAL_SCOPE: u32 = u32::from_be_bytes([239, 192, 0, 0]);
+const GROUPS_IN_SCOPE: u32 = 1 << 18;
+
+pub fn multicast_group(task_id: i64) -> Ipv4Addr {
+    Ipv4Addr::from(ORGANIZATION_LOCAL_SCOPE | (task_id as u32 % GROUPS_IN_SCOPE))
+}
 
 #[cfg(test)]
 mod tests {
@@ -73,5 +79,16 @@ mod tests {
     #[test]
     fn a_slot_that_would_wrap_the_u16_cast_no_longer_collides_with_the_partition_table() {
         assert_ne!(get_multicast_port(32_768), get_multicast_port(0));
+    }
+
+    #[test]
+    fn consecutive_tasks_get_distinct_organization_local_groups() {
+        let groups: HashSet<Ipv4Addr> = (1..=100_000i64).map(multicast_group).collect();
+        assert_eq!(groups.len(), 100_000);
+        assert!(
+            groups
+                .iter()
+                .all(|g| g.octets()[0] == 239 && g.octets()[1] & 0xFC == 192)
+        );
     }
 }

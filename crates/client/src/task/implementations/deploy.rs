@@ -8,7 +8,7 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, info};
 
 use super::ClientTaskExt;
-use crate::{sys, task::PARTTABLE_TMP};
+use crate::task::PARTTABLE_TMP;
 
 #[derive(Constructor, Clone, Display)]
 #[display("deploy task {task_id}")]
@@ -17,6 +17,10 @@ pub struct DeployTask {
 }
 
 impl ClientTaskExt for DeployTask {
+    fn task_id(&self) -> i64 {
+        self.task_id
+    }
+
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--zap-all", device])
@@ -106,16 +110,6 @@ impl ClientTaskExt for DeployTask {
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {
-        api::task::mark_finished(self.task_id).await?;
-        tracing::info!(task=%self, "finished task successfully");
-        // best effort disconnect
-        let _ = api::event::disconnect().await;
-        sys::reboot()
-    }
-
-    async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
-        tracing::error!(task=%self, error=%err, "did not finish task successfully");
-        api::task::mark_failed(self.task_id, err.to_string()).await?;
-        Ok(())
+        super::finish_and_reboot(self).await
     }
 }

@@ -13,6 +13,10 @@ pub struct CaptureTask {
 }
 
 impl ClientTaskExt for CaptureTask {
+    fn task_id(&self) -> i64 {
+        self.task_id
+    }
+
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let status = Command::new("sgdisk")
             .args(["--backup", PARTTABLE_TMP, device])
@@ -66,18 +70,6 @@ impl ClientTaskExt for CaptureTask {
         if !status.success() {
             anyhow::bail!("partclone exited with {}", status);
         }
-        Ok(())
-    }
-
-    async fn finalize(&self) -> anyhow::Result<()> {
-        api::task::mark_finished(self.task_id).await?;
-        tracing::info!(task=%self, "finished task successfully");
-        Ok(())
-    }
-
-    async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
-        tracing::error!(task=%self, error=%err, "did not finish task successfully");
-        api::task::mark_failed(self.task_id, err.to_string()).await?;
         Ok(())
     }
 }

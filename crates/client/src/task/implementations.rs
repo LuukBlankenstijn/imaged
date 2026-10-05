@@ -19,6 +19,8 @@ use crate::sys::disk::{BlockDevice, PartitionTarget};
 )]
 #[enum_dispatch]
 pub trait ClientTaskExt: std::fmt::Display {
+    fn task_id(&self) -> i64;
+
     async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {
         Ok(())
     }
@@ -32,14 +34,26 @@ pub trait ClientTaskExt: std::fmt::Display {
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {
-        tracing::info!(task=%self, "finished task successfully");
-        Ok(())
+        report_finished(self).await
     }
 
     async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
+        api::task::mark_failed(self.task_id(), err.to_string()).await?;
         Ok(())
     }
+}
+
+async fn report_finished(task: &(impl ClientTaskExt + ?Sized)) -> anyhow::Result<()> {
+    api::task::mark_finished(task.task_id()).await?;
+    tracing::info!(task=%task, "finished task successfully");
+    Ok(())
+}
+
+async fn finish_and_reboot(task: &impl ClientTaskExt) -> anyhow::Result<()> {
+    report_finished(task).await?;
+    let _ = api::event::disconnect().await;
+    crate::sys::reboot()
 }
 
 async fn image_partitions(

@@ -86,15 +86,8 @@ async fn a_reboot_task_for_an_unconnected_host_is_persisted() {
     assert_eq!(pending.image_id, None);
 }
 
-// The `/api/ui/groups/multicast` HTTP route calls `multicast_mgr.notify_new`,
-// which detaches a `do_work` that starts every host row and then blocks in a
-// real multicast send on the immortal server runtime. Driving it over HTTP both
-// leaks a blocked sender and races the pending-host assertion, so this test
-// exercises the deterministic, synchronous half of the route (task creation +
-// registry fan-out) directly and leaves `notify_new` alone.
-
 #[tokio::test]
-async fn multicast_creates_one_task_and_notifies_every_connected_agent() {
+async fn multicast_creates_one_task_and_hands_it_to_every_connected_agent() {
     let s = harness::server().await;
 
     let mac1 = harness::unique_mac();
@@ -124,45 +117,33 @@ async fn multicast_creates_one_task_and_notifies_every_connected_agent() {
         .await
         .expect("stream h2");
 
-    let task = s
-        .container
-        .task_repo
-        .create(
-            TaskType::Multicast,
-            vec![h1.id, h2.id, h3.id],
-            Some(image_id),
+    let resp = s
+        .ui_post(
+            "/api/ui/groups/multicast",
+            &json!({ "req": { "host_ids": [h1.id, h2.id, h3.id], "image_id": image_id } }),
         )
-        .await
-        .expect("create multicast task");
-    for id in [h1.id, h2.id, h3.id] {
-        s.container.host_registry.send_task(id, &task);
-    }
-
-    assert_eq!(task.task_type, TaskType::Multicast);
-    let mut covered: Vec<i64> = task.hosts.iter().map(|h| h.host_id).collect();
-    covered.sort_unstable();
-    let mut expected = vec![h1.id, h2.id, h3.id];
-    expected.sort_unstable();
-    assert_eq!(covered, expected);
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
 
     let e1 = s1
         .next_event(Duration::from_secs(5))
         .await
         .expect("h1 event");
-    assert_eq!(e1["Task"]["id"], task.id);
     assert_eq!(e1["Task"]["task_type"], "Multicast");
     assert_eq!(e1["Task"]["image_id"], image_id);
-
     let e2 = s2
         .next_event(Duration::from_secs(5))
         .await
         .expect("h2 event");
-    assert_eq!(e2["Task"]["id"], task.id);
-    assert_eq!(e2["Task"]["task_type"], "Multicast");
+    assert_eq!(e2["Task"]["id"], e1["Task"]["id"]);
 
-    let stored = get_task(s, task.id).await;
+    let stored = get_task(s, e1["Task"]["id"].as_i64().expect("task id")).await;
     assert_eq!(stored.task_type, TaskType::Multicast);
-    assert!(stored.hosts.iter().all(|h| h.state.is_pending()));
+    let mut covered: Vec<i64> = stored.hosts.iter().map(|h| h.host_id).collect();
+    covered.sort_unstable();
+    let mut expected = vec![h1.id, h2.id, h3.id];
+    expected.sort_unstable();
+    assert_eq!(covered, expected);
 }
 
 #[tokio::test]
@@ -285,7 +266,7 @@ async fn retrying_a_task_whose_image_is_soft_deleted_is_rejected() {
         .unwrap();
     s.container
         .task_repo
-        .mark_all_failed(task.id, "boom")
+        .mark_failed(task.id, host.id, "boom")
         .await
         .unwrap();
     s.container.image_repo.delete_image(image_id).await.unwrap();
@@ -357,7 +338,7 @@ async fn a_retried_task_reaches_a_host_only_when_it_is_that_hosts_next_task() {
         .unwrap();
     s.container
         .task_repo
-        .mark_all_failed(newer.id, "boom")
+        .mark_failed(newer.id, host.id, "boom")
         .await
         .unwrap();
 
@@ -505,9 +486,14 @@ async fn deleting_an_image_should_cancel_its_referencing_multicast_task() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(get_task(s, task.id).await.aggregate_state().is_cancelled());
-    let ev = stream
-        .next_event(Duration::from_secs(5))
-        .await
-        .expect("cancel event for the referenced task");
+    let ev = loop {
+        let ev = stream
+            .next_event(Duration::from_secs(5))
+            .await
+            .expect("cancel event for the referenced task");
+        if !ev["Cancel"].is_null() {
+            break ev;
+        }
+    };
     assert_eq!(ev["Cancel"], task.id);
 }

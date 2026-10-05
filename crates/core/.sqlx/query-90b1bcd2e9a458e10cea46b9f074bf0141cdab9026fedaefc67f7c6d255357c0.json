@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            WHERE twh.type = ?\n            AND EXISTS (\n                SELECT 1 FROM task_hosts th\n                WHERE th.task_id = twh.id AND th.state = ?\n            )\n            ",
+  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            WHERE twh.type = ?\n            AND EXISTS (\n                SELECT 1 FROM task_hosts th\n                WHERE th.task_id = twh.id AND th.state = ?\n            )\n            ORDER BY twh.id ASC\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "19adea09f0f1133b8c45a9fb35f9225d27f80d48f68f3a707566d851a5166657"
+  "hash": "90b1bcd2e9a458e10cea46b9f074bf0141cdab9026fedaefc67f7c6d255357c0"
 }

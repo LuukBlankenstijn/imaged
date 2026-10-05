@@ -3874,9 +3874,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scuttlecast"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "204996c3b7fbc5c072ec2f8e56bbacf48dbe44088e29ab6962863e228a59cda4"
+checksum = "2af3cbb503dbf98e5d9864757b16334cd3eab2683cfd22129d9974a337cc49a0"
 dependencies = [
  "async-stream",
  "bincode",

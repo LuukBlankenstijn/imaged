@@ -112,6 +112,17 @@ impl Task {
         }
         Partial
     }
+
+    pub fn hosts_in(&self, state: TaskState) -> impl Iterator<Item = i64> + '_ {
+        self.hosts
+            .iter()
+            .filter(move |h| h.state == state)
+            .map(|h| h.host_id)
+    }
+
+    pub fn is_dispatchable_to(&self, host_id: i64) -> bool {
+        !self.task_type.is_multicast() || self.hosts_in(TaskState::Running).any(|id| id == host_id)
+    }
 }
 
 #[async_trait::async_trait]
@@ -135,12 +146,6 @@ pub trait TaskRepository: Send + Sync {
 
     // marks one host's row of a task as failed
     async fn mark_failed(&self, task_id: i64, host_id: i64, error: &str) -> Result;
-
-    // marks every host row of a task as done (multicast fan-out)
-    async fn mark_all_finished(&self, task_id: i64) -> Result;
-
-    // marks every host row of a task as failed (multicast fan-out)
-    async fn mark_all_failed(&self, task_id: i64, error: &str) -> Result;
 
     // reset a task's failed/cancelled host rows to pending
     async fn retry(&self, id: i64) -> Result;
@@ -188,6 +193,17 @@ mod tests {
     #[test]
     fn an_empty_host_list_aggregates_to_cancelled() {
         assert_eq!(task(&[]).aggregate_state(), TaskState::Cancelled);
+    }
+
+    #[test]
+    fn a_multicast_task_reaches_a_host_only_once_its_session_started_it() {
+        let mut multicast = task(&[TaskState::Pending]);
+        multicast.task_type = TaskType::Multicast;
+        assert!(!multicast.is_dispatchable_to(1));
+
+        multicast.hosts[0].state = TaskState::Running;
+        assert!(multicast.is_dispatchable_to(1));
+        assert!(task(&[TaskState::Pending]).is_dispatchable_to(1));
     }
 
     #[test]

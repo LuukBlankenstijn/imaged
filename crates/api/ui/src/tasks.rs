@@ -39,7 +39,7 @@ pub async fn cancel_task(id: i64) -> Result<()> {
             .await?;
     }
     if task.task_type == TaskType::Multicast {
-        multicast_mgr.cancel(task.id);
+        multicast_mgr.wake();
     }
     for host in task
         .hosts
@@ -73,7 +73,8 @@ pub async fn retry_task(id: i64) -> Result<()> {
     }
     task_repo.retry(task.id).await?;
     if task.task_type == TaskType::Multicast {
-        multicast_mgr.notify_new(task.id)?;
+        multicast_mgr.wake();
+        return Ok(());
     }
     for host in &task.hosts {
         if let Some(next_task) = task_repo.get_next(host.host_id).await?

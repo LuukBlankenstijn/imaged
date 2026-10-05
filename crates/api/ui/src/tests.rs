@@ -1082,7 +1082,7 @@ async fn waking_hosts_normalises_dashed_macs_and_tolerates_malformed_ones() {
 }
 
 #[tokio::test]
-async fn multicasting_creates_one_task_for_all_members_and_notifies_registered_ones() {
+async fn multicast_hands_one_task_to_registered_members_when_its_session_starts() {
     let (c, _guard) = container().await;
     let first = c
         .host_repo
@@ -1122,13 +1122,11 @@ async fn multicasting_creates_one_task_for_all_members_and_notifies_registered_o
         vec![first.id, second.id, absent.id]
     );
 
-    match first_conn.receiver.try_recv() {
-        Ok(ServerEvent::Task(t)) => assert_eq!(t.id, task.id),
-        other => panic!("first member expected Task event, got {other:?}"),
-    }
-    match second_conn.receiver.try_recv() {
-        Ok(ServerEvent::Task(t)) => assert_eq!(t.id, task.id),
-        other => panic!("second member expected Task event, got {other:?}"),
+    for conn in [&mut first_conn, &mut second_conn] {
+        match tokio::time::timeout(Duration::from_secs(5), conn.receiver.recv()).await {
+            Ok(Some(ServerEvent::Task(t))) => assert_eq!(t.id, task.id),
+            other => panic!("member expected Task event, got {other:?}"),
+        }
     }
 }
 

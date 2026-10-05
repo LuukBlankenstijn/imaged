@@ -55,6 +55,10 @@ impl std::fmt::Display for RecordingTask {
 }
 
 impl ClientTaskExt for RecordingTask {
+    fn task_id(&self) -> i64 {
+        0
+    }
+
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         self.record(format!("table:{device}"));
         Ok(())

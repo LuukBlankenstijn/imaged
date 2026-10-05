@@ -56,7 +56,7 @@ async fn cancel_task_effects(
 ) -> Result<()> {
     task_repo.cancel(task.id).await?;
     if task.task_type == TaskType::Multicast {
-        multicast_mgr.cancel(task.id);
+        multicast_mgr.wake();
     }
     for host in task
         .hosts

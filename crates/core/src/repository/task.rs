@@ -180,45 +180,6 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(())
     }
 
-    async fn mark_all_finished(&self, task_id: i64) -> Result {
-        let done = TaskState::Done.to_string();
-        let pending = TaskState::Pending.to_string();
-        let running = TaskState::Running.to_string();
-        let now = Utc::now();
-        sqlx::query!(
-            "UPDATE task_hosts SET state = ?, finished_at = ? \
-             WHERE task_id = ? AND (state = ? OR state = ?)",
-            done,
-            now,
-            task_id,
-            pending,
-            running
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn mark_all_failed(&self, task_id: i64, error: &str) -> Result {
-        let failed = TaskState::Failed.to_string();
-        let pending = TaskState::Pending.to_string();
-        let running = TaskState::Running.to_string();
-        let now = Utc::now();
-        sqlx::query!(
-            "UPDATE task_hosts SET state = ?, finished_at = ?, error = ? \
-             WHERE task_id = ? AND (state = ? OR state = ?)",
-            failed,
-            now,
-            error,
-            task_id,
-            pending,
-            running
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     async fn retry(&self, id: i64) -> Result {
         let pending = TaskState::Pending.to_string();
         let failed = TaskState::Failed.to_string();
@@ -346,6 +307,8 @@ impl TaskRepository for SqliteTaskRepository {
                 SELECT 1 FROM task_hosts th
                 WHERE th.task_id = twh.id AND th.state = ?
             )
+            ORDER BY twh.id ASC
+            LIMIT 1
             "#,
             task_type,
             pending_state
@@ -772,103 +735,6 @@ mod tests {
         let r = host_row(&got, h);
         assert_eq!(r.state, TaskState::Cancelled);
         assert!(r.error.is_none());
-    }
-
-    #[tokio::test]
-    async fn mark_all_finished_completes_pending_and_running_hosts() {
-        let (c, _g) = container().await;
-        let pending_h = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let running_h = host(&c, "aa:bb:cc:dd:ee:02").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Multicast, vec![pending_h, running_h], None)
-            .await
-            .unwrap();
-        c.task_repo.start(t.id, running_h).await.unwrap();
-        c.task_repo.mark_all_finished(t.id).await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(host_row(&got, pending_h).state, TaskState::Done);
-        assert_eq!(host_row(&got, running_h).state, TaskState::Done);
-        assert!(host_row(&got, pending_h).finished_at.is_some());
-        assert!(host_row(&got, running_h).finished_at.is_some());
-        assert_eq!(got.aggregate_state(), TaskState::Done);
-    }
-
-    #[tokio::test]
-    async fn mark_all_finished_leaves_done_and_failed_rows_untouched() {
-        let (c, _g) = container().await;
-        let done_h = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let failed_h = host(&c, "aa:bb:cc:dd:ee:02").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Multicast, vec![done_h, failed_h], None)
-            .await
-            .unwrap();
-        c.task_repo.mark_finished(t.id, done_h).await.unwrap();
-        c.task_repo
-            .mark_failed(t.id, failed_h, "boom")
-            .await
-            .unwrap();
-        c.task_repo.mark_all_finished(t.id).await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(host_row(&got, done_h).state, TaskState::Done);
-        assert_eq!(host_row(&got, failed_h).state, TaskState::Failed);
-        assert_eq!(host_row(&got, failed_h).error.as_deref(), Some("boom"));
-    }
-
-    #[tokio::test]
-    async fn mark_all_finished_leaves_cancelled_rows_untouched() {
-        let (c, _g) = container().await;
-        let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Multicast, vec![h1, h2], None)
-            .await
-            .unwrap();
-        c.task_repo.cancel(t.id).await.unwrap();
-        c.task_repo.mark_all_finished(t.id).await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(host_row(&got, h1).state, TaskState::Cancelled);
-        assert_eq!(host_row(&got, h2).state, TaskState::Cancelled);
-    }
-
-    #[tokio::test]
-    async fn mark_all_failed_fails_pending_and_running_hosts_with_error() {
-        let (c, _g) = container().await;
-        let pending_h = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let running_h = host(&c, "aa:bb:cc:dd:ee:02").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Multicast, vec![pending_h, running_h], None)
-            .await
-            .unwrap();
-        c.task_repo.start(t.id, running_h).await.unwrap();
-        c.task_repo.mark_all_failed(t.id, "net down").await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(host_row(&got, pending_h).state, TaskState::Failed);
-        assert_eq!(host_row(&got, running_h).state, TaskState::Failed);
-        assert_eq!(host_row(&got, pending_h).error.as_deref(), Some("net down"));
-        assert!(host_row(&got, running_h).finished_at.is_some());
-        assert_eq!(got.aggregate_state(), TaskState::Failed);
-    }
-
-    #[tokio::test]
-    async fn mark_all_failed_leaves_done_rows_untouched() {
-        let (c, _g) = container().await;
-        let done_h = host(&c, "aa:bb:cc:dd:ee:01").await;
-        let pending_h = host(&c, "aa:bb:cc:dd:ee:02").await;
-        let t = c
-            .task_repo
-            .create(TaskType::Multicast, vec![done_h, pending_h], None)
-            .await
-            .unwrap();
-        c.task_repo.mark_finished(t.id, done_h).await.unwrap();
-        c.task_repo.mark_all_failed(t.id, "net down").await.unwrap();
-        let got = c.task_repo.get(t.id).await.unwrap();
-        assert_eq!(host_row(&got, done_h).state, TaskState::Done);
-        assert!(host_row(&got, done_h).error.is_none());
-        assert_eq!(host_row(&got, pending_h).state, TaskState::Failed);
     }
 
     #[tokio::test]

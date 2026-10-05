@@ -1,14 +1,10 @@
 use async_compression::tokio::bufread::ZstdDecoder;
 use derive_more::{Constructor, Display};
-use imaged_shared::get_multicast_port;
-use tokio::{
-    io::{AsyncReadExt, BufReader},
-    process::Command,
-};
+use tokio::{io::AsyncReadExt, process::Command};
 use tracing::{debug, info};
 
 use super::ClientTaskExt;
-use crate::{sys, task::PARTTABLE_TMP, transport::multicast::multicast_stream};
+use crate::{task::PARTTABLE_TMP, transport::multicast::multicast_stream};
 
 #[derive(Clone, Display, Constructor)]
 #[display("multicast task")]
@@ -17,7 +13,18 @@ pub struct MulticastTask {
 }
 
 impl ClientTaskExt for MulticastTask {
+    fn task_id(&self) -> i64 {
+        self.task_id
+    }
+
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
+        let mut buffer: Vec<u8> = Vec::new();
+        multicast_stream(self.task_id, 0)?
+            .read_to_end(&mut buffer)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to receive the partition table: {e}"))?;
+        tokio::fs::write(PARTTABLE_TMP, buffer).await?;
+
         let status = Command::new("sgdisk")
             .args(["--zap-all", device])
             .kill_on_drop(true)
@@ -27,13 +34,6 @@ impl ClientTaskExt for MulticastTask {
             anyhow::bail!("sgdisk --zap-all failed");
         }
 
-        let port = get_multicast_port(0);
-        let mut buffer: Vec<u8> = Vec::new();
-        let mut data_stream = multicast_stream(port).await?;
-        if let Err(e) = data_stream.read_to_end(&mut buffer).await {
-            anyhow::bail!("failed to read partition table stream to buffer: {e}");
-        };
-        tokio::fs::write(PARTTABLE_TMP, buffer).await?;
         let status = Command::new("sgdisk")
             .args([&format!("--load-backup={PARTTABLE_TMP}"), device])
             .kill_on_drop(true)
@@ -67,9 +67,8 @@ impl ClientTaskExt for MulticastTask {
         partition: crate::sys::disk::PartitionTarget,
     ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download over multicast");
-        let port = get_multicast_port(partition.number);
-        let stream = multicast_stream(port).await?;
-        let mut decoder = ZstdDecoder::new(BufReader::new(stream));
+        let stream = multicast_stream(self.task_id, partition.number)?;
+        let mut decoder = ZstdDecoder::new(stream);
 
         info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
         let partclone_bin = partition.partclone_binary()?;
@@ -108,9 +107,6 @@ impl ClientTaskExt for MulticastTask {
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {
-        tracing::info!(task=%self, "finished task successfully");
-        // best effort disconnect
-        let _ = api::event::disconnect().await;
-        sys::reboot()
+        super::finish_and_reboot(self).await
     }
 }

@@ -21,7 +21,10 @@ pub async fn start_stream(
         .await?;
     let host_id = host.id;
     let mut registration = registry.register(host_id);
-    let pending = task_repo.get_next(host_id).await?;
+    let pending = task_repo
+        .get_next(host_id)
+        .await?
+        .filter(|task| task.is_dispatchable_to(host_id));
     let liveness = *liveness;
 
     Ok(options.on_upgrade(
