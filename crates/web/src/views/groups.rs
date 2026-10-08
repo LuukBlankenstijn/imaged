@@ -139,7 +139,11 @@ fn HostPicker(hosts: Vec<Host>, selected: Signal<HashSet<i64>>) -> Element {
     let count = selected().len();
     let visible_ids: Vec<i64> = filtered.iter().map(|h| h.id).collect();
     let all_visible_selected = all_selected(&selected.read(), &visible_ids);
-    let toggle_label = if all_visible_selected { "Clear" } else { "Select all" };
+    let toggle_label = if all_visible_selected {
+        "Clear"
+    } else {
+        "Select all"
+    };
 
     rsx! {
         div { class: "max-w-sm",
@@ -455,12 +459,12 @@ fn EditMembersModal(
     let mut seeded = use_signal(|| false);
 
     use_effect(move || {
-        if !seeded() {
-            if let Some(Ok(list)) = &*members.read() {
-                let mut selected = selected;
-                selected.set(list.iter().map(|h| h.id).collect());
-                seeded.set(true);
-            }
+        if !seeded()
+            && let Some(Ok(list)) = &*members.read()
+        {
+            let mut selected = selected;
+            selected.set(list.iter().map(|h| h.id).collect());
+            seeded.set(true);
         }
     });
 

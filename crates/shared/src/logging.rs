@@ -40,6 +40,9 @@ mod tests {
 
     #[test]
     fn a_lone_crate_leaves_every_dependency_at_warn() {
-        assert_eq!(log_filter(&["imaged-tftp"], "debug"), "warn,imaged_tftp=debug");
+        assert_eq!(
+            log_filter(&["imaged-tftp"], "debug"),
+            "warn,imaged_tftp=debug"
+        );
     }
 }
