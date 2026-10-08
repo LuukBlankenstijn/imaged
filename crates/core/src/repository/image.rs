@@ -318,6 +318,20 @@ impl ImageRepository for SqliteImageRepository {
         self.get(id).await
     }
 
+    async fn fault_unfinished_imports(&self, error: &str) -> Result {
+        let faulted = ImageStatus::Faulted.to_string();
+        let importing = ImageStatus::Importing.to_string();
+        sqlx::query!(
+            "UPDATE images SET status = ?, error = ? WHERE status = ?",
+            faulted,
+            error,
+            importing
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>> {
         Ok(sqlx::query!(
             r#"SELECT

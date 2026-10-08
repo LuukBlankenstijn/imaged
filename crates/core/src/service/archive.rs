@@ -5,13 +5,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use derive_more::Constructor;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
-use tokio_tar::{Archive, Builder, Entries, Entry, EntryType, Header};
+use tokio_tar::{Archive, Builder, Entry, EntryType, Header};
 use tokio_util::io::ReaderStream;
 
 use crate::domain::image::{Image, ImageRepository, NewImagePartition};
@@ -22,6 +21,8 @@ const FORMAT: u32 = 1;
 const MANIFEST_FILE: &str = "manifest.json";
 const PARTITION_TABLE_FILE: &str = "parttable.bin";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_PARTITION_TABLE_BYTES: u64 = 1024 * 1024;
+const INTERRUPTED_IMPORT_ERROR: &str = "import interrupted";
 const CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Deserialize)]
@@ -130,13 +131,26 @@ impl HashedFile {
     }
 }
 
-#[derive(Constructor)]
 pub struct ArchiveService {
     image_repo: Arc<dyn ImageRepository>,
     image_service: Arc<ImageService>,
 }
 
 impl ArchiveService {
+    pub async fn start(
+        image_repo: Arc<dyn ImageRepository>,
+        image_service: Arc<ImageService>,
+    ) -> Result<Self> {
+        image_repo
+            .fault_unfinished_imports(INTERRUPTED_IMPORT_ERROR)
+            .await?;
+        image_service.clear_import_dirs().await?;
+        Ok(Self {
+            image_repo,
+            image_service,
+        })
+    }
+
     pub async fn exportable(&self, image_id: i64) -> Result<Image> {
         let image = self.image_repo.get(image_id).await?;
         if !image.status.is_ready() {
@@ -230,7 +244,7 @@ impl ArchiveService {
         R: AsyncRead + Unpin + Send,
     {
         let mut archive = Archive::new(reader);
-        let mut entries = archive.entries().map_err(malformed)?;
+        let mut entries = archive.entries_raw().map_err(malformed)?;
         let manifest = read_manifest(&mut entries).await?;
         let checksums = manifest.checksums()?;
         let image = self.image_repo.start_import(manifest.name.clone()).await?;
@@ -247,15 +261,16 @@ impl ArchiveService {
         }
     }
 
-    async fn receive<R>(
+    async fn receive<A, S>(
         &self,
         image_id: i64,
         manifest: &Manifest,
         checksums: BTreeMap<&str, &str>,
-        entries: &mut Entries<R>,
+        entries: &mut S,
     ) -> Result<Image>
     where
-        R: AsyncRead + Unpin + Send,
+        A: AsyncRead + Unpin,
+        S: Stream<Item = io::Result<Entry<A>>> + Unpin,
     {
         let import_dir = self.image_service.import_dir(image_id);
         tokio::fs::create_dir_all(&import_dir)
@@ -278,13 +293,8 @@ impl ArchiveService {
         {
             tracing::error!(image_id, "failed to mark rejected import faulted: {e}");
         }
-        if let Err(e) = tokio::fs::remove_dir_all(self.image_service.import_dir(image_id)).await
-            && e.kind() != io::ErrorKind::NotFound
-        {
-            tracing::error!(image_id, "failed to remove import directory: {e}");
-        }
         if let Err(e) = self.image_service.clear_image_data(image_id).await {
-            tracing::error!(image_id, "failed to remove image directory: {e}");
+            tracing::error!(image_id, "failed to remove rejected import: {e}");
         }
     }
 }
@@ -326,9 +336,10 @@ where
         .map_err(write_failed)
 }
 
-async fn read_manifest<R>(entries: &mut Entries<R>) -> Result<Manifest>
+async fn read_manifest<A, S>(entries: &mut S) -> Result<Manifest>
 where
-    R: AsyncRead + Unpin,
+    A: AsyncRead + Unpin,
+    S: Stream<Item = io::Result<Entry<A>>> + Unpin,
 {
     let mut entry = entries
         .next()
@@ -364,9 +375,10 @@ where
     serde_json::from_slice(&json).map_err(invalid_manifest)
 }
 
-async fn unpack<R>(entries: &mut Entries<R>, dir: &Path, checksums: BTreeMap<&str, &str>) -> Result
+async fn unpack<A, S>(entries: &mut S, dir: &Path, checksums: BTreeMap<&str, &str>) -> Result
 where
-    R: AsyncRead + Unpin,
+    A: AsyncRead + Unpin,
+    S: Stream<Item = io::Result<Entry<A>>> + Unpin,
 {
     let mut received = HashSet::new();
     while let Some(entry) = entries.next().await {
@@ -380,6 +392,11 @@ where
         if !received.insert(name.clone()) {
             return Err(AppError::InvalidArgument(format!(
                 "duplicate archive entry `{name}`"
+            )));
+        }
+        if name == PARTITION_TABLE_FILE && entry.effective_size() > MAX_PARTITION_TABLE_BYTES {
+            return Err(AppError::InvalidArgument(format!(
+                "{PARTITION_TABLE_FILE} exceeds {MAX_PARTITION_TABLE_BYTES} bytes"
             )));
         }
         let actual = write_hashed(&mut entry, &dir.join(&name)).await?;
@@ -526,11 +543,15 @@ mod tests {
     }
 
     fn manifest(partitions: &[(i64, &[u8])]) -> Vec<u8> {
+        manifest_with_table(TABLE, partitions)
+    }
+
+    fn manifest_with_table(table: &[u8], partitions: &[(i64, &[u8])]) -> Vec<u8> {
         serde_json::to_vec(&json!({
             "format": 1,
             "name": "imported",
             "captured_at": null,
-            "partition_table": { "file": "parttable.bin", "sha256": sha256(TABLE) },
+            "partition_table": { "file": "parttable.bin", "sha256": sha256(table) },
             "partitions": partitions
                 .iter()
                 .map(|(number, data)| json!({
@@ -546,14 +567,22 @@ mod tests {
     }
 
     async fn tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let regular: Vec<(&str, EntryType, &[u8])> = entries
+            .iter()
+            .map(|&(name, data)| (name, EntryType::Regular, data))
+            .collect();
+        typed_tar(&regular).await
+    }
+
+    async fn typed_tar(entries: &[(&str, EntryType, &[u8])]) -> Vec<u8> {
         let mut builder = Builder::new_non_terminated(Vec::new());
-        for (name, data) in entries {
+        for &(name, entry_type, data) in entries {
             let mut header = Header::new_gnu();
             header.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
-            header.set_entry_type(EntryType::Regular);
+            header.set_entry_type(entry_type);
             header.set_size(data.len() as u64);
             header.set_cksum();
-            builder.append(&header, *data).await.unwrap();
+            builder.append(&header, data).await.unwrap();
         }
         builder.into_inner().await.unwrap()
     }
@@ -835,6 +864,114 @@ mod tests {
         assert!(message.starts_with("malformed archive"), "{message}");
         assert_eq!(faulted_errors(&c).await.len(), 1);
         assert_eq!(image_dirs(&guard), [format!("img-{}", source.id)]);
+    }
+
+    #[tokio::test]
+    async fn a_gnu_long_name_header_is_rejected_instead_of_renaming_the_next_entry() {
+        let (c, guard) = container().await;
+        let archive = typed_tar(&[
+            ("././@LongLink", EntryType::GNULongName, b"manifest.json\0"),
+            ("renamed", EntryType::Regular, &manifest(&[])),
+            ("parttable.bin", EntryType::Regular, TABLE),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert_eq!(message, "archive entry `././@LongLink` is not a plain file");
+        assert!(c.image_repo.get_all().await.unwrap().is_empty());
+        assert!(image_dirs(&guard).is_empty());
+    }
+
+    #[tokio::test]
+    async fn links_extension_headers_and_directories_are_rejected_as_partition_data() {
+        let (c, guard) = container().await;
+
+        for entry_type in [
+            EntryType::Symlink,
+            EntryType::Link,
+            EntryType::Directory,
+            EntryType::XHeader,
+            EntryType::GNUSparse,
+        ] {
+            let archive = typed_tar(&[
+                (
+                    "manifest.json",
+                    EntryType::Regular,
+                    &manifest(&[(1, SMALL)]),
+                ),
+                ("parttable.bin", EntryType::Regular, TABLE),
+                ("p-1.pcl", entry_type, SMALL),
+            ])
+            .await;
+
+            let message = rejected_import(&c, &archive).await;
+
+            assert_eq!(
+                message, "archive entry `p-1.pcl` is not a plain file",
+                "{entry_type:?}"
+            );
+        }
+        assert_eq!(faulted_errors(&c).await.len(), 5);
+        assert!(image_dirs(&guard).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_partition_table_larger_than_one_mebibyte_is_rejected() {
+        let (c, guard) = container().await;
+        let largest = vec![7u8; 1024 * 1024];
+        let too_large = vec![7u8; 1024 * 1024 + 1];
+
+        let accepted = c
+            .archive_service
+            .import(
+                tar(&[
+                    ("manifest.json", &manifest_with_table(&largest, &[])),
+                    ("parttable.bin", &largest),
+                ])
+                .await
+                .as_slice(),
+            )
+            .await
+            .unwrap();
+        let message = rejected_import(
+            &c,
+            &tar(&[
+                ("manifest.json", &manifest_with_table(&too_large, &[])),
+                ("parttable.bin", &too_large),
+            ])
+            .await,
+        )
+        .await;
+
+        assert_eq!(accepted.status, ImageStatus::Ready);
+        assert_eq!(message, "parttable.bin exceeds 1048576 bytes");
+        assert_eq!(image_dirs(&guard), [format!("img-{}", accepted.id)]);
+    }
+
+    #[tokio::test]
+    async fn starting_the_service_faults_interrupted_imports_and_reclaims_their_files() {
+        let (c, guard) = container().await;
+        let ready = ready_image(&c).await;
+        let interrupted = c.image_repo.start_import("half".into()).await.unwrap();
+        let import_dir = c.image_service.import_dir(interrupted.id);
+        std::fs::create_dir_all(&import_dir).unwrap();
+        std::fs::write(format!("{import_dir}/p-1.pcl"), b"partial").unwrap();
+
+        for _ in 0..2 {
+            ArchiveService::start(c.image_repo.clone(), c.image_service.clone())
+                .await
+                .unwrap();
+        }
+
+        let faulted = c.image_repo.get(interrupted.id).await.unwrap();
+        assert_eq!(faulted.status, ImageStatus::Faulted);
+        assert_eq!(faulted.error.as_deref(), Some("import interrupted"));
+        assert_eq!(
+            c.image_repo.get_status(ready.id).await.unwrap(),
+            ImageStatus::Ready
+        );
+        assert_eq!(image_dirs(&guard), [format!("img-{}", ready.id)]);
     }
 
     #[test]

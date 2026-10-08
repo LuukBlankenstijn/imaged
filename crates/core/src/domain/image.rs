@@ -88,6 +88,8 @@ pub trait ImageRepository: Send + Sync {
         partitions: &[NewImagePartition],
     ) -> Result<Image>;
 
+    async fn fault_unfinished_imports(&self, error: &str) -> Result;
+
     // get partitions
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>>;
 }
