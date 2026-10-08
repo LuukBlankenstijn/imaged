@@ -1163,6 +1163,7 @@ async fn waking_hosts_is_refused_while_the_machine_listener_is_not_running() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn multicast_hands_one_task_to_registered_members_when_its_session_starts() {
     let (c, _guard) = container().await;
