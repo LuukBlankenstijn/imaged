@@ -102,10 +102,8 @@ fn is_imaging_candidate(d: &BlockDevice) -> bool {
 pub async fn find_target_disk() -> Result<BlockDevice> {
     let devices = lsblk(None).await?;
 
-    let candidates: Vec<&BlockDevice> = devices
-        .iter()
-        .filter(|d| is_imaging_candidate(d))
-        .collect();
+    let candidates: Vec<&BlockDevice> =
+        devices.iter().filter(|d| is_imaging_candidate(d)).collect();
 
     let disk = match candidates.as_slice() {
         [] => bail!("no suitable disk found"),
@@ -235,8 +233,10 @@ mod tests {
     }
 
     fn internal_disk() -> BlockDevice {
-        dev(r#"{ "name": "nvme0n1", "size": 1, "type": "disk", "rm": false, "ro": false,
-                 "hotplug": false, "tran": "nvme" }"#)
+        dev(
+            r#"{ "name": "nvme0n1", "size": 1, "type": "disk", "rm": false, "ro": false,
+                 "hotplug": false, "tran": "nvme" }"#,
+        )
     }
 
     #[test]
@@ -246,8 +246,10 @@ mod tests {
 
     #[test]
     fn emmc_boot_partitions_are_not_imaging_candidates() {
-        let boot0 = dev(r#"{ "name": "mmcblk0boot0", "size": 4194304, "type": "disk",
-                 "rm": false, "ro": true, "hotplug": false, "tran": null }"#);
+        let boot0 = dev(
+            r#"{ "name": "mmcblk0boot0", "size": 4194304, "type": "disk",
+                 "rm": false, "ro": true, "hotplug": false, "tran": null }"#,
+        );
         assert!(!is_imaging_candidate(&boot0));
     }
 

@@ -69,7 +69,7 @@ pub fn Tasks() -> Element {
                         .filter(|t| host_id.is_none_or(|id| t.hosts.iter().any(|h| h.host_id == id)))
                         .cloned()
                         .collect();
-                    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
                     if items.is_empty() {
                         rsx! {
                             Card { EmptyState { title: "No matching tasks", hint: "Adjust the filters above." } }

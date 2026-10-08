@@ -61,7 +61,7 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}";
+        ExecStart = "${cfg.package}/bin/imaged-server --data-dir ${cfg.dataDir} --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";

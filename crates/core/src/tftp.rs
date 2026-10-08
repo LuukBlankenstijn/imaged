@@ -1,4 +1,6 @@
 use std::{
+    future::Future,
+    io,
     net::SocketAddr,
     path::{Component, Path},
 };
@@ -62,14 +64,23 @@ impl Handler for BootFiles {
     }
 }
 
-pub async fn serve(bind_address: SocketAddr) -> std::io::Result<()> {
-    tracing::info!(%bind_address, "starting tftp server");
-    TftpServerBuilder::with_handler(BootFiles)
+pub struct TftpServer(async_tftp::server::TftpServer<BootFiles>);
+
+pub async fn bind(bind_address: SocketAddr) -> io::Result<TftpServer> {
+    let server = TftpServerBuilder::with_handler(BootFiles)
         .bind(bind_address)
         .build()
         .await
-        .map_err(std::io::Error::other)?
-        .serve()
-        .await
-        .map_err(std::io::Error::other)
+        .map_err(io::Error::other)?;
+    tracing::info!(%bind_address, "tftp server listening");
+    Ok(TftpServer(server))
+}
+
+impl TftpServer {
+    pub async fn serve(self, shutdown: impl Future<Output = ()>) -> io::Result<()> {
+        tokio::select! {
+            served = self.0.serve() => served.map_err(io::Error::other),
+            () = shutdown => Ok(()),
+        }
+    }
 }

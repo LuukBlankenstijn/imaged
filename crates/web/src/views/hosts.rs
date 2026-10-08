@@ -49,7 +49,7 @@ pub fn Hosts() -> Element {
                                 &needle,
                                 want_online,
                                 want_offline,
-                                &connected,
+                                connected,
                             );
                             (online, visible)
                         };
@@ -180,7 +180,7 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
     let delay = index * 40;
 
     let mut editing = use_signal(|| false);
-    let mut draft = use_signal(|| String::new());
+    let mut draft = use_signal(String::new);
     let mut deploy_open = use_signal(|| false);
     let mut reboot_open = use_signal(|| false);
     let mut delete_open = use_signal(|| false);

@@ -3,7 +3,7 @@
 # and a direct in-process call under `cfg(feature = "server")`. imaged-client needs
 # the former, every other crate the latter, and cargo unifies features per
 # invocation -- so the agent tests must run in a second, server-free pass.
-test-native = "test --workspace --exclude imaged-client --features imaged-api-client/server,imaged-api-ui/server --target x86_64-unknown-linux-gnu"
+test-native = "test --workspace --exclude imaged-client --features imaged-api-client/server,imaged-api-ui/server,imaged-server/server --target x86_64-unknown-linux-gnu"
 test-agent = "test -p imaged-client --target x86_64-unknown-linux-gnu"
 
 [env]

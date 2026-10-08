@@ -16,7 +16,8 @@ imaged-api-client = { path = "../api/client", optional = true }
 imaged-core = { path = "../core", optional = true }
 imaged-shared = { workspace = true, features = ["logging"], optional = true }
 axum = { version = "0.8", optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["signal", "time"], optional = true }
+tokio-util = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 
@@ -33,7 +34,13 @@ server = [
     "dep:imaged-shared",
     "dep:axum",
     "dep:tokio",
+    "dep:tokio-util",
     "dep:clap",
     "dep:tracing",
 ]
 web = ["dioxus/web", "imaged-web/web"]
+
+[dev-dependencies]
+imaged-api-ui = { path = "../api/ui" }
+reqwest = { version = "0.12", default-features = false }
+tokio = { workspace = true }

@@ -6,7 +6,7 @@ use crate::model::{DeployRequest, Host, Task, UpdateName};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{BindAddress, HostRepo, Registry, TaskRepo};
+use imaged_core::di::{HostRepo, MachineIp, Registry, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
@@ -69,10 +69,12 @@ pub async fn reboot(host_ids: Vec<i64>) -> Result<()> {
 }
 
 #[post("/api/ui/hosts/wake")]
-#[inject(host_repo: HostRepo, bind_address: BindAddress)]
+#[inject(host_repo: HostRepo, machine_ip: MachineIp)]
 pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
-    let mut src = *bind_address;
-    src.set_port(0);
+    let ip = machine_ip.read().ok_or_else(|| {
+        AppError::FailedPrecondition("the machine listener is not running".into())
+    })?;
+    let src = std::net::SocketAddr::new(ip, 0);
     let dest = std::net::SocketAddr::from(([255, 255, 255, 255], 9));
 
     let wanted: std::collections::HashSet<i64> = host_ids.into_iter().collect();

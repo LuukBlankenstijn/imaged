@@ -2593,7 +2593,9 @@ dependencies = [
  "imaged-core",
  "imaged-shared",
  "imaged-web",
+ "reqwest",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

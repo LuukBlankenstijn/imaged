@@ -11,7 +11,7 @@ client that talks to a central server. Inspired by the capture/deploy part of [T
 Rust library. Domain model, SQLite (sqlx) repositories for hosts, images and
 tasks, the in-memory host connection registry, the multicast manager, image
 storage, DI wiring, and the PXE routes. Image partitions are stored on disk
-under `images/`.
+under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
 ### `crates/web` — `imaged-web`
 
@@ -28,10 +28,18 @@ Agent-facing server functions served under `/api/client/*`.
 
 ### `crates/server` — `imaged-server`
 
-Binary package that wires `imaged-core`, `imaged-web` and the two API crates
-together behind axum. By default it serves the dashboard and the agent API from
-a single binary; `--web-bind-address` splits the dashboard UI/API and the agent
-API onto two separate sockets. Styled with Tailwind CSS v4.
+Binary and library package that wires `imaged-core`, `imaged-web` and the two
+API crates together behind axum. By default it serves the dashboard and the
+agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
+and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
+
+With the `server` feature it is also a library for embedding imaged in another
+program: `Imaged::open(Config { data_dir, multicast_interface })` once per
+process, then `imaged.serve(Listeners { machine, public_url, tftp, dashboard })`
+returns a `Server` whose `stop()` shuts the listeners down (bounded by a short
+grace period), after which `serve` can be called again with new addresses. The
+machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
+`Dashboard::Off`, `OnMachineListener` or `Separate(address)`.
 
 Run (dev):
 
@@ -45,8 +53,11 @@ Bundle (production):
 dx bundle --release --platform web --package imaged-server
 ```
 
-Listens on `0.0.0.0:8080` (`--bind-address`); an optional `--web-bind-address`
-serves the dashboard on a separate socket.
+Listens on `--bind-address` (the NixOS module defaults to `0.0.0.0:8080`); an
+optional `--web-bind-address` serves the dashboard on a separate socket. The
+database and images live in `--data-dir` (default: the working directory). iPXE
+scripts point machines at `--public-base` (`PUBLIC_BASE`, default
+`localhost:8080`), over HTTPS when `--use-https` (`USE_HTTPS`) is set.
 
 ### `crates/client` — `imaged-client`
 

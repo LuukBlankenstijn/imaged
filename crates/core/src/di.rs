@@ -1,8 +1,9 @@
-use std::net::SocketAddr;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use derive_more::Constructor;
 use injectable::{install_injectable_container, register_injectable};
+use parking_lot::RwLock;
 
 use crate::AgentLiveness;
 use crate::domain::group::GroupRepository;
@@ -23,7 +24,7 @@ pub struct DIContainer {
     pub host_registry: Arc<HostRegistry>,
     pub image_service: Arc<ImageService>,
     pub multicast_manager: Arc<MulticastManager>,
-    pub bind_address: SocketAddr,
+    pub machine_ip: Arc<RwLock<Option<IpAddr>>>,
     pub agent_liveness: AgentLiveness,
 }
 
@@ -36,5 +37,5 @@ register_injectable!(GroupRepo(Arc<dyn GroupRepository>), group_repo);
 register_injectable!(Registry(Arc<HostRegistry>), host_registry);
 register_injectable!(ImageSvc(Arc<ImageService>), image_service);
 register_injectable!(MulticastMgr(Arc<MulticastManager>), multicast_manager);
-register_injectable!(BindAddress(SocketAddr), bind_address);
+register_injectable!(MachineIp(Arc<RwLock<Option<IpAddr>>>), machine_ip);
 register_injectable!(Liveness(AgentLiveness), agent_liveness);
