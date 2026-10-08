@@ -12,14 +12,7 @@ pub enum ButtonVariant {
     Subtle,
 }
 
-#[component]
-pub fn Button(
-    #[props(default)] variant: ButtonVariant,
-    #[props(default)] disabled: bool,
-    #[props(default)] onclick: EventHandler<MouseEvent>,
-    #[props(default)] class: String,
-    children: Element,
-) -> Element {
+pub fn button_classes(variant: ButtonVariant) -> String {
     let base = "inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm \
                 font-medium transition-colors focus:outline-none focus-visible:glow-amber \
                 disabled:opacity-40 disabled:cursor-not-allowed";
@@ -31,9 +24,21 @@ pub fn Button(
         ButtonVariant::Danger => "border border-bad/40 text-bad hover:bg-bad/10",
         ButtonVariant::Subtle => "text-fog-400 hover:text-fog-100 hover:bg-ink-700",
     };
+    format!("{base} {v}")
+}
+
+#[component]
+pub fn Button(
+    #[props(default)] variant: ButtonVariant,
+    #[props(default)] disabled: bool,
+    #[props(default)] onclick: EventHandler<MouseEvent>,
+    #[props(default)] class: String,
+    children: Element,
+) -> Element {
+    let classes = button_classes(variant);
     rsx! {
         button {
-            class: "{base} {v} {class}",
+            class: "{classes} {class}",
             disabled,
             onclick: move |e| onclick.call(e),
             {children}

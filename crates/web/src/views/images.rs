@@ -5,7 +5,7 @@ use crate::api::images::*;
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
-use crate::components::toast::toast_error;
+use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::*;
 use crate::format::{format_bytes, format_relative};
 use crate::model::{CreateImageRequest, Image, ImageStatus, UpdateName};
@@ -21,7 +21,9 @@ pub fn Images() -> Element {
     let can_create = !new_name.read().trim().is_empty() && host_id() != 0;
 
     rsx! {
-        PageHeader { title: "Images", subtitle: "Captured disk images available to deploy" }
+        PageHeader { title: "Images", subtitle: "Captured disk images available to deploy",
+            ImportButton { on_imported: move |_| images.restart() }
+        }
 
         Card { class: "mb-6 p-4",
             div { class: "flex flex-wrap items-end gap-3",
@@ -127,6 +129,43 @@ pub fn Images() -> Element {
 }
 
 #[component]
+fn ImportButton(on_imported: EventHandler<()>) -> Element {
+    let mut importing = use_signal(|| false);
+    let classes = button_classes(ButtonVariant::Ghost);
+
+    rsx! {
+        label { class: "{classes} cursor-pointer", title: "Import an exported .imaged archive",
+            input {
+                r#type: "file",
+                accept: ".imaged",
+                class: "hidden",
+                disabled: importing(),
+                onchange: move |e| {
+                    let Some(file) = e.files().into_iter().next() else {
+                        return;
+                    };
+                    importing.set(true);
+                    spawn(async move {
+                        match import_image(file.into()).await {
+                            Ok(image) => toast_success("Image imported", image.name),
+                            Err(e) => toast_error("Import failed", e.to_string()),
+                        }
+                        importing.set(false);
+                        on_imported.call(());
+                    });
+                },
+            }
+            if importing() {
+                Spinner { class: "w-4 h-4" }
+            } else {
+                Icon { name: "upload", class: "w-4 h-4" }
+            }
+            "Import"
+        }
+    }
+}
+
+#[component]
 fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element {
     let mut editing = use_signal(|| false);
     let mut confirm_open = use_signal(|| false);
@@ -148,6 +187,7 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
 
     let delay = index as u32 * 45;
     let faulted = status == ImageStatus::Faulted;
+    let export_classes = button_classes(ButtonVariant::Ghost);
 
     rsx! {
         div { class: "rise", style: "--d: {delay}ms",
@@ -214,6 +254,16 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                         }
                     }
                     ImageStatusBadge { status }
+                    if status == ImageStatus::Ready {
+                        a {
+                            class: "{export_classes} px-2",
+                            href: "/api/ui/images/{id}/export",
+                            download: "",
+                            rel: "noreferrer",
+                            title: "Export image",
+                            Icon { name: "download", class: "w-4 h-4" }
+                        }
+                    }
                     Button {
                         variant: ButtonVariant::Danger,
                         class: "px-2",

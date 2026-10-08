@@ -90,6 +90,16 @@ pub fn Icon(name: &'static str, #[props(default)] class: String) -> Element {
             line { x1: "12", y1: "5", x2: "12", y2: "19" }
             line { x1: "5", y1: "12", x2: "19", y2: "12" }
         },
+        "download" => rsx! {
+            path { d: "M12 4v11" }
+            polyline { points: "7,10 12,15 17,10" }
+            path { d: "M4 17v3h16v-3" }
+        },
+        "upload" => rsx! {
+            path { d: "M12 15V4" }
+            polyline { points: "7,9 12,4 17,9" }
+            path { d: "M4 17v3h16v-3" }
+        },
         "chevron" => rsx! {
             polyline { points: "6,9 12,15 18,9" }
         },
