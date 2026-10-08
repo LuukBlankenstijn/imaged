@@ -36,8 +36,9 @@ and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 With the `server` feature it is also a library for embedding imaged in another
 program: `Imaged::open(Config { data_dir, multicast_interface })` once per
 process, then `imaged.serve(Listeners { machine, public_url, tftp, dashboard })`
-returns a `Server` whose `stop()` shuts the listeners down (bounded by a short
-grace period), after which `serve` can be called again with new addresses. The
+returns a `Server`. `stop()` disconnects every agent, gives open requests a
+short grace period and then cuts off whatever connection is left, after which
+`serve` can be called again with new addresses; one `Server` runs at a time. The
 machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
 `Dashboard::Off`, `OnMachineListener` or `Separate(address)`.
 
@@ -57,7 +58,8 @@ Listens on `--bind-address` (the NixOS module defaults to `0.0.0.0:8080`); an
 optional `--web-bind-address` serves the dashboard on a separate socket. The
 database and images live in `--data-dir` (default: the working directory). iPXE
 scripts point machines at `--public-base` (`PUBLIC_BASE`, default
-`localhost:8080`), over HTTPS when `--use-https` (`USE_HTTPS`) is set.
+`localhost:8080`), over HTTPS when `--use-https` is passed or `USE_HTTPS` is
+truthy (anything but empty, `0`, `false`, `no` or `off`).
 
 ### `crates/client` — `imaged-client`
 
