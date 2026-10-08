@@ -11,6 +11,11 @@ use axum::{
 use derive_more::Display;
 use serde::Deserialize;
 
+static X86_64_VMLINUZ: &[u8] = include_bytes!("../../../assets/x86_64/vmlinuz");
+static X86_64_INITRAMFS: &[u8] = include_bytes!("../../../assets/x86_64/initramfs.cpio.xz");
+static ARM64_VMLINUZ: &[u8] = include_bytes!("../../../assets/arm64/vmlinuz");
+static ARM64_INITRAMFS: &[u8] = include_bytes!("../../../assets/arm64/initramfs.cpio.xz");
+
 #[derive(Clone, Copy, Deserialize, Display)]
 pub(crate) enum Arch {
     #[serde(rename = "x86_64", alias = "i386")]
@@ -38,15 +43,15 @@ impl Arch {
 
     pub(crate) fn vmlinuz(self) -> &'static [u8] {
         match self {
-            Arch::X86_64 => include_bytes!("../../../assets/x86_64/vmlinuz"),
-            Arch::Arm64 => include_bytes!("../../../assets/arm64/vmlinuz"),
+            Arch::X86_64 => X86_64_VMLINUZ,
+            Arch::Arm64 => ARM64_VMLINUZ,
         }
     }
 
     pub(crate) fn initramfs(self) -> &'static [u8] {
         match self {
-            Arch::X86_64 => include_bytes!("../../../assets/x86_64/initramfs.cpio.xz"),
-            Arch::Arm64 => include_bytes!("../../../assets/arm64/initramfs.cpio.xz"),
+            Arch::X86_64 => X86_64_INITRAMFS,
+            Arch::Arm64 => ARM64_INITRAMFS,
         }
     }
 }
@@ -136,11 +141,6 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
-
-    static X86_64_VMLINUZ: &[u8] = include_bytes!("../../../assets/x86_64/vmlinuz");
-    static X86_64_INITRAMFS: &[u8] = include_bytes!("../../../assets/x86_64/initramfs.cpio.xz");
-    static ARM64_VMLINUZ: &[u8] = include_bytes!("../../../assets/arm64/vmlinuz");
-    static ARM64_INITRAMFS: &[u8] = include_bytes!("../../../assets/arm64/initramfs.cpio.xz");
 
     const PUBLIC_URL: &str = "https://imaged.example:8443";
 
