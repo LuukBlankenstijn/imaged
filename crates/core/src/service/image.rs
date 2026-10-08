@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::error::{AppError, Result};
 use bytes::Bytes;
 use derive_more::Constructor;
@@ -7,6 +9,8 @@ use tokio_stream::StreamExt;
 
 static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+const IMPORT_DIR_PREFIX: &str = ".import-";
+
 #[derive(Constructor, Debug)]
 pub struct ImageService {
     images_path: String,
@@ -14,21 +18,36 @@ pub struct ImageService {
 
 impl ImageService {
     pub async fn clear_image_data(&self, image_id: i64) -> Result<()> {
-        let relative_dir = format!("img-{image_id}");
-        let dir = format!("{}/{}", self.images_path, relative_dir);
-        let exists = tokio::fs::try_exists(&dir).await.map_err(|e| {
-            tracing::error!("failed to check image dir {dir}: {e}");
-            AppError::Internal(e.to_string())
-        })?;
-        if exists {
-            tokio::fs::remove_dir_all(&dir).await.map_err(|e| {
-                tracing::error!("failed to clean image dir: {e}");
-                AppError::Internal(e.to_string())
-            })?;
-        }
+        let image = remove_dir(self.image_dir(image_id)).await;
+        let import = remove_dir(self.import_dir(image_id)).await;
+        image.and(import)
+    }
 
+    pub async fn clear_import_dirs(&self) -> Result<()> {
+        let mut entries = match tokio::fs::read_dir(&self.images_path).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                tracing::error!("failed to list images dir {}: {e}", self.images_path);
+                return Err(AppError::Internal(e.to_string()));
+            }
+        };
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+        {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(IMPORT_DIR_PREFIX)
+            {
+                remove_dir(entry.path()).await?;
+            }
+        }
         Ok(())
     }
+
     pub async fn save_partition_table(&self, image_id: i64, data: &[u8]) -> Result<String> {
         let relative_dir = format!("img-{image_id}");
         let dir = format!("{}/{}", self.images_path, relative_dir);
@@ -53,7 +72,7 @@ impl ImageService {
     }
 
     pub fn import_dir(&self, image_id: i64) -> String {
-        format!("{}/.import-{}", self.images_path, image_id)
+        format!("{}/{IMPORT_DIR_PREFIX}{}", self.images_path, image_id)
     }
 
     pub fn get_partition_table_path(&self, image_id: i64) -> String {
@@ -152,6 +171,17 @@ impl ImageService {
             AppError::Internal(e.to_string())
         })?;
         Ok(tokio_util::io::ReaderStream::new(file))
+    }
+}
+
+async fn remove_dir(dir: impl AsRef<Path>) -> Result<()> {
+    let dir = dir.as_ref();
+    match tokio::fs::remove_dir_all(dir).await {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            tracing::error!("failed to remove {}: {e}", dir.display());
+            Err(AppError::Internal(e.to_string()))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -387,5 +417,45 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn clear_image_data_also_removes_an_unfinished_import_of_that_image() {
+        let (svc, _d) = service();
+        std::fs::create_dir_all(svc.import_dir(4)).unwrap();
+        std::fs::write(format!("{}/p-1.pcl", svc.import_dir(4)), b"partial").unwrap();
+
+        svc.clear_image_data(4).await.unwrap();
+
+        assert!(!std::path::Path::new(&svc.import_dir(4)).exists());
+    }
+
+    #[tokio::test]
+    async fn clear_import_dirs_removes_every_unfinished_import_and_keeps_images() {
+        let (svc, _d) = service();
+        svc.save_partition_table(1, b"table").await.unwrap();
+        for id in [2, 3] {
+            std::fs::create_dir_all(svc.import_dir(id)).unwrap();
+            std::fs::write(format!("{}/parttable.bin", svc.import_dir(id)), b"part").unwrap();
+        }
+
+        svc.clear_import_dirs().await.unwrap();
+
+        let remaining: Vec<String> = std::fs::read_dir(&svc.images_path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(remaining, ["img-1"]);
+    }
+
+    #[tokio::test]
+    async fn clear_import_dirs_is_a_no_op_before_any_image_exists() {
+        let svc = ImageService::new(
+            std::env::temp_dir()
+                .join(format!("imaged-imgsvc-missing-{}", std::process::id()))
+                .to_string_lossy()
+                .into_owned(),
+        );
+        svc.clear_import_dirs().await.unwrap();
     }
 }

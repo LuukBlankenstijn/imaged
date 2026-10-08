@@ -742,6 +742,18 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
             .status(),
         StatusCode::BAD_REQUEST
     );
+
+    let browser_download = Request::builder()
+        .uri(format!("/api/ui/images/{}/export", image.id))
+        .header("accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+        .body(Body::empty())
+        .unwrap();
+    let response = ui_router().oneshot(browser_download).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"golden_image.imaged\""
+    );
 }
 
 #[tokio::test]
