@@ -112,6 +112,7 @@ pub fn ImageStatusBadge(status: ImageStatus) -> Element {
     let (tone, label) = match status {
         ImageStatus::Ready => (Tone::Ok, "ready"),
         ImageStatus::Capturing => (Tone::Warn, "capturing"),
+        ImageStatus::Importing => (Tone::Run, "importing"),
         ImageStatus::Faulted => (Tone::Bad, "faulted"),
         ImageStatus::Empty => (Tone::Idle, "empty"),
     };

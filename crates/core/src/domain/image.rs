@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 pub enum ImageStatus {
     Empty,
     Capturing,
+    Importing,
     Ready,
     Faulted,
 }
@@ -83,6 +84,7 @@ mod tests {
         for s in [
             ImageStatus::Empty,
             ImageStatus::Capturing,
+            ImageStatus::Importing,
             ImageStatus::Ready,
             ImageStatus::Faulted,
         ] {
@@ -94,13 +96,14 @@ mod tests {
     fn image_status_display_is_lowercase() {
         assert_eq!(ImageStatus::Empty.to_string(), "empty");
         assert_eq!(ImageStatus::Capturing.to_string(), "capturing");
+        assert_eq!(ImageStatus::Importing.to_string(), "importing");
         assert_eq!(ImageStatus::Ready.to_string(), "ready");
         assert_eq!(ImageStatus::Faulted.to_string(), "faulted");
     }
 
     #[test]
     fn every_status_the_repository_writes_parses_back_so_the_repository_expect_cannot_panic() {
-        for stored in ["empty", "capturing", "ready", "faulted"] {
+        for stored in ["empty", "capturing", "importing", "ready", "faulted"] {
             assert!(
                 ImageStatus::from_string(stored.to_string()).is_ok(),
                 "status {stored:?} written by repository must parse"
