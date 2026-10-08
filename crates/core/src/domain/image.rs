@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 pub enum ImageStatus {
     Empty,
     Capturing,
+    Importing,
     Ready,
     Faulted,
 }
@@ -42,9 +43,17 @@ pub struct ImagePartition {
     pub size_bytes: u64,
 }
 
+#[derive(Debug)]
+pub struct NewImagePartition {
+    pub partition_number: i64,
+    pub fstype: String,
+    pub size_bytes: u64,
+}
+
 #[async_trait::async_trait]
 pub trait ImageRepository: Send + Sync {
     async fn get_status(&self, id: i64) -> Result<ImageStatus>;
+    async fn get(&self, id: i64) -> Result<Image>;
     async fn create_image(&self, name: String) -> Result<Image>;
 
     async fn update_name(&self, id: i64, new_name: String) -> Result<Image>;
@@ -70,6 +79,15 @@ pub trait ImageRepository: Send + Sync {
     // marks the image as faulted
     async fn mark_faulted(&self, id: i64, error: &str) -> Result;
 
+    async fn start_import(&self, name: String) -> Result<Image>;
+
+    async fn finish_import(
+        &self,
+        id: i64,
+        captured_at: Option<DateTime<Utc>>,
+        partitions: &[NewImagePartition],
+    ) -> Result<Image>;
+
     // get partitions
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>>;
 }
@@ -83,6 +101,7 @@ mod tests {
         for s in [
             ImageStatus::Empty,
             ImageStatus::Capturing,
+            ImageStatus::Importing,
             ImageStatus::Ready,
             ImageStatus::Faulted,
         ] {
@@ -94,13 +113,14 @@ mod tests {
     fn image_status_display_is_lowercase() {
         assert_eq!(ImageStatus::Empty.to_string(), "empty");
         assert_eq!(ImageStatus::Capturing.to_string(), "capturing");
+        assert_eq!(ImageStatus::Importing.to_string(), "importing");
         assert_eq!(ImageStatus::Ready.to_string(), "ready");
         assert_eq!(ImageStatus::Faulted.to_string(), "faulted");
     }
 
     #[test]
     fn every_status_the_repository_writes_parses_back_so_the_repository_expect_cannot_panic() {
-        for stored in ["empty", "capturing", "ready", "faulted"] {
+        for stored in ["empty", "capturing", "importing", "ready", "faulted"] {
             assert!(
                 ImageStatus::from_string(stored.to_string()).is_ok(),
                 "status {stored:?} written by repository must parse"

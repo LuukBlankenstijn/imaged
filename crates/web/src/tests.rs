@@ -67,6 +67,7 @@ fn image_status_badge_labels_every_status() {
     for (status, label) in [
         (ImageStatus::Ready, "ready"),
         (ImageStatus::Capturing, "capturing"),
+        (ImageStatus::Importing, "importing"),
         (ImageStatus::Faulted, "faulted"),
         (ImageStatus::Empty, "empty"),
     ] {
@@ -158,6 +159,7 @@ fn image_status_badge_maps_every_status_to_its_tone_class() {
     for (status, tone_class) in [
         (ImageStatus::Ready, "text-ok"),
         (ImageStatus::Capturing, "text-warn"),
+        (ImageStatus::Importing, "text-run"),
         (ImageStatus::Faulted, "text-bad"),
         (ImageStatus::Empty, "text-idle"),
     ] {

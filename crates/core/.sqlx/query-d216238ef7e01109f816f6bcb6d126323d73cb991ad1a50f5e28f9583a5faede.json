@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error\n               FROM images WHERE id = ? AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "captured_at: DateTime<Utc>",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "error",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "d216238ef7e01109f816f6bcb6d126323d73cb991ad1a50f5e28f9583a5faede"
+}

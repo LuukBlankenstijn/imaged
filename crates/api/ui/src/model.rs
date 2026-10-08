@@ -37,6 +37,7 @@ pub struct MulticastProgress {
 pub enum ImageStatus {
     Empty,
     Capturing,
+    Importing,
     Ready,
     Faulted,
 }

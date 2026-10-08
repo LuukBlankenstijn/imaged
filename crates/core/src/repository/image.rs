@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::{domain::image::ImagePartition, error::Result};
+use crate::{
+    domain::image::{ImagePartition, NewImagePartition},
+    error::{AppError, Result},
+};
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
 use sqlx::SqlitePool;
@@ -12,16 +15,9 @@ pub struct SqliteImageRepository {
     pool: SqlitePool,
 }
 
-#[async_trait::async_trait]
-impl ImageRepository for SqliteImageRepository {
-    async fn get_status(&self, id: i64) -> Result<ImageStatus> {
-        let result = sqlx::query!("SELECT status FROM images WHERE id = ?", id)
-            .fetch_one(&self.pool)
-            .await?;
-        return ImageStatus::from_string(result.status);
-    }
-    async fn create_image(&self, name: String) -> Result<Image> {
-        let status = ImageStatus::Empty.to_string();
+impl SqliteImageRepository {
+    async fn insert(&self, name: String, status: ImageStatus) -> Result<Image> {
+        let status = status.to_string();
         let image = sqlx::query!(
             "INSERT INTO images (name, status) VALUES (?,?) RETURNING *",
             name,
@@ -39,6 +35,45 @@ impl ImageRepository for SqliteImageRepository {
             Vec::new(),
         ))
     }
+}
+
+#[async_trait::async_trait]
+impl ImageRepository for SqliteImageRepository {
+    async fn get_status(&self, id: i64) -> Result<ImageStatus> {
+        let result = sqlx::query!("SELECT status FROM images WHERE id = ?", id)
+            .fetch_one(&self.pool)
+            .await?;
+        return ImageStatus::from_string(result.status);
+    }
+
+    async fn get(&self, id: i64) -> Result<Image> {
+        let image = sqlx::query!(
+            r#"SELECT
+                 id as "id!: i64",
+                 name,
+                 captured_at as "captured_at: DateTime<Utc>",
+                 status,
+                 error
+               FROM images WHERE id = ? AND deleted_at IS NULL"#,
+            id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(Image::new(
+            image.id,
+            image.name,
+            image.captured_at,
+            ImageStatus::from_string(image.status)?,
+            image.error,
+            self.get_partitions(id).await?,
+        ))
+    }
+
+    async fn create_image(&self, name: String) -> Result<Image> {
+        self.insert(name, ImageStatus::Empty).await
+    }
+
     async fn update_name(&self, id: i64, name: String) -> Result<Image> {
         let image = sqlx::query!(
             r#"UPDATE images SET name = ? WHERE id = ?
@@ -238,6 +273,51 @@ impl ImageRepository for SqliteImageRepository {
         Ok(())
     }
 
+    async fn start_import(&self, name: String) -> Result<Image> {
+        self.insert(name, ImageStatus::Importing).await
+    }
+
+    async fn finish_import(
+        &self,
+        id: i64,
+        captured_at: Option<DateTime<Utc>>,
+        partitions: &[NewImagePartition],
+    ) -> Result<Image> {
+        let status = ImageStatus::Ready.to_string();
+        let mut tx = self.pool.begin().await?;
+        for partition in partitions {
+            let size_bytes = i64::try_from(partition.size_bytes).map_err(|_| {
+                AppError::InvalidArgument(format!(
+                    "partition {} size {} is out of range",
+                    partition.partition_number, partition.size_bytes
+                ))
+            })?;
+            sqlx::query!(
+                "INSERT INTO image_partitions (image_id, partition_number, fstype, size_bytes) VALUES (?,?,?,?)",
+                id,
+                partition.partition_number,
+                partition.fstype,
+                size_bytes
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        let updated = sqlx::query!(
+            "UPDATE images SET status = ?, captured_at = ? WHERE id = ? AND deleted_at IS NULL",
+            status,
+            captured_at,
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::NotFound(format!("image {id}")));
+        }
+        tx.commit().await?;
+
+        self.get(id).await
+    }
+
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>> {
         Ok(sqlx::query!(
             r#"SELECT
@@ -271,7 +351,7 @@ mod tests {
     use sqlx::Row;
 
     use crate::di::DIContainer;
-    use crate::domain::image::ImageStatus;
+    use crate::domain::image::{ImageStatus, NewImagePartition};
     use crate::error::AppError;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
@@ -673,6 +753,76 @@ mod tests {
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
             ImageStatus::Ready
+        );
+    }
+
+    #[tokio::test]
+    async fn get_does_not_resolve_a_soft_deleted_image() {
+        let (c, _g) = container().await;
+        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        c.image_repo.delete_image(img.id).await.unwrap();
+        let err = c.image_repo.get(img.id).await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn finish_import_makes_an_importing_image_ready_with_its_partitions_and_capture_time() {
+        let (c, _g) = container().await;
+        let img = c.image_repo.start_import("imported".into()).await.unwrap();
+        assert_eq!(img.status, ImageStatus::Importing);
+        let captured_at = "2026-01-02T03:04:05.678Z".parse().unwrap();
+
+        let ready = c
+            .image_repo
+            .finish_import(
+                img.id,
+                Some(captured_at),
+                &[NewImagePartition {
+                    partition_number: 1,
+                    fstype: "ntfs".into(),
+                    size_bytes: 1 << 40,
+                }],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(ready.status, ImageStatus::Ready);
+        assert_eq!(ready.captured_at, Some(captured_at));
+        assert_eq!(ready.partitions.len(), 1);
+        assert_eq!(ready.partitions[0].size_bytes, 1 << 40);
+    }
+
+    #[tokio::test]
+    async fn finish_import_of_an_image_deleted_mid_import_is_not_found_and_adds_no_partitions() {
+        let (c, _g) = container().await;
+        let img = c.image_repo.start_import("imported".into()).await.unwrap();
+        c.image_repo.delete_image(img.id).await.unwrap();
+
+        let err = c
+            .image_repo
+            .finish_import(
+                img.id,
+                None,
+                &[NewImagePartition {
+                    partition_number: 1,
+                    fstype: "ntfs".into(),
+                    size_bytes: 4096,
+                }],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
+        assert!(
+            c.image_repo
+                .get_partitions(img.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            c.image_repo.get_status(img.id).await.unwrap(),
+            ImageStatus::Importing
         );
     }
 }

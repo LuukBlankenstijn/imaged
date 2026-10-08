@@ -1,3 +1,4 @@
+use dioxus::fullstack::FileStream;
 use dioxus::prelude::*;
 
 use crate::model::{CreateImageRequest, Image, UpdateName};
@@ -6,10 +7,18 @@ use crate::model::{CreateImageRequest, Image, UpdateName};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{ImageRepo, ImageSvc, MulticastMgr, Registry, TaskRepo};
+use dioxus::fullstack::body::Body;
+#[cfg(feature = "server")]
+use futures::TryStreamExt;
+#[cfg(feature = "server")]
+use imaged_core::di::{ArchiveSvc, ImageRepo, ImageSvc, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
+#[cfg(feature = "server")]
+use imaged_core::service::archive::archive_file_name;
 use imaged_shared::error::Result;
+#[cfg(feature = "server")]
+use tokio_util::io::StreamReader;
 
 #[get("/api/ui/images")]
 #[inject(image_repo: ImageRepo)]
@@ -45,6 +54,27 @@ pub async fn delete_image(id: i64) -> Result<()> {
     image_repo.delete_image(id).await?;
     image_svc.clear_image_data(id).await?;
     Ok(())
+}
+
+#[get("/api/ui/images/{id}/export")]
+#[inject(archive_svc: ArchiveSvc)]
+pub async fn export_image(id: i64) -> Result<FileStream> {
+    let image = archive_svc.exportable(id).await?;
+    let archive = Body::from_stream(archive_svc.export_stream(id)).into_data_stream();
+    Ok(FileStream::from_raw(
+        archive_file_name(&image.name),
+        None,
+        "application/x-tar".to_string(),
+        archive,
+    ))
+}
+
+#[post("/api/ui/images/import")]
+#[inject(archive_svc: ArchiveSvc)]
+pub async fn import_image(archive: FileStream) -> Result<Image> {
+    let reader = StreamReader::new(archive.map_err(std::io::Error::other));
+    let image = archive_svc.import(reader).await?;
+    Ok(image.into())
 }
 
 #[cfg(feature = "server")]

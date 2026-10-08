@@ -65,6 +65,10 @@ pub async fn build_di_container(
     let group_repo = repository::group_repo(pool);
     let host_registry = Arc::new(registry::HostRegistry::default());
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
+    let archive_service = Arc::new(service::archive::ArchiveService::new(
+        image_repo.clone(),
+        image_service.clone(),
+    ));
     let multicast_manager = Arc::new(
         MulticastManager::start(
             task_repo.clone(),
@@ -89,6 +93,7 @@ pub async fn build_di_container(
         group_repo,
         host_registry,
         image_service,
+        archive_service,
         multicast_manager,
         machine_ip,
         agent_liveness,

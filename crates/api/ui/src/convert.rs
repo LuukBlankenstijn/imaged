@@ -58,6 +58,7 @@ impl From<DStatus> for model::ImageStatus {
         match s {
             DStatus::Empty => Self::Empty,
             DStatus::Capturing => Self::Capturing,
+            DStatus::Importing => Self::Importing,
             DStatus::Ready => Self::Ready,
             DStatus::Faulted => Self::Faulted,
         }
