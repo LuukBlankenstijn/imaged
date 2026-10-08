@@ -5,8 +5,8 @@
   sqlite,
   tailwindcss_4,
   util-linux,
-  ipxe,
-  initramfs,
+  bootAssets,
+  ipxeAssets,
 }:
 
 let
@@ -14,7 +14,6 @@ let
     root = ../..;
     fileset = lib.fileset.unions [
       (craneLib.fileset.commonCargoSources ../..)
-      ../../assets/vmlinuz
       ../../crates/core/migrations
       ../../crates/core/.sqlx
       ../../crates/web/input.css
@@ -33,7 +32,7 @@ let
     cargoExtraArgs = "-p imaged-client";
     nativeBuildInputs = [ util-linux ];
     cargoTestExtraArgs =
-      "-- --skip find_target_disk_never_returns_a_removable_usb_or_root_disk";
+      "-- --skip find_target_disk_only_returns_an_imaging_candidate_without_root";
   };
 
   # The dioxus server-fn macro compiles either an HTTP client call or a direct
@@ -56,14 +55,13 @@ let
     SQLX_OFFLINE = "true";
   };
 
-  # pxe.rs embeds the initramfs, tftp/main.rs embeds the iPXE bootloaders, and
-  # web/app.rs references the stylesheet through asset! -- all resolved at
-  # compile time. None are tracked, and none exist in the dummy tree crane
-  # builds deps against, so they are materialised for the test build only.
+  # pxe.rs embeds the kernels and initramfs, tftp.rs embeds the iPXE
+  # bootloaders, and web/app.rs references the stylesheet through asset! -- all
+  # resolved at compile time. None are tracked, and none exist in the dummy tree
+  # crane builds deps against, so they are materialised for the test build only.
   realSourcePrep = ''
-    install -Dm0644 ${initramfs} assets/initramfs.cpio.gz
-    install -Dm0644 ${ipxe}/ipxe.efi assets/ipxe.efi
-    install -Dm0644 ${ipxe}/undionly.kpxe assets/undionly.kpxe
+    mkdir -p assets
+    cp -rL --no-preserve=mode ${bootAssets}/. ${ipxeAssets}/. assets/
     tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
   '';
 in

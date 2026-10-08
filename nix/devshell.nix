@@ -2,7 +2,8 @@
   musl,
   mkShell,
   rustToolchain,
-  kernel,
+  kernels,
+  ipxeAssets,
   build-initramfs,
   run-vm,
   run-vm-pxe,
@@ -13,7 +14,6 @@
   tailwindcss_4,
   wasm-bindgen-cli,
   binaryen,
-  ipxe,
 }:
 
 mkShell {
@@ -40,8 +40,6 @@ mkShell {
   };
 
   shellHook = ''
-    cp -f ${ipxe}/ipxe.efi ./assets/ipxe.efi
-    cp -f ${ipxe}/undionly.kpxe ./assets/undionly.kpxe
-    cp -f ${kernel}/bzImage ./assets/vmlinuz
+    cp -rfL --no-preserve=mode ${ipxeAssets}/. ${kernels}/. ./assets/
   '';
 }

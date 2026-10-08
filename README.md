@@ -68,6 +68,20 @@ With direnv:
 direnv allow
 ```
 
-It also provides everything else the project needs: a minimal Linux kernel,
-partclone, udp-cast, the initramfs packages and scripts, and the test-VM
-scripts.
+It also provides everything else the project needs: partclone, udp-cast, the
+initramfs packages and scripts, and the test-VM scripts. The x86_64 and arm64
+kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
+(minus GPU, media, sound and wireless) and loads them by modalias at boot.
+`build-initramfs` builds the initramfs for every arch, or only the ones passed
+as arguments (`build-initramfs arm64`).
+
+## Network boot
+
+DHCP hands bare PXE ROMs an iPXE binary over TFTP by client architecture
+(option 93): `undionly.kpxe` for BIOS (0), `ipxe.efi` for x86 UEFI (6, 7, 9)
+and `ipxe-arm64.efi` for arm64 UEFI (11). iPXE then chains
+`/boot/boot.ipxe`, which reports its build architecture so the server answers
+with the matching kernel and initramfs. See `dnsmasq.conf` for a working setup.
+
+`imaged-server --tftp-bind-address 0.0.0.0:69` also serves the iPXE binaries,
+kernels and initramfs over TFTP, so no separate TFTP server is needed.

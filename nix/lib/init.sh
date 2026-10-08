@@ -3,6 +3,15 @@
 /bin/busybox mount -t proc none /proc
 /bin/busybox mount -t sysfs none /sys
 /bin/busybox mount -t devtmpfs none /dev
+echo /bin/modprobe > /proc/sys/kernel/modprobe
+/bin/mdev -d
+
+load_drivers() {
+    find /sys/devices -name modalias -exec cat {} + 2>/dev/null | sort -u | xargs -r modprobe -qa
+}
+
+load_drivers
+load_drivers
 
 for backlight in /sys/class/backlight/*; do
     [ -f "$backlight/max_brightness" ] || continue
@@ -11,7 +20,8 @@ for backlight in /sys/class/backlight/*; do
 done
 
 i=0
-while [ "$i" -lt 10 ]; do
+while [ "$i" -lt 60 ]; do
+    load_drivers
     linked=
     for iface in /sys/class/net/*; do
         [ "${iface##*/}" = "lo" ] && continue
@@ -21,6 +31,21 @@ while [ "$i" -lt 10 ]; do
     [ -n "$linked" ] && break
     i=$((i + 1))
     sleep 1
+done
+
+hwclock -s 2>/dev/null
+
+lsblk -rno NAME,FSTYPE | while read -r name fstype; do
+    case "$fstype" in
+        ext2|ext3|ext4)
+            echo "Checking /dev/$name"
+            E2FSCK_CONFIG=/etc/e2fsck.conf e2fsck -f -p "/dev/$name"
+            ;;
+        vfat)
+            echo "Checking /dev/$name"
+            fsck.fat -a "/dev/$name"
+            ;;
+    esac
 done
 
 echo "Running dhcp to get an ip"

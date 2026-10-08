@@ -16,6 +16,12 @@ pub struct BlockDevice {
     pub transport: Option<String>,
     #[serde(default)]
     pub children: Vec<BlockDevice>,
+    #[serde(default)]
+    pub ro: bool,
+    #[serde(default)]
+    pub hotplug: bool,
+    #[serde(default, rename = "type")]
+    pub device_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,12 +91,20 @@ struct LsblkOutput {
     blockdevices: Vec<BlockDevice>,
 }
 
+fn is_imaging_candidate(d: &BlockDevice) -> bool {
+    d.device_type.as_deref() == Some("disk")
+        && !d.ro
+        && !d.hotplug
+        && !d.removable
+        && d.transport.as_deref() != Some("usb")
+}
+
 pub async fn find_target_disk() -> Result<BlockDevice> {
     let devices = lsblk(None).await?;
 
     let candidates: Vec<&BlockDevice> = devices
         .iter()
-        .filter(|d| !d.removable && d.transport.as_deref() != Some("usb"))
+        .filter(|d| is_imaging_candidate(d))
         .collect();
 
     let disk = match candidates.as_slice() {
@@ -114,7 +128,12 @@ pub async fn find_target_disk() -> Result<BlockDevice> {
 
 async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
     let mut cmd = Command::new("lsblk");
-    cmd.args(["-J", "-b", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN"]);
+    cmd.args([
+        "-J",
+        "-b",
+        "-o",
+        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE",
+    ]);
     if let Some(d) = device {
         cmd.arg(d);
     }
@@ -215,16 +234,62 @@ mod tests {
         assert!(!contains_root(&d));
     }
 
+    fn internal_disk() -> BlockDevice {
+        dev(r#"{ "name": "nvme0n1", "size": 1, "type": "disk", "rm": false, "ro": false,
+                 "hotplug": false, "tran": "nvme" }"#)
+    }
+
+    #[test]
+    fn an_internal_writable_disk_is_an_imaging_candidate() {
+        assert!(is_imaging_candidate(&internal_disk()));
+    }
+
+    #[test]
+    fn emmc_boot_partitions_are_not_imaging_candidates() {
+        let boot0 = dev(r#"{ "name": "mmcblk0boot0", "size": 4194304, "type": "disk",
+                 "rm": false, "ro": true, "hotplug": false, "tran": null }"#);
+        assert!(!is_imaging_candidate(&boot0));
+    }
+
+    #[test]
+    fn hotplug_sd_cards_are_not_imaging_candidates() {
+        let sd_card = dev(r#"{ "name": "mmcblk1", "size": 1, "type": "disk",
+                 "rm": false, "ro": false, "hotplug": true, "tran": null }"#);
+        assert!(!is_imaging_candidate(&sd_card));
+    }
+
+    #[test]
+    fn non_disk_devices_are_not_imaging_candidates() {
+        for device_type in [Some("rom"), Some("part"), Some("loop"), Some("lvm"), None] {
+            let device = BlockDevice {
+                device_type: device_type.map(str::to_string),
+                ..internal_disk()
+            };
+            assert!(!is_imaging_candidate(&device), "{device_type:?}");
+        }
+    }
+
+    #[test]
+    fn removable_and_usb_disks_are_not_imaging_candidates() {
+        let removable = BlockDevice {
+            removable: true,
+            ..internal_disk()
+        };
+        let usb = BlockDevice {
+            transport: Some("usb".to_string()),
+            ..internal_disk()
+        };
+        assert!(!is_imaging_candidate(&removable));
+        assert!(!is_imaging_candidate(&usb));
+    }
+
     #[tokio::test]
-    async fn find_target_disk_never_returns_a_removable_usb_or_root_disk() {
+    async fn find_target_disk_only_returns_an_imaging_candidate_without_root() {
         match find_target_disk().await {
             Ok(disk) => {
-                assert!(!disk.removable, "selected a removable disk: {}", disk.name);
-                assert_ne!(
-                    disk.transport.as_deref(),
-                    Some("usb"),
-                    "selected a usb disk: {}",
-                    disk.name
+                assert!(
+                    is_imaging_candidate(&disk),
+                    "selected an excluded disk: {disk:?}"
                 );
                 assert!(
                     !contains_root(&disk),

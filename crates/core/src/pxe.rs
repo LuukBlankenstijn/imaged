@@ -3,15 +3,57 @@ use std::env;
 use axum::{
     Router,
     body::Body,
-    extract::Query,
+    extract::{Path, Query},
     http::{Response, StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
+use derive_more::Display;
 use serde::Deserialize;
+
+#[derive(Clone, Copy, Deserialize, Display)]
+pub(crate) enum Arch {
+    #[serde(rename = "x86_64", alias = "i386")]
+    #[display("x86_64")]
+    X86_64,
+    #[serde(rename = "arm64")]
+    #[display("arm64")]
+    Arm64,
+}
+
+impl Arch {
+    fn serial_console(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "ttyS0",
+            Arch::Arm64 => "ttyAMA0",
+        }
+    }
+
+    fn early_console(self) -> &'static str {
+        match self {
+            Arch::X86_64 => "earlyprintk=vga",
+            Arch::Arm64 => "earlycon",
+        }
+    }
+
+    pub(crate) fn vmlinuz(self) -> &'static [u8] {
+        match self {
+            Arch::X86_64 => include_bytes!("../../../assets/x86_64/vmlinuz"),
+            Arch::Arm64 => include_bytes!("../../../assets/arm64/vmlinuz"),
+        }
+    }
+
+    pub(crate) fn initramfs(self) -> &'static [u8] {
+        match self {
+            Arch::X86_64 => include_bytes!("../../../assets/x86_64/initramfs.cpio.xz"),
+            Arch::Arm64 => include_bytes!("../../../assets/arm64/initramfs.cpio.xz"),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 pub struct BootParams {
+    arch: Arch,
     product: Option<String>,
     manufacturer: Option<String>,
 }
@@ -32,7 +74,7 @@ pub async fn bootstrap_ipxe() -> impl IntoResponse {
 
     let body = format!(
         "#!ipxe\n\
-         chain {base}/boot/manifest.ipxe?product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
+         chain {base}/boot/manifest.ipxe?arch=${{buildarch}}&product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
     );
 
     ([("content-type", "text/plain; charset=utf-8")], body)
@@ -48,44 +90,45 @@ pub async fn manifest_ipxe(Query(params): Query<BootParams>) -> impl IntoRespons
         || product.contains("Standard PC")
         || manufacturer.contains("QEMU");
 
+    let serial = format!("console={},115200n8", params.arch.serial_console());
     let console_args = if is_vm {
-        "console=tty0 console=ttyS0,115200n8"
+        format!("console=tty0 {serial}")
     } else {
-        "console=ttyS0,115200n8 console=tty0"
+        format!("{serial} console=tty0")
     };
 
     tracing::info!(target: "boot_config", console_args = %console_args, "Selected console line");
 
+    let arch = params.arch;
+    let early_console = arch.early_console();
     let body = format!(
         "#!ipxe\n\
          set base {base}\n\
-         kernel ${{base}}/boot/vmlinuz initrd=initramfs.cpio.gz img_srv=${{base}} {console_args} earlyprintk=vga loglevel=8\n\
-         initrd ${{base}}/boot/initramfs.cpio.gz\n\
+         kernel ${{base}}/boot/{arch}/vmlinuz initrd=initramfs.cpio.xz img_srv=${{base}} {console_args} {early_console} loglevel=8\n\
+         initrd ${{base}}/boot/{arch}/initramfs.cpio.xz\n\
          boot\n",
     );
 
     ([("content-type", "text/plain; charset=utf-8")], body)
 }
 
-static VMLINUZ: &[u8] = include_bytes!("../../../assets/vmlinuz");
-static INITRAMFS: &[u8] = include_bytes!("../../../assets/initramfs.cpio.gz");
-
-async fn serve_vmlinuz() -> impl IntoResponse {
+async fn serve_vmlinuz(Path(arch): Path<Arch>) -> impl IntoResponse {
+    let vmlinuz = arch.vmlinuz();
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        // .len() on a static slice is evaluated at compile time, so this is free
-        .header(header::CONTENT_LENGTH, VMLINUZ.len().to_string())
-        .body(Body::from(VMLINUZ))
+        .header(header::CONTENT_LENGTH, vmlinuz.len().to_string())
+        .body(Body::from(vmlinuz))
         .unwrap()
 }
 
-async fn serve_initramfs() -> impl IntoResponse {
+async fn serve_initramfs(Path(arch): Path<Arch>) -> impl IntoResponse {
+    let initramfs = arch.initramfs();
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/gzip")
-        .header(header::CONTENT_LENGTH, INITRAMFS.len().to_string())
-        .body(Body::from(INITRAMFS))
+        .header(header::CONTENT_TYPE, "application/x-xz")
+        .header(header::CONTENT_LENGTH, initramfs.len().to_string())
+        .body(Body::from(initramfs))
         .unwrap()
 }
 
@@ -93,8 +136,8 @@ pub fn router() -> Router {
     Router::new()
         .route("/boot/boot.ipxe", get(bootstrap_ipxe))
         .route("/boot/manifest.ipxe", get(manifest_ipxe))
-        .route("/boot/vmlinuz", get(serve_vmlinuz))
-        .route("/boot/initramfs.cpio.gz", get(serve_initramfs))
+        .route("/boot/{arch}/vmlinuz", get(serve_vmlinuz))
+        .route("/boot/{arch}/initramfs.cpio.xz", get(serve_initramfs))
 }
 
 #[cfg(test)]
@@ -104,8 +147,10 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
-    static VMLINUZ_ASSET: &[u8] = include_bytes!("../../../assets/vmlinuz");
-    static INITRAMFS_ASSET: &[u8] = include_bytes!("../../../assets/initramfs.cpio.gz");
+    static X86_64_VMLINUZ: &[u8] = include_bytes!("../../../assets/x86_64/vmlinuz");
+    static X86_64_INITRAMFS: &[u8] = include_bytes!("../../../assets/x86_64/initramfs.cpio.xz");
+    static ARM64_VMLINUZ: &[u8] = include_bytes!("../../../assets/arm64/vmlinuz");
+    static ARM64_INITRAMFS: &[u8] = include_bytes!("../../../assets/arm64/initramfs.cpio.xz");
 
     async fn get(uri: &str) -> Response<Body> {
         router()
@@ -123,26 +168,52 @@ mod tests {
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
-    fn assert_common_ipxe_invariants(script: &str) {
+    fn assert_common_ipxe_invariants(script: &str, arch: &str) {
         assert!(script.starts_with("#!ipxe\n"), "script: {script}");
         assert!(
             script.lines().any(|l| l.trim() == "boot"),
             "missing boot line: {script}"
         );
         assert!(
-            script.contains("/boot/vmlinuz"),
-            "missing kernel url: {script}"
+            script.contains(&format!("/boot/{arch}/vmlinuz ")),
+            "missing {arch} kernel url: {script}"
         );
         assert!(
-            script.contains("/boot/initramfs.cpio.gz"),
-            "missing initramfs url: {script}"
+            script.contains(&format!("/boot/{arch}/initramfs.cpio.xz\n")),
+            "missing {arch} initramfs url: {script}"
+        );
+    }
+
+    async fn assert_serves(uri: &str, content_type: &str, asset: &[u8]) {
+        let resp = get(uri).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            content_type
+        );
+        assert_eq!(
+            resp.headers().get(header::CONTENT_LENGTH).unwrap(),
+            asset.len().to_string().as_str()
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(bytes == asset, "{uri} served a different asset");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_hands_the_ipxe_build_arch_to_the_manifest() {
+        let script = manifest_body("/boot/boot.ipxe").await;
+        assert!(
+            script.contains("/boot/manifest.ipxe?arch=${buildarch}&"),
+            "{script}"
         );
     }
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_qemu_product() {
-        let script = manifest_body("/boot/manifest.ipxe?product=QEMU%20Standard").await;
-        assert_common_ipxe_invariants(&script);
+        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&product=QEMU%20Standard").await;
+        assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
             "{script}"
@@ -151,8 +222,9 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_standard_pc_product() {
-        let script = manifest_body("/boot/manifest.ipxe?product=Standard%20PC%20(i440FX)").await;
-        assert_common_ipxe_invariants(&script);
+        let script =
+            manifest_body("/boot/manifest.ipxe?arch=x86_64&product=Standard%20PC%20(i440FX)").await;
+        assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
             "{script}"
@@ -161,8 +233,8 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_qemu_manufacturer() {
-        let script = manifest_body("/boot/manifest.ipxe?manufacturer=QEMU").await;
-        assert_common_ipxe_invariants(&script);
+        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&manufacturer=QEMU").await;
+        assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
             "{script}"
@@ -171,8 +243,8 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_physical_console_line_by_default() {
-        let script = manifest_body("/boot/manifest.ipxe?product=Dell%20Inc.").await;
-        assert_common_ipxe_invariants(&script);
+        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&product=Dell%20Inc.").await;
+        assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=ttyS0,115200n8 console=tty0"),
             "{script}"
@@ -180,38 +252,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serve_vmlinuz_returns_octet_stream_with_content_length_matching_the_embedded_asset() {
-        let resp = get("/boot/vmlinuz").await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/octet-stream"
-        );
-        assert_eq!(
-            resp.headers().get(header::CONTENT_LENGTH).unwrap(),
-            VMLINUZ_ASSET.len().to_string().as_str()
-        );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(bytes.len(), VMLINUZ_ASSET.len());
+    async fn manifest_boots_bios_ipxe_into_the_x86_64_kernel() {
+        let script = manifest_body("/boot/manifest.ipxe?arch=i386&product=Dell%20Inc.").await;
+        assert_common_ipxe_invariants(&script, "x86_64");
     }
 
     #[tokio::test]
-    async fn serve_initramfs_returns_gzip_with_content_length_matching_the_embedded_asset() {
-        let resp = get("/boot/initramfs.cpio.gz").await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(
-            resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            "application/gzip"
+    async fn manifest_boots_arm64_into_the_arm64_kernel_on_the_pl011_console() {
+        let script = manifest_body("/boot/manifest.ipxe?arch=arm64&manufacturer=QEMU").await;
+        assert_common_ipxe_invariants(&script, "arm64");
+        assert!(
+            script.contains("console=tty0 console=ttyAMA0,115200n8 earlycon "),
+            "{script}"
         );
-        assert_eq!(
-            resp.headers().get(header::CONTENT_LENGTH).unwrap(),
-            INITRAMFS_ASSET.len().to_string().as_str()
-        );
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert_eq!(bytes.len(), INITRAMFS_ASSET.len());
+    }
+
+    #[tokio::test]
+    async fn manifest_rejects_an_unknown_arch() {
+        let resp = get("/boot/manifest.ipxe?arch=riscv64").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn serve_vmlinuz_returns_the_kernel_built_for_the_requested_arch() {
+        assert_serves(
+            "/boot/x86_64/vmlinuz",
+            "application/octet-stream",
+            X86_64_VMLINUZ,
+        )
+        .await;
+        assert_serves(
+            "/boot/arm64/vmlinuz",
+            "application/octet-stream",
+            ARM64_VMLINUZ,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn serve_initramfs_returns_the_initramfs_built_for_the_requested_arch() {
+        assert_serves(
+            "/boot/x86_64/initramfs.cpio.xz",
+            "application/x-xz",
+            X86_64_INITRAMFS,
+        )
+        .await;
+        assert_serves(
+            "/boot/arm64/initramfs.cpio.xz",
+            "application/x-xz",
+            ARM64_INITRAMFS,
+        )
+        .await;
     }
 }

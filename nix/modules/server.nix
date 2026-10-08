@@ -40,6 +40,12 @@ in
       default = null;
       description = "host:port for the dashboard UI + server functions; defaults to bindAddress when null.";
     };
+    tftpBindAddress = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "0.0.0.0:69";
+      description = "host:port for the built-in TFTP server serving iPXE, kernels and initramfs; disabled when null.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -55,13 +61,17 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}";
+        ExecStart = "${cfg.package}/bin/imaged-server --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";
         Group = "imaged-server";
         Restart = "always";
         RestartSec = "5s";
+      }
+      // optionalAttrs (cfg.tftpBindAddress != null) {
+        CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+        AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
       };
     };
 

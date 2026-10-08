@@ -1,7 +1,11 @@
-{ musl, craneLib }:
+{
+  stdenv,
+  musl,
+  craneLib,
+}:
 
 let
-  # nixpkgs' musl cross links dynamically by default (ld-musl-x86_64.so.1);
+  # nixpkgs' musl cross links dynamically by default (ld-musl-<arch>.so.1);
   # force a fully static binary for the target only, so it runs in the initramfs
   # with no dynamic loader. Host proc-macros/build scripts stay dynamic gnu.
   #
@@ -17,7 +21,7 @@ let
     cargoExtraArgs = "-p imaged-client";
     doCheck = false;
 
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS =
+    "CARGO_TARGET_${stdenv.hostPlatform.rust.cargoEnvVarTarget}_RUSTFLAGS" =
       "-C target-feature=+crt-static -L native=${musl.out}/lib";
   };
 in

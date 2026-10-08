@@ -6,6 +6,7 @@ pub mod pxe;
 pub mod registry;
 pub mod repository;
 pub mod service;
+pub mod tftp;
 
 use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 

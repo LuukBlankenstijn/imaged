@@ -7,7 +7,9 @@ node_modules
 *.qcow2
 images
 .claude
-assets/initramfs.cpio.gz
+assets/x86_64
+assets/arm64
+assets/ipxe-arm64.efi
 docs
 .direnv
 

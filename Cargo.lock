@@ -2533,12 +2533,14 @@ dependencies = [
 name = "imaged-core"
 version = "0.1.0"
 dependencies = [
+ "async-tftp",
  "async-trait",
  "axum",
  "bytes",
  "chrono",
  "derive_more",
  "futures",
+ "futures-lite",
  "imaged-shared",
  "injectable",
  "local-ip-address",
@@ -2610,17 +2612,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "imaged-tftp"
-version = "0.1.0"
-dependencies = [
- "async-tftp",
- "clap",
- "futures-lite",
- "imaged-shared",
- "tracing",
 ]
 
 [[package]]

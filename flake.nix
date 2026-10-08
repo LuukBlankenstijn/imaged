@@ -34,8 +34,80 @@
           overlays = [ rust-overlay.overlays.default ];
         };
 
-        partclone = pkgs.callPackage ./nix/packages/partclone.nix { };
-        kernel = pkgs.callPackage ./nix/packages/kernel.nix { };
+        inherit (pkgs) lib;
+
+        mkTarget =
+          {
+            targetPkgs,
+            muslPkgs,
+            kernel,
+            vmlinuz,
+          }:
+          let
+            partclone = targetPkgs.callPackage ./nix/packages/partclone.nix { };
+            imaged-client = muslPkgs.callPackage ./nix/packages/imaged-client.nix {
+              craneLib = (crane.mkLib muslPkgs).overrideToolchain (
+                pkgs.rust-bin.stable.latest.minimal.override {
+                  targets = [ muslPkgs.stdenv.hostPlatform.rust.rustcTarget ];
+                }
+              );
+            };
+            initramfsStaging = import ./nix/lib/initramfs-staging.nix {
+              inherit (targetPkgs) pkgsStatic;
+              inherit (pkgs) gawk kmod xz;
+              inherit partclone kernel;
+            };
+          in
+          {
+            inherit
+              partclone
+              imaged-client
+              initramfsStaging
+              muslPkgs
+              vmlinuz
+              ;
+            inherit (targetPkgs) ipxe;
+            initramfs = pkgs.callPackage ./nix/packages/initramfs.nix {
+              inherit imaged-client initramfsStaging;
+            };
+          };
+
+        targets = {
+          x86_64 =
+            let
+              kernel = nixpkgs.legacyPackages.x86_64-linux.linuxPackages_latest.kernel;
+            in
+            mkTarget {
+              targetPkgs = pkgs.pkgsCross.gnu64;
+              muslPkgs = pkgs.pkgsCross.musl64;
+              inherit kernel;
+              vmlinuz = "${kernel}/bzImage";
+            };
+          arm64 =
+            let
+              kernel = nixpkgs.legacyPackages.aarch64-linux.linuxPackages_latest.kernel;
+            in
+            mkTarget {
+              targetPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+              muslPkgs = pkgs.pkgsCross.aarch64-multiplatform-musl;
+              inherit kernel;
+              vmlinuz = pkgs.runCommand "vmlinuz-arm64" { } "gzip -9n < ${kernel}/Image > $out";
+            };
+        };
+
+        kernelAssets = lib.mapAttrs' (
+          arch: target: lib.nameValuePair "${arch}/vmlinuz" target.vmlinuz
+        ) targets;
+        initramfsAssets = lib.mapAttrs' (
+          arch: target: lib.nameValuePair "${arch}/initramfs.cpio.xz" target.initramfs
+        ) targets;
+        kernels = pkgs.linkFarm "imaged-kernels" kernelAssets;
+        bootAssets = pkgs.linkFarm "imaged-boot-assets" (kernelAssets // initramfsAssets);
+        ipxeAssets = pkgs.linkFarm "imaged-ipxe-assets" {
+          "ipxe.efi" = "${targets.x86_64.ipxe}/ipxe.efi";
+          "undionly.kpxe" = "${targets.x86_64.ipxe}/undionly.kpxe";
+          "ipxe-arm64.efi" = "${targets.arm64.ipxe}/ipxe.efi";
+        };
 
         devRustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
@@ -46,6 +118,7 @@
           ];
           targets = [
             "x86_64-unknown-linux-musl"
+            "aarch64-unknown-linux-musl"
             "wasm32-unknown-unknown"
           ];
         };
@@ -55,11 +128,6 @@
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain buildRustToolchain;
-        craneLibMusl = (crane.mkLib pkgs.pkgsCross.musl64).overrideToolchain (
-          pkgs.rust-bin.stable.latest.minimal.override {
-            targets = [ "x86_64-unknown-linux-musl" ];
-          }
-        );
 
         wasm-bindgen-cli =
           let
@@ -71,20 +139,8 @@
           in
           pkgs."wasm-bindgen-cli_${builtins.replaceStrings [ "." ] [ "_" ] version}";
 
-        imaged-client = pkgs.callPackage ./nix/packages/imaged-client.nix {
-          craneLib = craneLibMusl;
-        };
-
-        initramfsStaging = import ./nix/lib/initramfs-staging.nix {
-          inherit (pkgs) pkgsStatic;
-          inherit partclone;
-        };
-        initramfs = pkgs.callPackage ./nix/packages/initramfs.nix {
-          inherit imaged-client initramfsStaging;
-        };
-
         build-initramfs = pkgs.callPackage ./nix/scripts/build-initramfs.nix {
-          inherit initramfsStaging;
+          inherit targets;
           rustToolchain = devRustToolchain;
         };
         run-vm = pkgs.callPackage ./nix/scripts/run-vm.nix { };
@@ -93,7 +149,7 @@
         teardown-net = pkgs.callPackage ./nix/scripts/teardown-net.nix { };
 
         imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
-          inherit craneLib initramfs;
+          inherit craneLib bootAssets ipxeAssets;
         };
       in
       {
@@ -103,11 +159,15 @@
         };
 
         packages = {
-          inherit
-            kernel
+          inherit (targets.x86_64)
             partclone
             imaged-client
             initramfs
+            ;
+          partclone-arm64 = targets.arm64.partclone;
+          imaged-client-arm64 = targets.arm64.imaged-client;
+          initramfs-arm64 = targets.arm64.initramfs;
+          inherit
             build-initramfs
             run-vm
             run-vm-pxe
@@ -115,14 +175,19 @@
             teardown-net
             ;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit initramfs wasm-bindgen-cli craneLib;
+            inherit
+              bootAssets
+              ipxeAssets
+              wasm-bindgen-cli
+              craneLib
+              ;
           };
-          imaged-tftp = pkgs.callPackage ./nix/packages/imaged-tftp.nix { inherit craneLib; };
         };
 
         devShells.default = pkgs.callPackage ./nix/devshell.nix {
           inherit
-            kernel
+            kernels
+            ipxeAssets
             build-initramfs
             run-vm
             run-vm-pxe
@@ -142,10 +207,7 @@
           ...
         }:
         {
-          imports = [
-            ./nix/modules/server.nix
-            ./nix/modules/tftp.nix
-          ];
+          imports = [ ./nix/modules/server.nix ];
           nix.settings = {
             substituters = [ "https://luukblankenstijn.cachix.org" ];
             trusted-public-keys = [
@@ -153,10 +215,9 @@
             ];
           };
 
-          services.imaged = {
-            server.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
-            tftp.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-tftp;
-          };
+          services.imaged.server.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
         };
     };
 }

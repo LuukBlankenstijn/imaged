@@ -8,7 +8,6 @@ members = [
     "crates/e2e",
     "crates/server",
     "crates/shared",
-    "crates/tftp",
     "crates/web",
 ]
 

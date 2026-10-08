@@ -46,6 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         web_bind_address: Option<SocketAddr>,
         #[arg(short, long, env = "MULTICAST_INTERFACE", default_value = "lo")]
         multicast_interface: String,
+        #[arg(long)]
+        tftp_bind_address: Option<SocketAddr>,
     }
 
     let args = Args::parse();
@@ -74,6 +76,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .with_state(dioxus::server::FullstackState::new(ServeConfig::new(), App));
 
+    let tftp_bind_address = args.tftp_bind_address;
+    let tftp = async move {
+        match tftp_bind_address {
+            Some(address) => core::tftp::serve(address).await,
+            None => std::future::pending().await,
+        }
+    };
+
     let main_listener = core::bind(args.bind_address).await?;
     match args.web_bind_address {
         Some(web_bind_address) => {
@@ -86,11 +96,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::try_join!(
                 core::serve(main_listener, machine_router),
                 core::serve(web_listener, web_router),
+                tftp,
             )?;
         }
         None => {
             tracing::info!(bind_address = %args.bind_address, "starting imaged-server");
-            core::serve(main_listener, machine_router.merge(web_router)).await?;
+            tokio::try_join!(
+                core::serve(main_listener, machine_router.merge(web_router)),
+                tftp,
+            )?;
         }
     }
 

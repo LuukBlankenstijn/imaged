@@ -1,42 +1,74 @@
 {
+  lib,
   writeShellApplication,
   coreutils,
   findutils,
   cpio,
-  gzip,
-  musl,
+  xz,
   rustToolchain,
-  initramfsStaging,
+  targets,
 }:
 
 # Dev flow: cargo-builds the client from the current working tree and packs it
-# into ./assets/initramfs.cpio.gz, mirroring the pure `initramfs` derivation via
-# the shared staging helper. Use `nix build .#initramfs` for a fully pure build.
+# into ./assets/<arch>/initramfs.cpio.xz, mirroring the pure `initramfs`
+# derivations via the shared staging helper. Use `nix build .#initramfs` for a
+# fully pure build.
+let
+  buildTarget =
+    arch: target:
+    let
+      inherit (target.muslPkgs.stdenv) cc hostPlatform;
+      rustTarget = hostPlatform.rust.rustcTarget;
+      cargoEnv = hostPlatform.rust.cargoEnvVarTarget;
+      ccEnv = builtins.replaceStrings [ "-" ] [ "_" ] rustTarget;
+      toolPrefix = "${cc}/bin/${cc.targetPrefix}";
+      client = "$(pwd)/target/${rustTarget}/release/imaged-client";
+    in
+    ''
+      ${arch})
+        CARGO_TARGET_${cargoEnv}_LINKER="${toolPrefix}cc" \
+        CARGO_TARGET_${cargoEnv}_RUSTFLAGS="-C target-feature=+crt-static -L native=${target.muslPkgs.musl.out}/lib" \
+        CC_${ccEnv}="${toolPrefix}cc" \
+        AR_${ccEnv}="${toolPrefix}ar" \
+          cargo build --release --package imaged-client --target ${rustTarget}
+        STAGING=$(mktemp -d)
+        ${target.initramfsStaging client}
+        pack ${arch} "${client}"
+        ;;
+    '';
+in
 writeShellApplication {
   name = "build-initramfs";
   runtimeInputs = [
     coreutils
     findutils
     cpio
-    gzip
+    xz
     rustToolchain
   ];
   text = ''
-    TARGET=x86_64-unknown-linux-musl
-    CLIENT="$(pwd)/target/$TARGET/release/imaged-client"
+    trap 'rm -rf "''${STAGING:-}"' EXIT
 
-    CARGO_BUILD_TARGET="$TARGET" \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -L native=${musl.out}/lib" \
-      cargo build --release --package imaged-client
+    pack() {
+      OUTPUT="$(pwd)/assets/$1/initramfs.cpio.xz"
+      mkdir -p "$(dirname "$OUTPUT")"
+      (cd "$STAGING" && find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e > "$OUTPUT")
+      rm -rf "$STAGING"
+      echo "built: $(du -h "$OUTPUT" | cut -f1) from $2"
+    }
 
-    STAGING=$(mktemp -d)
-    trap 'rm -rf "$STAGING"' EXIT
+    if [ "$#" -eq 0 ]; then
+      set -- ${lib.concatStringsSep " " (lib.attrNames targets)}
+    fi
 
-    ${initramfsStaging "$CLIENT"}
-
-    OUTPUT="$(pwd)/assets/initramfs.cpio.gz"
-    cd "$STAGING"
-    find . | cpio -o -H newc 2>/dev/null | gzip > "$OUTPUT"
-    echo "built: $(du -h "$OUTPUT" | cut -f1) from $CLIENT"
+    for arch in "$@"; do
+      case "$arch" in
+        ${lib.concatStrings (lib.mapAttrsToList buildTarget targets)}
+        *)
+          echo "unknown arch '$arch', expected one of: ${lib.concatStringsSep " " (lib.attrNames targets)}" >&2
+          exit 1
+          ;;
+      esac
+    done
   '';
 }

@@ -17,8 +17,6 @@ jobs:
       matrix:
         target:
           - .#imaged-server
-          - .#imaged-tftp
-          - .#kernel
           - .#devShells.x86_64-linux.default.inputDerivation
     steps:
       - uses: actions/checkout@v7

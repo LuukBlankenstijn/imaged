@@ -7,19 +7,19 @@
   tailwindcss_4,
   wasm-bindgen-cli,
   binaryen,
-  initramfs,
+  bootAssets,
+  ipxeAssets,
 }:
 
 let
-  # pxe.rs embeds assets/vmlinuz via include_bytes!, sqlx::migrate! reads
-  # crates/core/migrations, the offline query cache lives in crates/core/.sqlx,
-  # tailwind reads crates/web/input.css and dx reads crates/server/Dioxus.toml,
-  # so the cargo source filter has to let those through.
+  # sqlx::migrate! reads crates/core/migrations, the offline query cache lives
+  # in crates/core/.sqlx, tailwind reads crates/web/input.css and dx reads
+  # crates/server/Dioxus.toml, so the cargo source filter has to let those
+  # through. The kernels and initramfs pxe.rs embeds come from bootAssets.
   src = lib.fileset.toSource {
     root = ../..;
     fileset = lib.fileset.unions [
       (craneLib.fileset.commonCargoSources ../..)
-      ../../assets/vmlinuz
       ../../crates/core/migrations
       ../../crates/core/.sqlx
       ../../crates/web/input.css
@@ -58,7 +58,8 @@ craneLib.mkCargoDerivation (
     );
 
     postPatch = ''
-      install -Dm0644 ${initramfs} assets/initramfs.cpio.gz
+      mkdir -p assets
+      cp -rL --no-preserve=mode ${bootAssets}/. ${ipxeAssets}/. assets/
     '';
 
     buildPhaseCargoCommand = ''

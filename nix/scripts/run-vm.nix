@@ -8,8 +8,8 @@ writeShellApplication {
       -cpu host \
       -enable-kvm \
       -m 1G \
-      -kernel assets/vmlinuz \
-      -initrd assets/initramfs.cpio.gz \
+      -kernel assets/x86_64/vmlinuz \
+      -initrd assets/x86_64/initramfs.cpio.xz \
       -drive file=storage.qcow2,format=qcow2,if=virtio \
       -append "console=tty0 console=ttyS0 earlyprintk=vga loglevel=8 img_srv=http://192.168.100.1:8080" \
       -nographic \
