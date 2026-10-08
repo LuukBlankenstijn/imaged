@@ -241,9 +241,7 @@ impl ArchiveService {
         {
             Ok(imported) => Ok(imported),
             Err(error) => {
-                if let Err(cleanup) = self.discard(image.id, &error).await {
-                    tracing::error!(image_id = image.id, "failed to discard import: {cleanup}");
-                }
+                self.discard(image.id, &error).await;
                 Err(error)
             }
         }
@@ -272,16 +270,22 @@ impl ArchiveService {
             .await
     }
 
-    async fn discard(&self, image_id: i64, error: &AppError) -> Result {
-        self.image_repo
+    async fn discard(&self, image_id: i64, error: &AppError) {
+        if let Err(e) = self
+            .image_repo
             .mark_faulted(image_id, &error.to_string())
-            .await?;
+            .await
+        {
+            tracing::error!(image_id, "failed to mark rejected import faulted: {e}");
+        }
         if let Err(e) = tokio::fs::remove_dir_all(self.image_service.import_dir(image_id)).await
             && e.kind() != io::ErrorKind::NotFound
         {
-            return Err(AppError::Internal(e.to_string()));
+            tracing::error!(image_id, "failed to remove import directory: {e}");
         }
-        self.image_service.clear_image_data(image_id).await
+        if let Err(e) = self.image_service.clear_image_data(image_id).await {
+            tracing::error!(image_id, "failed to remove image directory: {e}");
+        }
     }
 }
 
