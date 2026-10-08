@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::api::tasks::{cancel_task, get_all_tasks, retry_task};
+use crate::api::tasks::{cancel_task, get_all_tasks, kick_host, retry_task};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
@@ -10,7 +10,9 @@ use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge, TaskTypeBadge,
 };
 use crate::format::{format_bytes, format_duration, format_relative};
-use crate::model::{MulticastProgress, Task, TaskState, TaskType};
+use crate::model::{
+    KickRequest, MulticastProgress, ReceiverProgress, Task, TaskState, TaskType, TransferPhase,
+};
 
 fn select_class() -> &'static str {
     "rounded-md border border-ink-600 bg-ink-900 px-3 py-1.5 text-sm text-fog-200 focus:outline-none focus-visible:glow-amber"
@@ -128,6 +130,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
     let task_id = task.id;
     let mut expanded = use_signal(|| false);
     let mut cancel_open = use_signal(|| false);
+    let mut kick_target = use_signal(|| None::<i64>);
     let delay = index * 35;
 
     let can_cancel = matches!(task.state, TaskState::Pending | TaskState::Running);
@@ -147,14 +150,34 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         .clone()
         .unwrap_or_else(|| "\u{2014}".to_string());
     let host_count = task.hosts.len();
-    let hosts = task.hosts.clone();
     let transfer = use_transfer(task_id);
+    let hosts: Vec<_> = task
+        .hosts
+        .iter()
+        .map(|h| {
+            let receiver = transfer
+                .as_ref()
+                .and_then(|p| p.hosts.iter().find(|r| r.host_id == h.host_id).cloned());
+            (h.clone(), receiver)
+        })
+        .collect();
+    let receiving = transfer.is_some();
 
     let do_cancel = move || {
         spawn(async move {
             match cancel_task(task_id).await {
                 Ok(_) => on_changed.call(()),
                 Err(err) => toast_error("Cancel failed", err.to_string()),
+            }
+        });
+    };
+
+    let mut do_kick = move |host_id: i64| {
+        kick_target.set(None);
+        spawn(async move {
+            match kick_host(KickRequest { task_id, host_id }).await {
+                Ok(_) => on_changed.call(()),
+                Err(err) => toast_error("Kick failed", err.to_string()),
             }
         });
     };
@@ -215,7 +238,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
             if expanded() {
                 div { class: "border-t border-line/60 px-4 py-3",
                     div { class: "flex flex-col gap-2",
-                        for h in hosts.iter() {
+                        for (h, receiver) in hosts.into_iter() {
                             div { key: "{h.host_id}", class: "flex flex-wrap items-center gap-3 text-sm",
                                 span { class: "font-mono text-xs text-fog-500", "host {h.host_id}" }
                                 TaskStateBadge { state: h.state }
@@ -227,6 +250,16 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                                 }
                                 if let Some(err) = h.error.clone() {
                                     span { class: "text-xs text-bad", "{err}" }
+                                }
+                                if let Some(receiver) = receiver {
+                                    ReceiverStats { receiver }
+                                }
+                                if receiving && h.state == TaskState::Running {
+                                    Button {
+                                        variant: ButtonVariant::Danger,
+                                        onclick: move |_| kick_target.set(Some(h.host_id)),
+                                        "Kick"
+                                    }
                                 }
                             }
                         }
@@ -245,6 +278,19 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                 },
                 oncancel: move |_| cancel_open.set(false),
             }
+            ConfirmDialog {
+                open: kick_target().is_some(),
+                title: "Kick host",
+                message: "Kicking stops the multicast write on this host and marks it failed. Continue?",
+                confirm_label: "Kick",
+                danger: true,
+                onconfirm: move |_| {
+                    if let Some(host_id) = kick_target() {
+                        do_kick(host_id);
+                    }
+                },
+                oncancel: move |_| kick_target.set(None),
+            }
         }
     }
 }
@@ -253,6 +299,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
 fn TransferBar(progress: MulticastProgress) -> Element {
     let percent = (progress.fraction * 100.0).clamp(0.0, 100.0);
     let rate = format_bytes(progress.bytes_per_second as u64);
+    let joined = progress.hosts.iter().filter(|h| h.joined).count();
 
     rsx! {
         div { class: "border-t border-line/60 px-4 py-2.5",
@@ -266,13 +313,43 @@ fn TransferBar(progress: MulticastProgress) -> Element {
                 span { class: "w-10 text-right font-mono text-xs text-fog-300", "{percent:.0}%" }
             }
             div { class: "mt-1.5 flex flex-wrap items-center gap-3 font-mono text-[11px] text-fog-500",
+                span { class: "text-fog-300", "{phase_label(progress.phase)}" }
                 span { "{rate}/s" }
-                span { "{progress.receivers} receiver(s)" }
+                span { "{joined}/{progress.hosts.len()} joined" }
                 span { "file {progress.step}/{progress.steps}" }
                 if let Some(eta) = progress.eta_seconds {
                     span { "eta {format_duration(eta)}" }
                 }
+                if let Some(culprit) = progress.hosts.iter().find(|h| h.limiting) {
+                    span { class: "text-warn", "held up by {culprit.name}" }
+                }
             }
+        }
+    }
+}
+
+fn phase_label(phase: TransferPhase) -> &'static str {
+    match phase {
+        TransferPhase::Gathering => "waiting for hosts",
+        TransferPhase::Sending => "sending",
+        TransferPhase::Draining => "finishing",
+    }
+}
+
+#[component]
+fn ReceiverStats(receiver: ReceiverProgress) -> Element {
+    let loss = receiver.loss * 100.0;
+    rsx! {
+        if receiver.joined {
+            span { class: "font-mono text-xs text-fog-600", "{receiver.slices_behind} behind" }
+            span { class: "font-mono text-xs text-fog-600", "{loss:.1}% loss" }
+            span { class: "font-mono text-xs text-fog-600", "{receiver.naks} naks" }
+            span { class: "font-mono text-xs text-fog-600", "{receiver.sink_stall_ms} ms stalled" }
+        } else {
+            span { class: "font-mono text-xs text-fog-600", "not joined" }
+        }
+        if receiver.limiting {
+            span { class: "text-xs text-warn", "holding up the transfer" }
         }
     }
 }
@@ -285,47 +362,69 @@ mod tests {
         dioxus_ssr::render_element(el)
     }
 
+    fn receiver(host_id: i64, joined: bool, limiting: bool) -> ReceiverProgress {
+        ReceiverProgress {
+            host_id,
+            name: format!("lab-{host_id}"),
+            joined,
+            limiting,
+            slices_behind: 3,
+            loss: 0.012,
+            naks: 5,
+            sink_stall_ms: 40,
+        }
+    }
+
+    fn progress(fraction: f64, eta_seconds: Option<u64>) -> MulticastProgress {
+        MulticastProgress {
+            task_id: 3,
+            phase: TransferPhase::Sending,
+            fraction,
+            bytes_per_second: 1024.0 * 1024.0,
+            step: 2,
+            steps: 5,
+            eta_seconds,
+            hosts: vec![receiver(1, true, true), receiver(2, false, false)],
+        }
+    }
+
     #[test]
-    fn the_transfer_bar_shows_the_task_wide_percentage_rate_and_eta() {
-        let html = render(rsx! {
-            TransferBar {
-                progress: MulticastProgress {
-                    task_id: 3,
-                    fraction: 0.42,
-                    bytes_per_second: 1024.0 * 1024.0,
-                    receivers: 4,
-                    step: 2,
-                    steps: 5,
-                    eta_seconds: Some(90),
-                },
-            }
-        });
+    fn the_transfer_bar_shows_the_phase_progress_and_how_many_hosts_joined() {
+        let html = render(rsx! { TransferBar { progress: progress(0.42, Some(90)) } });
 
         assert!(html.contains("width: 42%"), "{html}");
-        assert!(html.contains("42%"), "{html}");
+        assert!(html.contains("sending"), "{html}");
         assert!(html.contains("1.00 MiB/s"), "{html}");
-        assert!(html.contains("4 receiver(s)"), "{html}");
+        assert!(html.contains("1/2 joined"), "{html}");
         assert!(html.contains("file 2/5"), "{html}");
         assert!(html.contains("eta 1m 30s"), "{html}");
     }
 
     #[test]
     fn a_transfer_without_an_eta_omits_it_and_clamps_the_bar() {
-        let html = render(rsx! {
-            TransferBar {
-                progress: MulticastProgress {
-                    task_id: 3,
-                    fraction: 1.5,
-                    bytes_per_second: 0.0,
-                    receivers: 1,
-                    step: 1,
-                    steps: 1,
-                    eta_seconds: None,
-                },
-            }
-        });
+        let html = render(rsx! { TransferBar { progress: progress(1.5, None) } });
 
         assert!(html.contains("width: 100%"), "{html}");
         assert!(!html.contains("eta"), "{html}");
+    }
+
+    #[test]
+    fn the_transfer_bar_names_the_host_holding_the_transfer_up() {
+        let html = render(rsx! { TransferBar { progress: progress(0.42, None) } });
+
+        assert!(html.contains("held up by lab-1"), "{html}");
+    }
+
+    #[test]
+    fn a_receiver_shows_its_stats_and_whether_it_holds_up_the_transfer() {
+        let joined = render(rsx! { ReceiverStats { receiver: receiver(1, true, true) } });
+        let missing = render(rsx! { ReceiverStats { receiver: receiver(2, false, false) } });
+
+        for stat in ["3 behind", "1.2% loss", "5 naks", "40 ms stalled"] {
+            assert!(joined.contains(stat), "{joined}");
+        }
+        assert!(joined.contains("holding up the transfer"), "{joined}");
+        assert!(missing.contains("not joined"), "{missing}");
+        assert!(!missing.contains("holding up"), "{missing}");
     }
 }

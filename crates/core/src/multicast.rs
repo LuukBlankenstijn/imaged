@@ -12,7 +12,7 @@ use imaged_shared::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
 use scuttlecast::{
     error::ProtoError,
     sender::{Sender, Sending},
-    state::{LimitingFactor, ReceiverState, TransferState},
+    state::{LimitingFactor, Phase, ReceiverState, TransferState},
 };
 use tokio::{sync::watch, time::Instant};
 use tokio_util::task::AbortOnDropHandle;
@@ -36,15 +36,45 @@ const PORT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const ORPHANED: &str = "Server stopped while task was running";
 const DISCONNECTED: &str = "Host disconnected before reporting the multicast result";
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TransferPhase {
+    Gathering,
+    Sending,
+    Draining,
+}
+
+impl From<Phase> for TransferPhase {
+    fn from(phase: Phase) -> Self {
+        match phase {
+            Phase::Gathering => Self::Gathering,
+            Phase::Sending => Self::Sending,
+            Phase::Draining => Self::Draining,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MulticastProgress {
     pub task_id: i64,
+    pub phase: TransferPhase,
     pub fraction: f64,
     pub bytes_per_second: f64,
-    pub receivers: usize,
     pub step: usize,
     pub steps: usize,
     pub eta: Option<Duration>,
+    pub hosts: Vec<ReceiverProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiverProgress {
+    pub host_id: i64,
+    pub name: String,
+    pub joined: bool,
+    pub limiting: bool,
+    pub slices_behind: u32,
+    pub loss: f64,
+    pub naks: u64,
+    pub sink_stall_ms: u32,
 }
 
 pub struct MulticastManager {
@@ -228,6 +258,7 @@ impl Worker {
         targets: &Targets,
         woken: &mut watch::Receiver<()>,
     ) -> Result<Option<usize>> {
+        let kicker = sending.kicker();
         let mut progress = sending.progress();
         let mut log = tokio::time::interval_at(
             Instant::now() + PROGRESS_LOG_INTERVAL,
@@ -239,14 +270,29 @@ impl Worker {
                 biased;
                 result = &mut sending => break result,
                 Ok(()) = woken.changed() => {
-                    if !self.still_running(step.task_id).await {
+                    let running = match self.running(step.task_id).await {
+                        Ok(running) => running,
+                        Err(e) => {
+                            warn!(task_id = step.task_id, err = %e, "could not check the multicast task, keeping it running");
+                            continue;
+                        }
+                    };
+                    if running.is_empty() {
                         return Ok(None);
+                    }
+                    for receiver in &progress.borrow().receivers {
+                        if targets
+                            .host_at(receiver.address.ip())
+                            .is_some_and(|t| !running.contains(&t.host_id))
+                        {
+                            kicker.kick(receiver.receiver_id);
+                        }
                     }
                 }
                 Ok(()) = progress.changed() => {
                     let state = progress.borrow_and_update();
                     joined = joined.max(state.receivers.len());
-                    self.progress.send_replace(Some(step.progress(&state)));
+                    self.progress.send_replace(Some(step.progress(&state, targets)));
                 }
                 _ = log.tick() => log_progress(&progress.borrow(), step.task_id, targets),
             }
@@ -265,16 +311,6 @@ impl Worker {
                 Ok(Some(complete))
             }
             Err(e) => Err(AppError::Internal(format!("multicast send failed: {e}"))),
-        }
-    }
-
-    async fn still_running(&self, task_id: i64) -> bool {
-        match self.running(task_id).await {
-            Ok(running) => !running.is_empty(),
-            Err(e) => {
-                warn!(task_id, err = %e, "could not check the multicast task, keeping it running");
-                true
-            }
         }
     }
 
@@ -357,27 +393,77 @@ where
     }
 }
 
-struct Targets(HashMap<IpAddr, String>);
+struct Target {
+    host_id: i64,
+    name: String,
+}
+
+struct Targets {
+    participants: Vec<Target>,
+    by_ip: HashMap<IpAddr, usize>,
+}
 
 impl Targets {
     fn new(hosts: Vec<Host>, participants: &[i64]) -> Self {
-        Self(
-            hosts
+        let hosts: Vec<Host> = hosts
+            .into_iter()
+            .filter(|h| participants.contains(&h.id))
+            .collect();
+        let mut by_ip: HashMap<IpAddr, Option<usize>> = HashMap::new();
+        for (index, host) in hosts.iter().enumerate() {
+            if let Some(ip) = host.ip.as_deref().and_then(|ip| ip.parse().ok()) {
+                by_ip
+                    .entry(ip)
+                    .and_modify(|shared| *shared = None)
+                    .or_insert(Some(index));
+            }
+        }
+        Self {
+            participants: hosts
                 .into_iter()
-                .filter(|h| participants.contains(&h.id))
-                .filter_map(|h| {
-                    Some((
-                        h.ip.as_deref()?.parse().ok()?,
-                        format!("{} (#{})", h.name, h.id),
-                    ))
+                .map(|h| Target {
+                    name: format!("{} (#{})", h.name, h.id),
+                    host_id: h.id,
                 })
                 .collect(),
-        )
+            by_ip: by_ip
+                .into_iter()
+                .filter_map(|(ip, index)| Some((ip, index?)))
+                .collect(),
+        }
+    }
+
+    fn host_at(&self, ip: IpAddr) -> Option<&Target> {
+        self.by_ip.get(&ip).map(|&index| &self.participants[index])
     }
 
     fn name(&self, receiver: &ReceiverState) -> String {
         let ip = receiver.address.ip();
-        self.0.get(&ip).cloned().unwrap_or_else(|| ip.to_string())
+        self.host_at(ip)
+            .map_or_else(|| ip.to_string(), |target| target.name.clone())
+    }
+
+    fn hosts(&self, state: &TransferState) -> Vec<ReceiverProgress> {
+        let culprit = limiting_receiver(state).map(|r| r.receiver_id);
+        self.participants
+            .iter()
+            .map(|target| {
+                let receiver = state.receivers.iter().find(|r| {
+                    self.host_at(r.address.ip())
+                        .is_some_and(|t| t.host_id == target.host_id)
+                });
+                ReceiverProgress {
+                    host_id: target.host_id,
+                    name: target.name.clone(),
+                    joined: receiver.is_some(),
+                    limiting: receiver.is_some_and(|r| Some(r.receiver_id) == culprit),
+                    slices_behind: receiver.map_or(0, |r| r.slices_behind),
+                    loss: receiver.map_or(0.0, |r| r.unrecovered_loss),
+                    naks: receiver.map_or(0, |r| r.naks),
+                    sink_stall_ms: receiver.map_or(0, |r| r.sink_stall_ms),
+                }
+            })
+            .collect()
     }
 }
 
@@ -390,21 +476,22 @@ struct TransferStep {
 }
 
 impl TransferStep {
-    fn progress(&self, state: &TransferState) -> MulticastProgress {
+    fn progress(&self, state: &TransferState, targets: &Targets) -> MulticastProgress {
         let sent = self.bytes_before + state.bytes_sent();
         let left = self.total_bytes.saturating_sub(sent);
         let bytes_per_second = state.bytes_per_second();
         MulticastProgress {
             task_id: self.task_id,
+            phase: state.phase.into(),
             fraction: match self.total_bytes {
                 0 => 0.0,
                 total => (sent as f64 / total as f64).min(1.0),
             },
             bytes_per_second,
-            receivers: state.receivers.len(),
             step: self.step,
             steps: self.steps,
             eta: Duration::try_from_secs_f64(left as f64 / bytes_per_second).ok(),
+            hosts: targets.hosts(state),
         }
     }
 }
@@ -558,21 +645,24 @@ mod tests {
         }
     }
 
+    fn no_targets() -> Targets {
+        Targets::new(Vec::new(), &[])
+    }
+
     #[test]
     fn progress_covers_the_whole_task_rather_than_the_file_being_sent() {
-        let reported = step(1000, 4000).progress(&sending_state(10, 5.0));
+        let reported = step(1000, 4000).progress(&sending_state(10, 5.0), &no_targets());
 
         assert_eq!(reported.task_id, 4);
         assert_eq!(reported.fraction, 0.5);
         assert_eq!(reported.bytes_per_second, 500.0);
         assert_eq!(reported.eta, Some(Duration::from_secs(4)));
         assert_eq!((reported.step, reported.steps), (2, 3));
-        assert_eq!(reported.receivers, 1);
     }
 
     #[test]
     fn a_stalled_transfer_reports_progress_without_an_eta() {
-        let reported = step(1000, 4000).progress(&sending_state(0, 0.0));
+        let reported = step(1000, 4000).progress(&sending_state(0, 0.0), &no_targets());
 
         assert_eq!(reported.fraction, 0.25);
         assert_eq!(reported.eta, None);
@@ -580,8 +670,52 @@ mod tests {
 
     #[test]
     fn progress_stays_in_range_when_sizes_are_unknown_or_overshot() {
-        assert_eq!(step(0, 0).progress(&sending_state(10, 1.0)).fraction, 0.0);
-        assert_eq!(step(0, 500).progress(&sending_state(10, 1.0)).fraction, 1.0);
+        let fraction =
+            |s: TransferStep| s.progress(&sending_state(10, 1.0), &no_targets()).fraction;
+        assert_eq!(fraction(step(0, 0)), 0.0);
+        assert_eq!(fraction(step(0, 500)), 1.0);
+    }
+
+    #[test]
+    fn each_participant_is_reported_with_its_receiver_and_the_one_holding_the_transfer_up() {
+        let targets = Targets::new(
+            vec![
+                host(7, "10.0.0.1"),
+                host(8, "10.0.0.2"),
+                host(9, "10.0.0.9"),
+            ],
+            &[7, 8, 9],
+        );
+        let mut stalled = receiver_state(22, "10.0.0.2:5000");
+        stalled.sink_stall_ms = 80;
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000"), stalled],
+            limiting: LimitingFactor::SinkStalled {
+                receiver: 22,
+                stall_ms: 80,
+            },
+            ..TransferState::default()
+        };
+
+        let hosts = targets.hosts(&state);
+        let row = |id: i64| hosts.iter().find(|h| h.host_id == id).unwrap();
+
+        assert!(row(7).joined && !row(7).limiting);
+        assert!(row(8).joined && row(8).limiting);
+        assert_eq!(row(8).sink_stall_ms, 80);
+        assert!(!row(9).joined && !row(9).limiting);
+    }
+
+    #[test]
+    fn hosts_sharing_an_address_are_never_matched_to_a_receiver() {
+        let targets = Targets::new(vec![host(7, "10.0.0.1"), host(8, "10.0.0.1")], &[7, 8]);
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000")],
+            ..TransferState::default()
+        };
+
+        assert!(targets.hosts(&state).iter().all(|h| !h.joined));
+        assert!(targets.host_at("10.0.0.1".parse().unwrap()).is_none());
     }
 
     #[test]
@@ -612,9 +746,9 @@ mod tests {
         (c, TestDir(dir))
     }
 
-    async fn db_host(c: &DIContainer, mac: &str) -> i64 {
+    async fn db_host(c: &DIContainer, mac: &str, ip: Option<&str>) -> i64 {
         c.host_repo
-            .upsert_host(mac.to_string(), 1_000_000, None)
+            .upsert_host(mac.to_string(), 1_000_000, ip.map(Into::into))
             .await
             .unwrap()
             .id
@@ -638,8 +772,8 @@ mod tests {
         image.id
     }
 
-    fn receive(task_id: i64, slot: i64) -> JoinHandle<Vec<u8>> {
-        let receiver = Receiver::builder()
+    fn receiver(task_id: i64, slot: i64) -> Receiver {
+        Receiver::builder()
             .socket(
                 Ipv4Addr::LOCALHOST,
                 multicast_group(task_id),
@@ -647,7 +781,11 @@ mod tests {
             )
             .expect("bind receiver")
             .max_wait(SETTLE)
-            .build();
+            .build()
+    }
+
+    fn receive(task_id: i64, slot: i64) -> JoinHandle<Vec<u8>> {
+        let receiver = receiver(task_id, slot);
         tokio::spawn(async move {
             let mut received = Vec::new();
             receiver.recv_to(&mut received).await.expect("receive");
@@ -682,8 +820,8 @@ mod tests {
     async fn a_session_delivers_every_file_and_fails_only_hosts_that_disconnected() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let connected = db_host(&c, "aa:bb:cc:dd:ee:01").await;
-        let gone = db_host(&c, "aa:bb:cc:dd:ee:02").await;
+        let connected = db_host(&c, "aa:bb:cc:dd:ee:01", None).await;
+        let gone = db_host(&c, "aa:bb:cc:dd:ee:02", None).await;
         let mut registration = c.host_registry.register(connected);
         let parttable: Vec<u8> = (0..4096).map(|i| (i % 7) as u8).collect();
         let partition: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
@@ -720,8 +858,8 @@ mod tests {
     async fn cancelling_a_gathering_session_moves_on_to_the_next_task_in_queue_order() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let first_host = db_host(&c, "aa:bb:cc:dd:ee:03").await;
-        let second_host = db_host(&c, "aa:bb:cc:dd:ee:04").await;
+        let first_host = db_host(&c, "aa:bb:cc:dd:ee:03", None).await;
+        let second_host = db_host(&c, "aa:bb:cc:dd:ee:04", None).await;
         let image_id = image(&c, b"table", b"data").await;
         let first = c
             .task_repo
@@ -756,7 +894,7 @@ mod tests {
     async fn a_host_busy_with_another_task_is_failed_instead_of_left_running() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let busy = db_host(&c, "aa:bb:cc:dd:ee:07").await;
+        let busy = db_host(&c, "aa:bb:cc:dd:ee:07", None).await;
         let deploy = c
             .task_repo
             .create(TaskType::Deploy, vec![busy], None)
@@ -777,11 +915,59 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn kicking_a_host_evicts_its_receiver_and_reports_it_as_not_joined() {
+        let _session = SESSIONS.lock().await;
+        let (c, _dir) = container().await;
+        let kicked = db_host(&c, "aa:bb:cc:dd:ee:08", Some("127.0.0.1")).await;
+        let missing = db_host(&c, "aa:bb:cc:dd:ee:09", None).await;
+        let image_id = image(&c, b"table", b"data").await;
+        let task = c
+            .task_repo
+            .create(TaskType::Multicast, vec![kicked, missing], Some(image_id))
+            .await
+            .unwrap();
+        let receiving = tokio::spawn(receiver(task.id, 0).recv_to(Vec::new()));
+        let mut progress = c.multicast_manager.progress();
+
+        c.multicast_manager.wake();
+        let joined = |p: &Option<MulticastProgress>| {
+            p.as_ref()
+                .is_some_and(|p| p.hosts.iter().any(|h| h.host_id == kicked && h.joined))
+        };
+        tokio::time::timeout(SETTLE, progress.wait_for(joined))
+            .await
+            .unwrap()
+            .unwrap();
+
+        c.task_repo
+            .mark_failed(task.id, kicked, "kicked")
+            .await
+            .unwrap();
+        c.multicast_manager.wake();
+
+        let outcome = tokio::time::timeout(SETTLE, receiving)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(outcome, Err(ProtoError::Evicted(_))),
+            "{outcome:?}"
+        );
+        tokio::time::timeout(SETTLE, progress.wait_for(|p| !joined(p)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state_of(&c, task.id, missing).await, TaskState::Running);
+        c.task_repo.cancel(task.id).await.unwrap();
+        c.multicast_manager.wake();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn startup_fails_hosts_that_were_mid_transfer_but_keeps_queued_ones() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let interrupted = db_host(&c, "aa:bb:cc:dd:ee:05").await;
-        let queued = db_host(&c, "aa:bb:cc:dd:ee:06").await;
+        let interrupted = db_host(&c, "aa:bb:cc:dd:ee:05", None).await;
+        let queued = db_host(&c, "aa:bb:cc:dd:ee:06", None).await;
         let image_id = image(&c, b"table", b"data").await;
         let task = c
             .task_repo

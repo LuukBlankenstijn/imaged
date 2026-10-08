@@ -21,15 +21,42 @@ pub enum ConnectionUpdate {
     Changed(HostConnectionEvent),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferPhase {
+    Gathering,
+    Sending,
+    Draining,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MulticastProgress {
     pub task_id: i64,
+    pub phase: TransferPhase,
     pub fraction: f64,
     pub bytes_per_second: f64,
-    pub receivers: usize,
     pub step: usize,
     pub steps: usize,
     pub eta_seconds: Option<u64>,
+    pub hosts: Vec<ReceiverProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReceiverProgress {
+    pub host_id: i64,
+    pub name: String,
+    pub joined: bool,
+    pub limiting: bool,
+    pub slices_behind: u32,
+    pub loss: f64,
+    pub naks: u64,
+    pub sink_stall_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KickRequest {
+    pub task_id: i64,
+    pub host_id: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::model::Task;
+use crate::model::{KickRequest, Task};
 
 #[cfg(feature = "server")]
 use injectable::inject;
@@ -8,7 +8,7 @@ use injectable::inject;
 #[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::task::TaskType;
+use imaged_core::domain::task::{TaskState, TaskType};
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
 use imaged_shared::error::Result;
@@ -48,6 +48,26 @@ pub async fn cancel_task(id: i64) -> Result<()> {
     {
         registry.cancel_task(host.host_id, task.id);
     }
+    Ok(())
+}
+
+#[post("/api/ui/tasks/kick")]
+#[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr, registry: Registry)]
+pub async fn kick_host(req: KickRequest) -> Result<()> {
+    let KickRequest { task_id, host_id } = req;
+    let task = task_repo.get(task_id).await?;
+    if task.task_type != TaskType::Multicast
+        || !task.hosts_in(TaskState::Running).any(|h| h == host_id)
+    {
+        return Err(AppError::InvalidArgument(format!(
+            "cannot kick host {host_id} from task {task_id}, host is not receiving the multicast"
+        )));
+    }
+    task_repo
+        .mark_failed(task.id, host_id, "Kicked from the multicast by user")
+        .await?;
+    multicast_mgr.wake();
+    registry.cancel_task(host_id, task.id);
     Ok(())
 }
 

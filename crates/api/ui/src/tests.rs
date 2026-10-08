@@ -1146,3 +1146,52 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
     assert!(stream.is_ok());
 }
 
+#[tokio::test]
+async fn kicking_a_receiving_host_fails_only_that_host_and_tells_it_to_stop() {
+    let (c, _guard) = container().await;
+    let kicked = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:40".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let kept = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:41".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let img = c.image_repo.create_image("cast".into()).await.unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Multicast, vec![kicked.id, kept.id], Some(img.id))
+        .await
+        .unwrap();
+    let kick = |host_id| {
+        core::di::scope(
+            c.clone(),
+            crate::tasks::kick_host(model::KickRequest {
+                task_id: task.id,
+                host_id,
+            }),
+        )
+    };
+
+    let err = kick(kicked.id).await.unwrap_err();
+    assert!(
+        err.to_string().contains("not receiving"),
+        "unexpected error: {err}"
+    );
+
+    c.task_repo.start(task.id, kicked.id).await.unwrap();
+    c.task_repo.start(task.id, kept.id).await.unwrap();
+    let mut conn = c.host_registry.register(kicked.id);
+    kick(kicked.id).await.unwrap();
+
+    let after = c.task_repo.get(task.id).await.unwrap();
+    let state = |id: i64| after.hosts.iter().find(|h| h.host_id == id).unwrap().state;
+    assert_eq!(state(kicked.id), TaskState::Failed);
+    assert_eq!(state(kept.id), TaskState::Running);
+    match conn.receiver.try_recv() {
+        Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
+        other => panic!("kicked host expected Cancel event, got {other:?}"),
+    }
+}

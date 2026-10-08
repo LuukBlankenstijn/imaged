@@ -6,7 +6,7 @@ use imaged_shared::error::AppError;
 
 #[cfg(feature = "server")]
 use imaged_core::{
-    di::{HostRepo, ImageRepo, TaskRepo},
+    di::{HostRepo, ImageRepo, MulticastMgr, TaskRepo},
     domain::task::TaskType,
 };
 
@@ -40,7 +40,7 @@ pub async fn mark_finished(task_id: i64) -> Result {
     Ok(())
 }
 
-#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo)]
+#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
 #[post("/api/client/tasks/{task_id}/failed", agent: AgentInfo)]
 pub async fn mark_failed(task_id: i64, error: String) -> Result {
     let mac = &agent.mac;
@@ -58,6 +58,9 @@ pub async fn mark_failed(task_id: i64, error: String) -> Result {
     }
 
     task_repo.mark_failed(task.id, host_id, &error).await?;
+    if task.task_type == TaskType::Multicast {
+        multicast_mgr.wake();
+    }
 
     Ok(())
 }
