@@ -48,6 +48,14 @@ impl ImageService {
         Ok(relative_filepath)
     }
 
+    pub fn image_dir(&self, image_id: i64) -> String {
+        format!("{}/img-{}", self.images_path, image_id)
+    }
+
+    pub fn import_dir(&self, image_id: i64) -> String {
+        format!("{}/.import-{}", self.images_path, image_id)
+    }
+
     pub fn get_partition_table_path(&self, image_id: i64) -> String {
         format!("{}/img-{}/parttable.bin", self.images_path, image_id)
     }

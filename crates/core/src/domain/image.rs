@@ -43,9 +43,17 @@ pub struct ImagePartition {
     pub size_bytes: u64,
 }
 
+#[derive(Debug)]
+pub struct NewImagePartition {
+    pub partition_number: i64,
+    pub fstype: String,
+    pub size_bytes: u64,
+}
+
 #[async_trait::async_trait]
 pub trait ImageRepository: Send + Sync {
     async fn get_status(&self, id: i64) -> Result<ImageStatus>;
+    async fn get(&self, id: i64) -> Result<Image>;
     async fn create_image(&self, name: String) -> Result<Image>;
 
     async fn update_name(&self, id: i64, new_name: String) -> Result<Image>;
@@ -70,6 +78,15 @@ pub trait ImageRepository: Send + Sync {
 
     // marks the image as faulted
     async fn mark_faulted(&self, id: i64, error: &str) -> Result;
+
+    async fn start_import(&self, name: String) -> Result<Image>;
+
+    async fn finish_import(
+        &self,
+        id: i64,
+        captured_at: Option<DateTime<Utc>>,
+        partitions: &[NewImagePartition],
+    ) -> Result<Image>;
 
     // get partitions
     async fn get_partitions(&self, id: i64) -> Result<Vec<ImagePartition>>;

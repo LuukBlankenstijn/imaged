@@ -11,6 +11,7 @@ use crate::domain::image::ImageRepository;
 use crate::domain::task::TaskRepository;
 use crate::multicast::MulticastManager;
 use crate::registry::HostRegistry;
+use crate::service::archive::ArchiveService;
 use crate::service::image::ImageService;
 
 #[allow(clippy::too_many_arguments)]
@@ -22,6 +23,7 @@ pub struct DIContainer {
     pub group_repo: Arc<dyn GroupRepository>,
     pub host_registry: Arc<HostRegistry>,
     pub image_service: Arc<ImageService>,
+    pub archive_service: Arc<ArchiveService>,
     pub multicast_manager: Arc<MulticastManager>,
     pub bind_address: SocketAddr,
     pub agent_liveness: AgentLiveness,
@@ -35,6 +37,7 @@ register_injectable!(TaskRepo(Arc<dyn TaskRepository>), task_repo);
 register_injectable!(GroupRepo(Arc<dyn GroupRepository>), group_repo);
 register_injectable!(Registry(Arc<HostRegistry>), host_registry);
 register_injectable!(ImageSvc(Arc<ImageService>), image_service);
+register_injectable!(ArchiveSvc(Arc<ArchiveService>), archive_service);
 register_injectable!(MulticastMgr(Arc<MulticastManager>), multicast_manager);
 register_injectable!(BindAddress(SocketAddr), bind_address);
 register_injectable!(Liveness(AgentLiveness), agent_liveness);
