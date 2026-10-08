@@ -480,6 +480,16 @@ async fn post(uri: &str, body: serde_json::Value) -> Response {
     request(Method::POST, uri, Some(body)).await
 }
 
+async fn upload(uri: &str, body: Body) -> Response {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/octet-stream")
+        .body(body)
+        .unwrap();
+    ui_router().oneshot(request).await.unwrap()
+}
+
 async fn json<T: serde::de::DeserializeOwned>(response: Response) -> T {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -499,6 +509,7 @@ async fn ui_api_contracts() {
     deleting_a_capturing_image_cancels_its_task_and_succeeds(&c).await;
     multicast_creates_a_task_for_every_host(&c).await;
     waking_hosts_is_accepted(&c).await;
+    images_are_exported_and_imported_as_archives(&c).await;
 }
 
 async fn reads_are_get_only(c: &DIContainer) {
@@ -679,6 +690,57 @@ async fn waking_hosts_is_accepted(c: &DIContainer) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
+    let image = c
+        .image_repo
+        .create_image("golden image".into())
+        .await
+        .unwrap();
+    c.image_service
+        .save_partition_table(image.id, b"table")
+        .await
+        .unwrap();
+    std::fs::write(c.image_service.get_partition_path(image.id, 1), b"data").unwrap();
+    c.image_repo
+        .save_partition(image.id, 1, "ntfs", 4096)
+        .await
+        .unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
+
+    let response = get(&format!("/api/ui/images/{}/export", image.id)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "application/x-tar");
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"golden_image.imaged\""
+    );
+    let archive = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let response = upload("/api/ui/images/import", Body::from(archive)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let imported: model::Image = json(response).await;
+    assert_ne!(imported.id, image.id);
+    assert_eq!(imported.name, "golden image");
+    assert_eq!(imported.status, model::ImageStatus::Ready);
+    assert_eq!(imported.partitions.len(), 1);
+
+    let empty = c.image_repo.create_image("empty".into()).await.unwrap();
+    assert_eq!(
+        get(&format!("/api/ui/images/{}/export", empty.id))
+            .await
+            .status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+    assert_eq!(
+        upload("/api/ui/images/import", Body::from("not an archive"))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
 }
 
 #[tokio::test]
@@ -1145,4 +1207,3 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
     let stream = core::di::scope(c.clone(), crate::realtime::connection_state()).await;
     assert!(stream.is_ok());
 }
-

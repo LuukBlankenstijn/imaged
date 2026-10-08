@@ -11,10 +11,12 @@ imaged-shared = { workspace = true, features = ["serverfn"] }
 imaged-core = { path = "../../core", optional = true }
 tracing = { workspace = true, optional = true }
 wakey = { version = "0.4.1", optional = true }
+futures = { workspace = true, optional = true }
+tokio-util = { workspace = true, features = ["io"], optional = true }
 
 [features]
 default = []
-server = ["dioxus/server", "dep:imaged-core", "dep:tracing", "dep:wakey"]
+server = ["dioxus/server", "dep:imaged-core", "dep:tracing", "dep:wakey", "dep:futures", "dep:tokio-util"]
 
 [dev-dependencies]
 imaged-core = { path = "../../core", features = ["test-support"] }
