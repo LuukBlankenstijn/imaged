@@ -28,13 +28,15 @@ async-trait = "0.1.89"
 bytes = "1.11.1"
 tower-http = { version = "0.6.8", features = ["trace"] }
 socket2 = { version = "0.6", features = ["all"] }
-scuttlecast.workspace = true
-local-ip-address = "0.6.13"
 parking_lot = "0.12.5"
 async-tftp = "0.4.2"
 futures-lite = "2.6.1"
 astral-tokio-tar = { version = "0.7.0", default-features = false }
 sha2 = "0.10.9"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+scuttlecast.workspace = true
+local-ip-address = "0.6.13"
 
 [features]
 test-support = []

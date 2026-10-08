@@ -1,9 +1,4 @@
-use std::{
-    future::Future,
-    io,
-    net::SocketAddr,
-    path::{Component, Path},
-};
+use std::{future::Future, io, net::SocketAddr, path::Path};
 
 use async_tftp::{
     packet,
@@ -41,16 +36,15 @@ impl Handler for BootFiles {
         _client: &SocketAddr,
         path: &Path,
     ) -> Result<(Self::Reader, Option<u64>), packet::Error> {
-        let relative: std::path::PathBuf = path
-            .components()
-            .filter(|component| matches!(component, Component::Normal(_)))
-            .collect();
-        tracing::debug!(path = %relative.display(), "tftp read request");
+        let requested = path.to_string_lossy();
+        let relative = requested
+            .split(['/', '\\'])
+            .filter(|part| !matches!(*part, "" | "." | ".."))
+            .collect::<Vec<_>>()
+            .join("/");
+        tracing::debug!(path = %relative, "tftp read request");
 
-        let bytes = relative
-            .to_str()
-            .and_then(boot_file)
-            .ok_or(packet::Error::FileNotFound)?;
+        let bytes = boot_file(&relative).ok_or(packet::Error::FileNotFound)?;
         Ok((Cursor::new(bytes), Some(bytes.len() as u64)))
     }
 
@@ -81,6 +75,30 @@ impl TftpServer {
         tokio::select! {
             served = self.0.serve() => served.map_err(io::Error::other),
             () = shutdown => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn nested_boot_files_resolve_with_either_path_separator() {
+        let client = SocketAddr::from(([127, 0, 0, 1], 0));
+        for requested in [
+            "x86_64/vmlinuz",
+            "/x86_64/vmlinuz",
+            "x86_64\\vmlinuz",
+            "\\x86_64\\vmlinuz",
+        ] {
+            let (served, size) = BootFiles
+                .read_req_open(&client, Path::new(requested))
+                .await
+                .unwrap();
+
+            assert_eq!(served.into_inner(), Arch::X86_64.vmlinuz(), "{requested}");
+            assert_eq!(size, Some(Arch::X86_64.vmlinuz().len() as u64));
         }
     }
 }

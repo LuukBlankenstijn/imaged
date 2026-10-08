@@ -42,6 +42,10 @@ short grace period and then cuts off whatever connection is left, after which
 machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
 `Dashboard::Off`, `OnMachineListener` or `Separate(address)`.
 
+The server side (core, both API crates and the `server` library) also builds
+for Windows (`x86_64-pc-windows-gnu`). Multicast is Linux-only: on other
+platforms a multicast task fails with "multicast is only supported on Linux".
+
 Run (dev):
 
 ```sh
