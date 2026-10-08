@@ -135,29 +135,28 @@ fn ImportButton(on_imported: EventHandler<()>) -> Element {
 
     rsx! {
         label { class: "{classes} cursor-pointer", title: "Import an exported .imaged archive",
-            input {
-                r#type: "file",
-                accept: ".imaged",
-                class: "hidden",
-                disabled: importing(),
-                onchange: move |e| {
-                    let Some(file) = e.files().into_iter().next() else {
-                        return;
-                    };
-                    importing.set(true);
-                    spawn(async move {
-                        match import_image(file.into()).await {
-                            Ok(image) => toast_success("Image imported", image.name),
-                            Err(e) => toast_error("Import failed", e.to_string()),
-                        }
-                        importing.set(false);
-                        on_imported.call(());
-                    });
-                },
-            }
             if importing() {
                 Spinner { class: "w-4 h-4" }
             } else {
+                input {
+                    r#type: "file",
+                    accept: ".imaged",
+                    class: "hidden",
+                    onchange: move |e| {
+                        let Some(file) = e.files().into_iter().next() else {
+                            return;
+                        };
+                        importing.set(true);
+                        spawn(async move {
+                            match import_image(file.into()).await {
+                                Ok(image) => toast_success("Image imported", image.name),
+                                Err(e) => toast_error("Import failed", e.to_string()),
+                            }
+                            importing.set(false);
+                            on_imported.call(());
+                        });
+                    },
+                }
                 Icon { name: "upload", class: "w-4 h-4" }
             }
             "Import"
