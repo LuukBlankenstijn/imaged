@@ -2588,6 +2588,7 @@ dependencies = [
  "axum",
  "clap",
  "dioxus",
+ "futures",
  "imaged-api-client",
  "imaged-api-ui",
  "imaged-core",
@@ -2595,6 +2596,7 @@ dependencies = [
  "imaged-web",
  "reqwest",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tracing",
 ]

@@ -5,7 +5,7 @@ fn main() {
 
 #[cfg(feature = "server")]
 #[tokio::main]
-async fn main() -> Result<(), imaged_core::BoxError> {
+async fn main() -> std::io::Result<()> {
     use std::{net::SocketAddr, path::PathBuf};
 
     use clap::{Parser, builder::FalseyValueParser};

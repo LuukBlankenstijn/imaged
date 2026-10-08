@@ -127,7 +127,7 @@ pub fn router(public_url: &str) -> Router {
         .route("/boot/manifest.ipxe", get(manifest_ipxe))
         .route("/boot/{arch}/vmlinuz", get(serve_vmlinuz))
         .route("/boot/{arch}/initramfs.cpio.xz", get(serve_initramfs))
-        .with_state(Arc::from(public_url))
+        .with_state(Arc::from(public_url.trim_end_matches('/')))
 }
 
 #[cfg(test)]
@@ -206,6 +206,24 @@ mod tests {
             )),
             "{script}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_trailing_slash_on_the_public_url_does_not_double_the_path_separator() {
+        let resp = router(&format!("{PUBLIC_URL}/"))
+            .oneshot(
+                Request::builder()
+                    .uri("/boot/manifest.ipxe?arch=arm64")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let script = String::from_utf8(bytes.to_vec()).unwrap();
+        assert_common_ipxe_invariants(&script, "arm64");
     }
 
     #[tokio::test]

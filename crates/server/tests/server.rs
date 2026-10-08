@@ -1,19 +1,33 @@
 #![cfg(feature = "server")]
 
+use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use futures::StreamExt;
 use imaged_server::{Config, Dashboard, Imaged, Listeners};
 use reqwest::StatusCode;
+use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 const PUBLIC_URL: &str = "http://imaged.test:8080";
+
+type AgentStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 struct DataDir(PathBuf);
 
 impl Drop for DataDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn config(data_dir: &Path) -> Config {
+    Config {
+        data_dir: data_dir.to_path_buf(),
+        multicast_interface: "lo".to_string(),
     }
 }
 
@@ -31,13 +45,51 @@ fn free_udp_address() -> SocketAddr {
         .unwrap()
 }
 
-fn listeners(machine: SocketAddr, tftp: SocketAddr, dashboard: Dashboard) -> Listeners {
+fn listeners(machine: SocketAddr, tftp: Option<SocketAddr>, dashboard: Dashboard) -> Listeners {
     Listeners {
         machine,
         public_url: PUBLIC_URL.to_string(),
-        tftp: Some(tftp),
+        tftp,
         dashboard,
     }
+}
+
+fn connected_hosts() -> Vec<i64> {
+    imaged_core::di::current().host_registry.connected_hosts()
+}
+
+async fn connect_agent(address: SocketAddr) -> AgentStream {
+    let mut request = format!("ws://{address}/api/client/stream?disk_size_bytes=1")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("X-Agent-Mac", "02:00:00:00:00:01".parse().unwrap());
+    connect_async(request).await.unwrap().0
+}
+
+async fn closes_within_a_second(agent: &mut AgentStream) -> bool {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while let Some(Ok(message)) = agent.next().await {
+            if message.is_close() {
+                break;
+            }
+        }
+    })
+    .await
+    .is_ok()
+}
+
+async fn ends_within_a_second(mut response: reqwest::Response) -> bool {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while let Ok(Some(_)) = response.chunk().await {}
+    })
+    .await
+    .is_ok()
+}
+
+fn error_kind<T>(result: std::io::Result<T>) -> Option<ErrorKind> {
+    result.err().map(|error| error.kind())
 }
 
 struct Probe(reqwest::Client);
@@ -84,6 +136,14 @@ impl Probe {
         response.status() == StatusCode::OK
     }
 
+    async fn dashboard_progress(&self, address: SocketAddr) -> reqwest::Response {
+        self.0
+            .get(format!("http://{address}/api/ui/multicast-progress"))
+            .send()
+            .await
+            .unwrap()
+    }
+
     async fn refuses_connections(&self, address: SocketAddr) -> bool {
         self.0
             .get(format!("http://{address}/boot/boot.ipxe"))
@@ -97,42 +157,57 @@ impl Probe {
 async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_addresses() {
     let data_dir =
         DataDir(std::env::temp_dir().join(format!("imaged-server-handle-{}", std::process::id())));
-    let public_dir = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("public");
-    std::fs::create_dir_all(public_dir).unwrap();
+    let dashboard_assets = data_dir.0.join("public");
+    unsafe { std::env::set_var("DIOXUS_PUBLIC_PATH", &dashboard_assets) };
     let probe = Probe::new();
 
-    let imaged = Imaged::open(Config {
-        data_dir: data_dir.0.join("nested"),
-        multicast_interface: "lo".to_string(),
-    })
-    .await
-    .unwrap();
+    let blocked = data_dir.0.join("blocked");
+    std::fs::create_dir_all(&data_dir.0).unwrap();
+    std::fs::write(&blocked, b"").unwrap();
+    assert!(Imaged::open(config(&blocked)).await.is_err());
+    let imaged = Imaged::open(config(&data_dir.0.join("nested")))
+        .await
+        .unwrap();
     assert!(data_dir.0.join("nested/imaged.db").is_file());
     assert!(data_dir.0.join("nested/images").is_dir());
+    let second = data_dir.0.join("second");
+    assert_eq!(
+        error_kind(Imaged::open(config(&second)).await),
+        Some(ErrorKind::AlreadyExists)
+    );
+    assert!(!second.exists());
+
+    let unstarted = free_address();
+    assert_eq!(
+        error_kind(
+            imaged
+                .serve(listeners(unstarted, None, Dashboard::OnMachineListener))
+                .await
+        ),
+        Some(ErrorKind::NotFound)
+    );
+    assert!(probe.refuses_connections(unstarted).await);
+    std::fs::create_dir_all(&dashboard_assets).unwrap();
 
     let tftp = free_udp_address();
     let occupied = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let unstarted = free_address();
-    let refused = imaged
-        .serve(listeners(
-            unstarted,
-            tftp,
-            Dashboard::Separate(occupied.local_addr().unwrap()),
-        ))
-        .await;
     assert_eq!(
-        refused.err().map(|error| error.kind()),
-        Some(std::io::ErrorKind::AddrInUse)
+        error_kind(
+            imaged
+                .serve(listeners(
+                    unstarted,
+                    Some(tftp),
+                    Dashboard::Separate(occupied.local_addr().unwrap()),
+                ))
+                .await
+        ),
+        Some(ErrorKind::AddrInUse)
     );
     assert!(probe.refuses_connections(unstarted).await);
 
     let headless = free_address();
     let server = imaged
-        .serve(listeners(headless, tftp, Dashboard::Off))
+        .serve(listeners(headless, Some(tftp), Dashboard::Off))
         .await
         .unwrap();
     let script = probe.boot_script(headless).await.unwrap();
@@ -142,18 +217,34 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
     );
     assert!(probe.serves_agent_api(headless).await);
     assert!(!probe.serves_dashboard_api(headless).await);
+    assert_eq!(
+        error_kind(
+            imaged
+                .serve(listeners(free_address(), None, Dashboard::Off))
+                .await
+        ),
+        Some(ErrorKind::AlreadyExists)
+    );
     imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.unwrap();
 
+    let mut agent = connect_agent(headless).await;
+    assert_eq!(connected_hosts().len(), 1);
     let stopping = Instant::now();
     server.stop().await.unwrap();
     assert!(stopping.elapsed() < Duration::from_secs(1));
+    assert!(closes_within_a_second(&mut agent).await);
+    assert!(connected_hosts().is_empty());
     assert!(probe.refuses_connections(headless).await);
     assert!(imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.is_err());
 
     let machine = free_address();
     let dashboard = free_address();
     let server = imaged
-        .serve(listeners(machine, tftp, Dashboard::Separate(dashboard)))
+        .serve(listeners(
+            machine,
+            Some(tftp),
+            Dashboard::Separate(dashboard),
+        ))
         .await
         .unwrap();
     assert!(probe.boot_script(machine).await.is_some());
@@ -163,16 +254,22 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
     assert!(!probe.serves_agent_api(dashboard).await);
     assert!(probe.serves_dashboard_api(dashboard).await);
 
-    let endless_stream = probe
-        .0
-        .get(format!("http://{dashboard}/api/ui/multicast-progress"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(endless_stream.status(), StatusCode::OK);
+    let endless_stream = probe.dashboard_progress(dashboard).await;
     let stopping = Instant::now();
     server.stop().await.unwrap();
     assert!(stopping.elapsed() < Duration::from_secs(5));
+    assert!(ends_within_a_second(endless_stream).await);
     assert!(probe.refuses_connections(machine).await);
     assert!(probe.refuses_connections(dashboard).await);
+
+    let combined = free_address();
+    let server = imaged
+        .serve(listeners(combined, None, Dashboard::OnMachineListener))
+        .await
+        .unwrap();
+    assert!(probe.boot_script(combined).await.is_some());
+    assert!(probe.serves_agent_api(combined).await);
+    assert!(probe.serves_dashboard_api(combined).await);
+    server.stop().await.unwrap();
+    assert!(probe.refuses_connections(combined).await);
 }
