@@ -1,9 +1,9 @@
-use std::env;
+use std::sync::Arc;
 
 use axum::{
     Router,
     body::Body,
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::{Response, StatusCode, header},
     response::IntoResponse,
     routing::get,
@@ -58,20 +58,8 @@ pub struct BootParams {
     manufacturer: Option<String>,
 }
 
-fn get_dynamic_base() -> String {
-    let proto = if env::var("USE_HTTPS").is_ok() {
-        "https"
-    } else {
-        "http"
-    };
-    let public_base = env::var("PUBLIC_BASE").unwrap_or_else(|_| "localhost:8080".to_string());
-    format!("{}://{}", proto, public_base)
-}
-
 /// This ipxe script determines the machine type and chains into the manifest handler
-pub async fn bootstrap_ipxe() -> impl IntoResponse {
-    let base = get_dynamic_base();
-
+pub async fn bootstrap_ipxe(State(base): State<Arc<str>>) -> impl IntoResponse {
     let body = format!(
         "#!ipxe\n\
          chain {base}/boot/manifest.ipxe?arch=${{buildarch}}&product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
@@ -80,9 +68,10 @@ pub async fn bootstrap_ipxe() -> impl IntoResponse {
     ([("content-type", "text/plain; charset=utf-8")], body)
 }
 
-pub async fn manifest_ipxe(Query(params): Query<BootParams>) -> impl IntoResponse {
-    let base = get_dynamic_base();
-
+pub async fn manifest_ipxe(
+    State(base): State<Arc<str>>,
+    Query(params): Query<BootParams>,
+) -> impl IntoResponse {
     let product = params.product.as_deref().unwrap_or("");
     let manufacturer = params.manufacturer.as_deref().unwrap_or("");
 
@@ -132,12 +121,13 @@ async fn serve_initramfs(Path(arch): Path<Arch>) -> impl IntoResponse {
         .unwrap()
 }
 
-pub fn router() -> Router {
+pub fn router(public_url: &str) -> Router {
     Router::new()
         .route("/boot/boot.ipxe", get(bootstrap_ipxe))
         .route("/boot/manifest.ipxe", get(manifest_ipxe))
         .route("/boot/{arch}/vmlinuz", get(serve_vmlinuz))
         .route("/boot/{arch}/initramfs.cpio.xz", get(serve_initramfs))
+        .with_state(Arc::from(public_url))
 }
 
 #[cfg(test)]
@@ -152,8 +142,10 @@ mod tests {
     static ARM64_VMLINUZ: &[u8] = include_bytes!("../../../assets/arm64/vmlinuz");
     static ARM64_INITRAMFS: &[u8] = include_bytes!("../../../assets/arm64/initramfs.cpio.xz");
 
+    const PUBLIC_URL: &str = "https://imaged.example:8443";
+
     async fn get(uri: &str) -> Response<Body> {
-        router()
+        router(PUBLIC_URL)
             .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap()
@@ -170,6 +162,10 @@ mod tests {
 
     fn assert_common_ipxe_invariants(script: &str, arch: &str) {
         assert!(script.starts_with("#!ipxe\n"), "script: {script}");
+        assert!(
+            script.contains(&format!("set base {PUBLIC_URL}\n")),
+            "missing public url: {script}"
+        );
         assert!(
             script.lines().any(|l| l.trim() == "boot"),
             "missing boot line: {script}"
@@ -202,10 +198,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_hands_the_ipxe_build_arch_to_the_manifest() {
+    async fn bootstrap_chains_into_the_manifest_at_the_public_url_with_the_ipxe_build_arch() {
         let script = manifest_body("/boot/boot.ipxe").await;
         assert!(
-            script.contains("/boot/manifest.ipxe?arch=${buildarch}&"),
+            script.contains(&format!(
+                "chain {PUBLIC_URL}/boot/manifest.ipxe?arch=${{buildarch}}&"
+            )),
             "{script}"
         );
     }

@@ -1,39 +1,15 @@
-use imaged_web::App;
-
 #[cfg(not(feature = "server"))]
 fn main() {
-    dioxus::launch(App);
-}
-
-#[cfg(feature = "server")]
-const CLIENT_API_PREFIX: &str = "/api/client";
-
-/// Routes the subset of registered server functions whose path passes `keep`,
-/// so the agent API and the dashboard API can be bound to different ports.
-#[cfg(feature = "server")]
-fn server_fns(keep: impl Fn(&str) -> bool) -> axum::Router<dioxus::server::FullstackState> {
-    dioxus::server::ServerFunction::collect()
-        .into_iter()
-        .filter(|f| keep(f.path()))
-        .fold(axum::Router::new(), |router, f| {
-            router.route(f.path(), f.method_router())
-        })
+    dioxus::launch(imaged_web::App);
 }
 
 #[cfg(feature = "server")]
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::net::SocketAddr;
+async fn main() -> Result<(), imaged_core::BoxError> {
+    use std::{net::SocketAddr, path::PathBuf};
 
-    use clap::Parser;
-    use dioxus::server::{DioxusRouterExt, ServeConfig};
-    use imaged_core as core;
-    use imaged_core::di;
-
-    // Server functions self-register via `inventory` at load time, which only
-    // happens for crates actually linked into the binary.
-    use imaged_api_client as _;
-    use imaged_api_ui as _;
+    use clap::{Parser, builder::FalseyValueParser};
+    use imaged_server::{Config, Dashboard, Imaged, Listeners};
 
     #[derive(Parser)]
     #[command(version, about)]
@@ -48,65 +24,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         multicast_interface: String,
         #[arg(long)]
         tftp_bind_address: Option<SocketAddr>,
+        #[arg(long, default_value = ".")]
+        data_dir: PathBuf,
+        #[arg(long, env = "PUBLIC_BASE", default_value = "localhost:8080")]
+        public_base: String,
+        #[arg(long, env = "USE_HTTPS", value_parser = FalseyValueParser::new())]
+        use_https: bool,
     }
 
     let args = Args::parse();
     imaged_shared::setup_logging!(args.log_level, ["imaged_core"]);
 
-    let pool = core::setup_database("sqlite://imaged.db").await?;
-    let container = core::build_di_container(
-        pool,
-        "images".to_string(),
-        args.multicast_interface,
-        args.bind_address,
-    )
+    let scheme = if args.use_https { "https" } else { "http" };
+    let imaged = Imaged::open(Config {
+        data_dir: args.data_dir,
+        multicast_interface: args.multicast_interface,
+    })
     .await?;
+    let server = imaged
+        .serve(Listeners {
+            machine: args.bind_address,
+            public_url: format!("{scheme}://{}", args.public_base),
+            tftp: args.tftp_bind_address,
+            dashboard: args
+                .web_bind_address
+                .map_or(Dashboard::OnMachineListener, Dashboard::Separate),
+        })
+        .await?;
 
-    di::init_container(container);
-
-    let machine_router = core::pxe::router().merge(
-        server_fns(|path| path.starts_with(CLIENT_API_PREFIX))
-            .with_state(dioxus::server::FullstackState::headless()),
-    );
-
-    let web_router = server_fns(|path| !path.starts_with(CLIENT_API_PREFIX))
-        .serve_static_assets()
-        .fallback(axum::routing::get(
-            dioxus::server::FullstackState::render_handler,
-        ))
-        .with_state(dioxus::server::FullstackState::new(ServeConfig::new(), App));
-
-    let tftp_bind_address = args.tftp_bind_address;
-    let tftp = async move {
-        match tftp_bind_address {
-            Some(address) => core::tftp::serve(address).await,
-            None => std::future::pending().await,
-        }
-    };
-
-    let main_listener = core::bind(args.bind_address).await?;
-    match args.web_bind_address {
-        Some(web_bind_address) => {
-            let web_listener = core::bind(web_bind_address).await?;
-            tracing::info!(
-                bind_address = %args.bind_address,
-                web_bind_address = %web_bind_address,
-                "starting imaged-server"
-            );
-            tokio::try_join!(
-                core::serve(main_listener, machine_router),
-                core::serve(web_listener, web_router),
-                tftp,
-            )?;
-        }
-        None => {
-            tracing::info!(bind_address = %args.bind_address, "starting imaged-server");
-            tokio::try_join!(
-                core::serve(main_listener, machine_router.merge(web_router)),
-                tftp,
-            )?;
-        }
+    tokio::select! {
+        interrupted = tokio::signal::ctrl_c() => interrupted?,
+        () = server.failed() => {}
     }
-
+    server.stop().await?;
     Ok(())
 }

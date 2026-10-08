@@ -667,6 +667,7 @@ async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
 }
 
 async fn waking_hosts_is_accepted(c: &DIContainer) {
+    *c.machine_ip.write() = Some(std::net::Ipv4Addr::LOCALHOST.into());
     let host = c
         .host_repo
         .upsert_host("aa:bb:cc:dd:ee:18".into(), 1_000_000, None)
@@ -1062,6 +1063,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
 #[tokio::test]
 async fn waking_hosts_normalises_dashed_macs_and_tolerates_malformed_ones() {
     let (c, _guard) = container().await;
+    *c.machine_ip.write() = Some(std::net::Ipv4Addr::LOCALHOST.into());
     let dashed = c
         .host_repo
         .upsert_host("aa-bb-cc-dd-ee-2e".into(), 1_000_000, None)
@@ -1079,6 +1081,24 @@ async fn waking_hosts_normalises_dashed_macs_and_tolerates_malformed_ones() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn waking_hosts_is_refused_while_the_machine_listener_is_not_running() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:2f".into(), 1_000_000, None)
+        .await
+        .unwrap();
+
+    let err = core::di::scope(c.clone(), crate::hosts::wake_on_lan(vec![host.id]))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("machine listener is not running"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -1145,4 +1165,3 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
     let stream = core::di::scope(c.clone(), crate::realtime::connection_state()).await;
     assert!(stream.is_ok());
 }
-

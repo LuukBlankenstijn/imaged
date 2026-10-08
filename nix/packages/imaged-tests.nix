@@ -46,7 +46,7 @@ let
     strictDeps = true;
     cargoExtraArgs =
       "--workspace --exclude imaged-client "
-      + "--features imaged-api-client/server,imaged-api-ui/server";
+      + "--features imaged-api-client/server,imaged-api-ui/server,imaged-server/server";
     nativeBuildInputs = [
       pkg-config
       tailwindcss_4
