@@ -1,6 +1,7 @@
 pub mod di;
 pub mod domain;
 pub mod error;
+pub mod listener;
 pub mod multicast;
 pub mod pxe;
 pub mod registry;
@@ -10,11 +11,7 @@ pub mod tftp;
 
 use std::{future::Future, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
-use axum::{
-    Router,
-    serve::{Listener, ListenerExt},
-};
-use socket2::SockRef;
+use axum::{Router, serve::Listener};
 use sqlx::{
     SqlitePool,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -117,32 +114,6 @@ pub async fn build_test_container(dir: &Path) -> DIContainer {
         timeout: Duration::from_millis(600),
     };
     container
-}
-
-pub async fn bind(address: SocketAddr) -> std::io::Result<impl Listener<Addr = SocketAddr>> {
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    Ok(listener.tap_io(|stream| {
-        if let Err(e) = detect_dead_connections(SockRef::from(&*stream)) {
-            tracing::warn!(error = %e, "failed to set connection death timeout");
-        }
-    }))
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn detect_dead_connections(socket: SockRef<'_>) -> std::io::Result<()> {
-    socket.set_tcp_user_timeout(Some(DEAD_CONNECTION_TIMEOUT))
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn detect_dead_connections(socket: SockRef<'_>) -> std::io::Result<()> {
-    const PROBES: u32 = 3;
-    let probe_interval = DEAD_CONNECTION_TIMEOUT / (PROBES + 1);
-    socket.set_tcp_keepalive(
-        &socket2::TcpKeepalive::new()
-            .with_time(probe_interval)
-            .with_interval(probe_interval)
-            .with_retries(PROBES),
-    )
 }
 
 pub async fn serve(

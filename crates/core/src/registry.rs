@@ -137,6 +137,14 @@ impl HostRegistry {
         }
     }
 
+    pub fn disconnect_all(&self) {
+        let mut hosts = self.hosts.write();
+        for id in hosts.map.drain().map(|(id, _)| id) {
+            tracing::debug!(id, "disconnecting host");
+            let _ = self.broadcast.send(HostConnectionEvent::new(id, false));
+        }
+    }
+
     pub fn cancel_task(&self, host_id: i64, task_id: i64) {
         let hosts = self.hosts.read();
         if let Some(entry) = hosts.map.get(&host_id) {
@@ -295,6 +303,32 @@ mod tests {
         assert!(registry.connected_hosts().is_empty());
 
         registry.deregister(999);
+        assert_quiet(&mut feed).await;
+    }
+
+    #[tokio::test]
+    async fn disconnect_all_ends_every_host_stream_and_broadcasts_each_disconnect() {
+        let registry = Arc::new(HostRegistry::default());
+        let mut first = registry.register(3);
+        let mut second = registry.register(4);
+        let mut feed = watch(&registry, &[3, 4]).await;
+
+        registry.disconnect_all();
+
+        assert!(first.receiver.recv().await.is_none());
+        assert!(second.receiver.recv().await.is_none());
+        let mut disconnected = [change(&mut feed).await, change(&mut feed).await];
+        disconnected.sort_unstable_by_key(|event| event.id);
+        assert_eq!(
+            disconnected
+                .iter()
+                .map(|event| (event.id, event.connected))
+                .collect::<Vec<_>>(),
+            [(3, false), (4, false)]
+        );
+        assert!(registry.connected_hosts().is_empty());
+
+        drop(first);
         assert_quiet(&mut feed).await;
     }
 
