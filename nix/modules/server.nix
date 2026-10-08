@@ -46,6 +46,12 @@ in
       example = "0.0.0.0:69";
       description = "host:port for the built-in TFTP server serving iPXE, kernels and initramfs; disabled when null.";
     };
+    publicBase = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "192.168.100.1:8080";
+      description = "host:port that iPXE scripts point booting machines at; the binary's default (localhost:8080) when null.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -61,7 +67,7 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server --data-dir ${cfg.dataDir} --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}";
+        ExecStart = "${cfg.package}/bin/imaged-server --data-dir ${cfg.dataDir} --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}${optionalString (cfg.publicBase != null) " --public-base ${cfg.publicBase}"}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";
