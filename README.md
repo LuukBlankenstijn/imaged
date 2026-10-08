@@ -13,6 +13,14 @@ tasks, the in-memory host connection registry, the multicast manager, image
 storage, DI wiring, and the PXE routes. Image partitions are stored on disk
 under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
+Images can be exported and imported as `.imaged` archives: an uncompressed tar
+holding `manifest.json` (name, capture date, partitions and a sha256 per file),
+`parttable.bin` and one `p-<n>.pcl` per partition
+(`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An import
+stays `importing` until every checksum matches and then turns `ready`; a
+rejected import turns `faulted`, and one cut short by a crash is marked faulted
+the next time the server opens its data dir.
+
 ### `crates/web` — `imaged-web`
 
 Dioxus fullstack library that renders the dashboard (hydrated wasm client) and
@@ -63,7 +71,7 @@ optional `--web-bind-address` serves the dashboard on a separate socket. The
 database and images live in `--data-dir` (default: the working directory). iPXE
 scripts point machines at `--public-base` (`PUBLIC_BASE`, default
 `localhost:8080`), over HTTPS when `--use-https` is passed or `USE_HTTPS` is
-truthy (anything but empty, `0`, `false`, `no` or `off`).
+truthy (anything but empty, `0`, `f`, `false`, `n`, `no` or `off`).
 
 ### `crates/client` — `imaged-client`
 
