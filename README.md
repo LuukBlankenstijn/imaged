@@ -127,6 +127,17 @@ it becomes the image's root partition, otherwise it is left unset for the
 dashboard to choose. Archives carry it as the optional `root_partition`
 manifest field.
 
+A deploy (`POST /api/ui/hosts/deploy`) or multicast
+(`POST /api/ui/groups/multicast`) of an image with scripts takes the input
+values as `inputs: { shared: { name: value }, per_machine: { host_id: { name:
+value } } }`: shared inputs come from `shared`, per-machine inputs from each
+host's entry. Before any task is created the values are checked (unknown or
+misplaced names, required values, numbers, choices) and an empty value falls
+back to the input's default; a rejected request is a 400, and an image with
+scripts but no root partition is refused with a 412. The resolved values are
+stored with each task host, so a retried or reconnecting host gets the same
+ones.
+
 After a deploy or multicast has restored every partition, the client fetches
 the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
 any, mounts the root partition under `/tmp/imaged-root`, then every entry of

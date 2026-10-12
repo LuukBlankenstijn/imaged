@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,12 +120,24 @@ pub struct UpdateName {
 pub struct DeployRequest {
     pub id: i64,
     pub image_id: i64,
+    #[serde(default)]
+    pub inputs: DeployInputs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MulticastRequest {
     pub host_ids: Vec<i64>,
     pub image_id: i64,
+    #[serde(default)]
+    pub inputs: DeployInputs,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeployInputs {
+    #[serde(default)]
+    pub shared: BTreeMap<String, String>,
+    #[serde(default)]
+    pub per_machine: BTreeMap<i64, BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -538,7 +538,7 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
                                             let Some(image_id) = image_id else { return };
                                             match group_host_ids(group_id).await {
                                                 Ok(ids) if !ids.is_empty() => {
-                                                    match multicast(MulticastRequest { host_ids: ids, image_id }).await {
+                                                    match multicast(MulticastRequest { host_ids: ids, image_id, inputs: Default::default() }).await {
                                                         Ok(_) => on_done.call(()),
                                                         Err(err) => toast_error("Multicast failed", err.to_string()),
                                                     }

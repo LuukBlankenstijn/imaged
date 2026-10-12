@@ -10,9 +10,12 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::image::ImageStatus;
+use core::domain::script::{InputKind, NewScript, ScriptInput};
 use core::domain::task::TaskState;
 use core::domain::task::TaskType;
+use core::error::AppError;
 use imaged_shared::ServerEvent;
+use std::collections::BTreeMap;
 
 use crate::model;
 
@@ -124,6 +127,7 @@ async fn deploy_creates_deploy_task() {
         crate::hosts::deploy(model::DeployRequest {
             id: host.id,
             image_id: img.id,
+            inputs: Default::default(),
         }),
     )
     .await
@@ -846,11 +850,21 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
         .upsert_host("aa:bb:cc:dd:ee:19".into(), 1_000_000, None)
         .await
         .unwrap();
-    let task = c
-        .task_repo
-        .create(TaskType::Deploy, vec![host.id], Some(image.id))
-        .await
-        .unwrap();
+    let rejected = post(
+        "/api/ui/hosts/deploy",
+        serde_json::json!({ "req": { "id": host.id, "image_id": image.id, "inputs": { "shared": { "colour": "red" } } } }),
+    )
+    .await;
+    assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    assert!(c.task_repo.get_next(host.id).await.unwrap().is_none());
+
+    let response = post(
+        "/api/ui/hosts/deploy",
+        serde_json::json!({ "req": { "id": host.id, "image_id": image.id } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let task: model::Task = json(response).await;
     c.task_repo
         .start_script_run(task.id, host.id, 0, "hostname")
         .await
@@ -1231,6 +1245,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
         crate::hosts::deploy(model::DeployRequest {
             id: online.id,
             image_id: img.id,
+            inputs: Default::default(),
         }),
     )
     .await
@@ -1248,6 +1263,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
         crate::hosts::deploy(model::DeployRequest {
             id: offline.id,
             image_id: img.id,
+            inputs: Default::default(),
         }),
     )
     .await
@@ -1326,6 +1342,7 @@ async fn multicast_hands_one_task_to_registered_members_when_its_session_starts(
         crate::groups::multicast(model::MulticastRequest {
             host_ids: vec![first.id, second.id, absent.id],
             image_id: img.id,
+            inputs: Default::default(),
         }),
     )
     .await
@@ -1360,4 +1377,145 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
 
     let stream = core::di::scope(c.clone(), crate::realtime::connection_state()).await;
     assert!(stream.is_ok());
+}
+
+async fn scripted_image(c: &DIContainer, root: Option<i64>, inputs: Vec<ScriptInput>) -> i64 {
+    let image = c.image_repo.create_image("scripted".into()).await.unwrap();
+    c.image_repo
+        .save_partition(image.id, 2, "ext4", 4096)
+        .await
+        .unwrap();
+    c.image_repo
+        .set_root_partition(image.id, root)
+        .await
+        .unwrap();
+    let script = c
+        .script_repo
+        .create(&NewScript {
+            name: "setup".into(),
+            body: "echo".into(),
+            inputs,
+        })
+        .await
+        .unwrap();
+    c.script_repo
+        .set_for_image(image.id, &[script.id])
+        .await
+        .unwrap();
+    image.id
+}
+
+fn text_input(name: &str, per_machine: bool) -> ScriptInput {
+    ScriptInput {
+        name: name.into(),
+        label: name.into(),
+        kind: InputKind::Text,
+        required: true,
+        default_value: None,
+        per_machine,
+        choices: Vec::new(),
+    }
+}
+
+fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_without_a_task() {
+    let (c, _guard) = container().await;
+    let a = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:41".into(), 1_000_000, None)
+        .await
+        .unwrap()
+        .id;
+    let b = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:42".into(), 1_000_000, None)
+        .await
+        .unwrap()
+        .id;
+    let mut mode = text_input("mode", false);
+    mode.kind = InputKind::Choice;
+    mode.choices = vec!["fast".into(), "safe".into()];
+    mode.default_value = Some("safe".into());
+    let image = scripted_image(
+        &c,
+        Some(2),
+        vec![
+            text_input("site", false),
+            text_input("hostname", true),
+            mode,
+        ],
+    )
+    .await;
+    let request = |per_machine: BTreeMap<i64, BTreeMap<String, String>>| model::MulticastRequest {
+        host_ids: vec![a, b],
+        image_id: image,
+        inputs: model::DeployInputs {
+            shared: values(&[("site", "lab")]),
+            per_machine,
+        },
+    };
+
+    let err = core::di::scope(
+        c.clone(),
+        crate::groups::multicast(request(BTreeMap::from([(
+            a,
+            values(&[("hostname", "pc-a")]),
+        )]))),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, AppError::InvalidArgument(_)), "{err:?}");
+    assert!(c.task_repo.get_all().await.unwrap().is_empty());
+
+    core::di::scope(
+        c.clone(),
+        crate::groups::multicast(request(BTreeMap::from([
+            (a, values(&[("hostname", "pc-a")])),
+            (b, values(&[("hostname", "pc-b")])),
+        ]))),
+    )
+    .await
+    .unwrap();
+
+    let task = c.task_repo.get_next(a).await.unwrap().unwrap();
+    assert_eq!(
+        c.task_repo.get_inputs(task.id, a).await.unwrap(),
+        values(&[("hostname", "pc-a"), ("mode", "safe"), ("site", "lab")])
+    );
+    assert_eq!(
+        c.task_repo.get_inputs(task.id, b).await.unwrap(),
+        values(&[("hostname", "pc-b"), ("mode", "safe"), ("site", "lab")])
+    );
+}
+
+#[tokio::test]
+async fn an_image_with_scripts_but_no_root_partition_is_not_deployed() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:43".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let image = scripted_image(&c, None, Vec::new()).await;
+
+    let err = core::di::scope(
+        c.clone(),
+        crate::hosts::deploy(model::DeployRequest {
+            id: host.id,
+            image_id: image,
+            inputs: Default::default(),
+        }),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, AppError::FailedPrecondition(_)), "{err:?}");
+    assert!(c.task_repo.get_next(host.id).await.unwrap().is_none());
 }

@@ -3,6 +3,7 @@ use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::str::FromStr as _;
 
 #[derive(Debug, Clone, Copy, Display, FromStr, IsVariant, PartialEq)]
@@ -144,6 +145,15 @@ pub trait TaskRepository: Send + Sync {
         task_type: TaskType,
         host_ids: Vec<i64>,
         image_id: Option<i64>,
+    ) -> Result<Task>;
+
+    // create a new task with each host's script input values
+    async fn create_with_inputs(
+        &self,
+        task_type: TaskType,
+        host_ids: Vec<i64>,
+        image_id: Option<i64>,
+        inputs: &BTreeMap<i64, InputValues>,
     ) -> Result<Task>;
 
     // gets the next task for a host. This takes Pending and Running host rows into account

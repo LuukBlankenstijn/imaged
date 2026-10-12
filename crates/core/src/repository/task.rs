@@ -1,6 +1,8 @@
 use crate::domain::script::InputValues;
 use crate::domain::task::{ScriptRun, Task, TaskHost, TaskRepository, TaskState, TaskType};
 use crate::error::{AppError, Result};
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
 use sqlx::SqlitePool;
@@ -45,6 +47,17 @@ impl TaskRepository for SqliteTaskRepository {
         host_ids: Vec<i64>,
         image_id: Option<i64>,
     ) -> Result<Task> {
+        self.create_with_inputs(task_type, host_ids, image_id, &BTreeMap::new())
+            .await
+    }
+
+    async fn create_with_inputs(
+        &self,
+        task_type: TaskType,
+        host_ids: Vec<i64>,
+        image_id: Option<i64>,
+        inputs: &BTreeMap<i64, InputValues>,
+    ) -> Result<Task> {
         let type_str = task_type.to_string();
         let pending_str = TaskState::Pending.to_string();
         let now = Utc::now();
@@ -73,6 +86,17 @@ impl TaskRepository for SqliteTaskRepository {
             )
             .execute(&mut *tx)
             .await?;
+            for (name, value) in inputs.get(host_id).into_iter().flatten() {
+                sqlx::query!(
+                    "INSERT INTO task_host_inputs (task_id, host_id, name, value) VALUES (?, ?, ?, ?)",
+                    task.id,
+                    host_id,
+                    name,
+                    value
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
 

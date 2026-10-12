@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_host_inputs (task_id, host_id, name, value) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "5a1188970b7575394b2c50491d08e3a2df6c64262288e068ec38a86a7882664b"
+}

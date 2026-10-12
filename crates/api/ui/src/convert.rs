@@ -3,8 +3,8 @@ use imaged_core::domain::{
     host::Host as DHost,
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
     script::{
-        InputKind as DInputKind, NewScript as DNewScript, Script as DScript,
-        ScriptInput as DScriptInput,
+        DeployInputs as DDeployInputs, InputKind as DInputKind, NewScript as DNewScript,
+        Script as DScript, ScriptInput as DScriptInput,
     },
     task::{
         ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskState as DState,
@@ -237,6 +237,15 @@ impl From<DScriptRun> for model::ScriptRun {
             exit_code: r.exit_code,
             started_at: r.started_at.timestamp_millis(),
             finished_at: r.finished_at.map(|t| t.timestamp_millis()),
+        }
+    }
+}
+
+impl From<model::DeployInputs> for DDeployInputs {
+    fn from(i: model::DeployInputs) -> Self {
+        Self {
+            shared: i.shared,
+            per_machine: i.per_machine,
         }
     }
 }

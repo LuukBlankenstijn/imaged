@@ -1037,7 +1037,22 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output(c: &DICo
         .set_root_partition(image_id, Some(2))
         .await
         .unwrap();
-    let (host, task) = host_task(c, &mac, TaskType::Deploy, Some(image_id)).await;
+    let host = c
+        .host_repo
+        .upsert_host(mac.clone(), 1_000_000, None)
+        .await
+        .unwrap()
+        .id;
+    let stored = std::collections::BTreeMap::from([(
+        host,
+        std::collections::BTreeMap::from([("note".to_string(), "hi".to_string())]),
+    )]);
+    let task = c
+        .task_repo
+        .create_with_inputs(TaskType::Deploy, vec![host], Some(image_id), &stored)
+        .await
+        .unwrap()
+        .id;
     c.task_repo.start(task, host).await.unwrap();
 
     let response = get(&format!("/api/client/tasks/{task}/scripts"), &mac).await;
@@ -1064,7 +1079,10 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output(c: &DICo
         .collect();
     assert_eq!(
         scripts,
-        vec![(0, true, vec![("site", "lab")]), (1, true, vec![])]
+        vec![
+            (0, true, vec![("note", "hi"), ("site", "lab")]),
+            (1, true, vec![])
+        ]
     );
     let first_name = plan.scripts[0].name.clone();
     let second_name = plan.scripts[1].name.clone();

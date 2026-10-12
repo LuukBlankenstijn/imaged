@@ -391,7 +391,7 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                                                 let Some(image_id) = image_id else {
                                                     return;
                                                 };
-                                                match deploy(DeployRequest { id: host_id, image_id }).await {
+                                                match deploy(DeployRequest { id: host_id, image_id, inputs: Default::default() }).await {
                                                     Ok(_) => on_deployed.call(()),
                                                     Err(err) => toast_error("Deploy failed", err.to_string()),
                                                 }
