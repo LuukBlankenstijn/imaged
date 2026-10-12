@@ -14,6 +14,7 @@ use tokio_tar::{Archive, Builder, Entry, EntryType, Header};
 use tokio_util::io::ReaderStream;
 
 use crate::domain::image::{Image, ImageRepository, NewImagePartition};
+use crate::domain::script::{NewScript, ScriptInput, ScriptRepository, validate_script_name};
 use crate::error::{AppError, Result};
 use crate::service::image::ImageService;
 
@@ -22,6 +23,8 @@ const MANIFEST_FILE: &str = "manifest.json";
 const PARTITION_TABLE_FILE: &str = "parttable.bin";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_PARTITION_TABLE_BYTES: u64 = 1024 * 1024;
+const SCRIPTS_DIR: &str = "scripts";
+const MAX_SCRIPT_BYTES: u64 = 1024 * 1024;
 const INTERRUPTED_IMPORT_ERROR: &str = "import interrupted";
 const CHUNK_BYTES: usize = 256 * 1024;
 
@@ -37,6 +40,18 @@ struct Manifest {
     captured_at: Option<DateTime<Utc>>,
     partition_table: ArchivedFile,
     partitions: Vec<ArchivedPartition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_partition: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scripts: Vec<ArchivedScript>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ArchivedScript {
+    name: String,
+    file: String,
+    sha256: String,
+    inputs: Vec<ScriptInput>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -88,6 +103,32 @@ impl Manifest {
                 )));
             }
         }
+        if let Some(root) = self.root_partition
+            && !self.partitions.iter().any(|p| p.number == root)
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "root partition {root} is not one of the archived partitions"
+            )));
+        }
+        for script in &self.scripts {
+            validate_script_name(&script.name)?;
+            for input in &script.inputs {
+                input.validate()?;
+            }
+            let expected_file = script_file(&script.name);
+            if script.file != expected_file {
+                return Err(AppError::InvalidArgument(format!(
+                    "script `{}` must be stored as {expected_file}, not `{}`",
+                    script.name, script.file
+                )));
+            }
+            if checksums.insert(&script.file, &script.sha256).is_some() {
+                return Err(AppError::InvalidArgument(format!(
+                    "script `{}` is listed twice",
+                    script.name
+                )));
+            }
+        }
         Ok(checksums)
     }
 
@@ -133,12 +174,14 @@ impl HashedFile {
 
 pub struct ArchiveService {
     image_repo: Arc<dyn ImageRepository>,
+    script_repo: Arc<dyn ScriptRepository>,
     image_service: Arc<ImageService>,
 }
 
 impl ArchiveService {
     pub async fn start(
         image_repo: Arc<dyn ImageRepository>,
+        script_repo: Arc<dyn ScriptRepository>,
         image_service: Arc<ImageService>,
     ) -> Result<Self> {
         image_repo
@@ -147,6 +190,7 @@ impl ArchiveService {
         image_service.clear_import_dirs().await?;
         Ok(Self {
             image_repo,
+            script_repo,
             image_service,
         })
     }
@@ -176,6 +220,7 @@ impl ArchiveService {
                 .get_partition_path(image_id, partition.partition_number);
             partition_files.push(HashedFile::open(path).await?);
         }
+        let scripts = self.script_repo.get_for_image(image_id).await?;
 
         let manifest = Manifest {
             format: FORMAT,
@@ -195,6 +240,16 @@ impl ArchiveService {
                     size_bytes: partition.size_bytes,
                     file: partition_file(partition.partition_number),
                     sha256: hashed.sha256.clone(),
+                })
+                .collect(),
+            root_partition: image.root_partition,
+            scripts: scripts
+                .iter()
+                .map(|script| ArchivedScript {
+                    file: script_file(&script.name),
+                    sha256: format!("{:x}", Sha256::digest(&script.body)),
+                    name: script.name.clone(),
+                    inputs: script.inputs.clone(),
                 })
                 .collect(),
         };
@@ -219,6 +274,10 @@ impl ArchiveService {
         .await?;
         for (archived, hashed) in manifest.partitions.iter().zip(partition_files) {
             append(&mut builder, &archived.file, hashed.len, hashed.file).await?;
+        }
+        for (archived, script) in manifest.scripts.iter().zip(&scripts) {
+            let body = script.body.as_bytes();
+            append(&mut builder, &archived.file, body.len() as u64, body).await?;
         }
         let mut writer = builder.into_inner().await.map_err(write_failed)?;
         writer.shutdown().await.map_err(write_failed)
@@ -250,7 +309,7 @@ impl ArchiveService {
         let image = self.image_repo.start_import(manifest.name.clone()).await?;
 
         match self
-            .receive(image.id, &manifest, checksums, &mut entries)
+            .receive(image.id, &manifest, checksums, entries, archive)
             .await
         {
             Ok(imported) => Ok(imported),
@@ -261,14 +320,16 @@ impl ArchiveService {
         }
     }
 
-    async fn receive<A, S>(
+    async fn receive<R, A, S>(
         &self,
         image_id: i64,
         manifest: &Manifest,
         checksums: BTreeMap<&str, &str>,
-        entries: &mut S,
+        mut entries: S,
+        archive: Archive<R>,
     ) -> Result<Image>
     where
+        R: AsyncRead + Unpin,
         A: AsyncRead + Unpin,
         S: Stream<Item = io::Result<Entry<A>>> + Unpin,
     {
@@ -276,12 +337,35 @@ impl ArchiveService {
         tokio::fs::create_dir_all(&import_dir)
             .await
             .map_err(store_failed)?;
-        unpack(entries, Path::new(&import_dir), checksums).await?;
+        let mut bodies = unpack(&mut entries, Path::new(&import_dir), checksums).await?;
+        drop(entries);
+        read_to_end(archive).await?;
         tokio::fs::rename(&import_dir, self.image_service.image_dir(image_id))
             .await
             .map_err(store_failed)?;
+        let scripts = manifest
+            .scripts
+            .iter()
+            .map(|archived| {
+                Ok(NewScript {
+                    name: archived.name.clone(),
+                    body: bodies.remove(&archived.file).ok_or_else(|| {
+                        AppError::InvalidArgument(format!("archive is missing `{}`", archived.file))
+                    })?,
+                    inputs: archived.inputs.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.script_repo
+            .import_for_image(image_id, &scripts)
+            .await?;
         self.image_repo
-            .finish_import(image_id, manifest.captured_at, &manifest.partitions())
+            .finish_import(
+                image_id,
+                manifest.captured_at,
+                &manifest.partitions(),
+                manifest.root_partition,
+            )
             .await
     }
 
@@ -319,6 +403,15 @@ pub fn archive_file_name(image_name: &str) -> String {
 
 fn partition_file(number: i64) -> String {
     format!("p-{number}.pcl")
+}
+
+fn script_file(name: &str) -> String {
+    format!("{SCRIPTS_DIR}/{name}.sh")
+}
+
+fn is_script_file(name: &str) -> bool {
+    name.strip_prefix(SCRIPTS_DIR)
+        .is_some_and(|rest| rest.starts_with('/'))
 }
 
 async fn append<W, R>(builder: &mut Builder<W>, name: &str, len: u64, data: R) -> Result
@@ -375,12 +468,32 @@ where
     serde_json::from_slice(&json).map_err(invalid_manifest)
 }
 
-async fn unpack<A, S>(entries: &mut S, dir: &Path, checksums: BTreeMap<&str, &str>) -> Result
+async fn read_to_end<R>(archive: Archive<R>) -> Result
+where
+    R: AsyncRead + Unpin,
+{
+    let Ok(mut reader) = archive.into_inner() else {
+        return Err(AppError::Internal(
+            "archive reader is still in use after the last entry".to_string(),
+        ));
+    };
+    tokio::io::copy(&mut reader, &mut tokio::io::sink())
+        .await
+        .map_err(malformed)?;
+    Ok(())
+}
+
+async fn unpack<A, S>(
+    entries: &mut S,
+    dir: &Path,
+    checksums: BTreeMap<&str, &str>,
+) -> Result<BTreeMap<String, String>>
 where
     A: AsyncRead + Unpin,
     S: Stream<Item = io::Result<Entry<A>>> + Unpin,
 {
     let mut received = HashSet::new();
+    let mut scripts = BTreeMap::new();
     while let Some(entry) = entries.next().await {
         let mut entry = entry.map_err(malformed)?;
         let name = entry_name(&entry)?;
@@ -399,7 +512,24 @@ where
                 "{PARTITION_TABLE_FILE} exceeds {MAX_PARTITION_TABLE_BYTES} bytes"
             )));
         }
-        let actual = write_hashed(&mut entry, &dir.join(&name)).await?;
+        let actual = if is_script_file(&name) {
+            if entry.effective_size() > MAX_SCRIPT_BYTES {
+                return Err(AppError::InvalidArgument(format!(
+                    "{name} exceeds {MAX_SCRIPT_BYTES} bytes"
+                )));
+            }
+            let mut body = String::new();
+            (&mut entry)
+                .take(MAX_SCRIPT_BYTES)
+                .read_to_string(&mut body)
+                .await
+                .map_err(malformed)?;
+            let sha256 = format!("{:x}", Sha256::digest(&body));
+            scripts.insert(name.clone(), body);
+            sha256
+        } else {
+            write_hashed(&mut entry, &dir.join(&name)).await?
+        };
         if !actual.eq_ignore_ascii_case(expected) {
             return Err(AppError::InvalidArgument(format!(
                 "checksum mismatch for `{name}`"
@@ -410,7 +540,7 @@ where
         Some(missing) => Err(AppError::InvalidArgument(format!(
             "archive is missing `{missing}`"
         ))),
-        None => Ok(()),
+        None => Ok(scripts),
     }
 }
 
@@ -420,13 +550,17 @@ where
 {
     let path = entry.path().map_err(malformed)?;
     let mut components = path.components();
-    let plain_name = match (components.next(), components.next()) {
-        (Some(Component::Normal(name)), None) if entry.header().entry_type().is_file() => {
-            name.to_str()
+    let plain_name = match (components.next(), components.next(), components.next()) {
+        _ if !entry.header().entry_type().is_file() => None,
+        (Some(Component::Normal(name)), None, None) => name.to_str().map(str::to_owned),
+        (Some(Component::Normal(dir)), Some(Component::Normal(name)), None)
+            if dir == SCRIPTS_DIR =>
+        {
+            name.to_str().map(|name| format!("{SCRIPTS_DIR}/{name}"))
         }
         _ => None,
     };
-    plain_name.map(str::to_owned).ok_or_else(|| {
+    plain_name.ok_or_else(|| {
         AppError::InvalidArgument(format!(
             "archive entry `{}` is not a plain file",
             path.display()
@@ -479,6 +613,7 @@ mod tests {
     use super::*;
     use crate::di::DIContainer;
     use crate::domain::image::ImageStatus;
+    use crate::domain::script::{InputKind, NewScript, ScriptInput};
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -634,6 +769,11 @@ mod tests {
     async fn export_then_import_reproduces_the_image_under_a_new_id() {
         let (c, guard) = container().await;
         let source = ready_image(&c).await;
+        let source = c
+            .image_repo
+            .set_root_partition(source.id, Some(2))
+            .await
+            .unwrap();
 
         let imported = c
             .archive_service
@@ -645,6 +785,7 @@ mod tests {
         assert_eq!(imported.name, source.name);
         assert_eq!(imported.status, ImageStatus::Ready);
         assert_eq!(imported.captured_at, source.captured_at);
+        assert_eq!(imported.root_partition, Some(2));
         let layout = |image: &Image| -> Vec<(i64, String, u64)> {
             image
                 .partitions
@@ -701,6 +842,277 @@ mod tests {
         assert_eq!(files[1].1, TABLE);
         assert_eq!(files[2].1, large());
         assert_eq!(files[3].1, SMALL);
+    }
+
+    fn hostname_input() -> ScriptInput {
+        ScriptInput {
+            name: "hostname".into(),
+            label: "Hostname".into(),
+            kind: InputKind::Text,
+            required: true,
+            default_value: None,
+            per_machine: true,
+            choices: Vec::new(),
+        }
+    }
+
+    async fn scripted_image(c: &DIContainer) -> Image {
+        let image = ready_image(c).await;
+        let mut ids = Vec::new();
+        for (name, body, inputs) in [
+            (
+                "set-hostname",
+                "#!/bin/sh\nhostname \"$IMAGED_INPUT_HOSTNAME\"\n",
+                vec![hostname_input()],
+            ),
+            ("cleanup", "rm -rf /var/cache/*\n", vec![]),
+        ] {
+            let script = NewScript {
+                name: name.into(),
+                body: body.into(),
+                inputs,
+            };
+            ids.push(c.script_repo.create(&script).await.unwrap().id);
+        }
+        c.script_repo.set_for_image(image.id, &ids).await.unwrap();
+        image
+    }
+
+    fn with_script(manifest: &[u8], name: &str, file: &str, body: &[u8]) -> Vec<u8> {
+        let mut manifest: serde_json::Value = serde_json::from_slice(manifest).unwrap();
+        manifest["scripts"] =
+            json!([{ "name": name, "file": file, "sha256": sha256(body), "inputs": [] }]);
+        serde_json::to_vec(&manifest).unwrap()
+    }
+
+    #[tokio::test]
+    async fn scripts_travel_with_the_archive_and_replace_library_scripts_of_the_same_name() {
+        let (c, _guard) = container().await;
+        let source = scripted_image(&c).await;
+        let archive = export(&c, source.id).await;
+
+        let files = untar(&archive).await;
+        let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "manifest.json",
+                "parttable.bin",
+                "p-1.pcl",
+                "p-2.pcl",
+                "scripts/set-hostname.sh",
+                "scripts/cleanup.sh"
+            ]
+        );
+        let manifest: serde_json::Value = serde_json::from_slice(&files[0].1).unwrap();
+        assert_eq!(
+            manifest["scripts"][0],
+            json!({
+                "name": "set-hostname",
+                "file": "scripts/set-hostname.sh",
+                "sha256": sha256(&files[4].1),
+                "inputs": [{
+                    "name": "hostname", "label": "Hostname", "kind": "text", "required": true,
+                    "default_value": null, "per_machine": true, "choices": []
+                }],
+            })
+        );
+
+        let library = c.script_repo.get_all().await.unwrap();
+        let hostname = library.iter().find(|s| s.name == "set-hostname").unwrap();
+        let cleanup = library.iter().find(|s| s.name == "cleanup").unwrap();
+        c.script_repo
+            .update(
+                hostname.id,
+                &NewScript {
+                    name: "set-hostname".into(),
+                    body: "echo edited".into(),
+                    inputs: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        c.script_repo
+            .update(
+                cleanup.id,
+                &NewScript {
+                    name: "tidy".into(),
+                    body: cleanup.body.clone(),
+                    inputs: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        let imported = c.archive_service.import(archive.as_slice()).await.unwrap();
+
+        let scripts = c.script_repo.get_for_image(imported.id).await.unwrap();
+        let listed: Vec<(&str, &str, usize)> = scripts
+            .iter()
+            .map(|s| (s.name.as_str(), s.body.as_str(), s.inputs.len()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "set-hostname",
+                    "#!/bin/sh\nhostname \"$IMAGED_INPUT_HOSTNAME\"\n",
+                    1
+                ),
+                ("cleanup", "rm -rf /var/cache/*\n", 0),
+            ]
+        );
+        assert_eq!(scripts[0].id, hostname.id);
+        assert_ne!(scripts[1].id, cleanup.id);
+        assert_eq!(c.script_repo.get(cleanup.id).await.unwrap().name, "tidy");
+    }
+
+    #[tokio::test]
+    async fn a_tampered_script_faults_the_import_and_leaves_the_library_alone() {
+        let (c, guard) = container().await;
+        let body = b"echo safe\n";
+        let manifest = with_script(&manifest(&[]), "setup", "scripts/setup.sh", body);
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("scripts/setup.sh", b"echo evil\n"),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert_eq!(message, "checksum mismatch for `scripts/setup.sh`");
+        assert!(c.script_repo.get_all().await.unwrap().is_empty());
+        assert!(image_dirs(&guard).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_invalid_script_after_a_valid_one_leaves_the_library_untouched() {
+        let (c, guard) = container().await;
+        c.script_repo
+            .create(&NewScript {
+                name: "setup".into(),
+                body: "echo old".into(),
+                inputs: vec![],
+            })
+            .await
+            .unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&manifest(&[])).unwrap();
+        manifest["scripts"] = json!([
+            { "name": "setup", "file": "scripts/setup.sh", "sha256": sha256(b"echo new"), "inputs": [] },
+            { "name": "blank", "file": "scripts/blank.sh", "sha256": sha256(b"\n"), "inputs": [] },
+        ]);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("scripts/setup.sh", b"echo new"),
+            ("scripts/blank.sh", b"\n"),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert_eq!(message, "script `blank` has an empty body");
+        let library = c.script_repo.get_all().await.unwrap();
+        let listed: Vec<(&str, &str)> = library
+            .iter()
+            .map(|s| (s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(listed, [("setup", "echo old")]);
+        assert!(image_dirs(&guard).is_empty());
+    }
+
+    #[tokio::test]
+    async fn script_entries_must_follow_the_naming_rules_before_any_image_is_created() {
+        let (c, _guard) = container().await;
+        for (name, file, expected) in [
+            (
+                "setup",
+                "setup.sh",
+                "script `setup` must be stored as scripts/setup.sh, not `setup.sh`",
+            ),
+            (
+                "setup",
+                "scripts/other.sh",
+                "script `setup` must be stored as scripts/setup.sh, not `scripts/other.sh`",
+            ),
+            ("../setup", "scripts/../setup.sh", "script name `../setup`"),
+        ] {
+            let manifest = with_script(&manifest(&[]), name, file, b"x");
+            let archive = tar(&[("manifest.json", &manifest), ("parttable.bin", TABLE)]).await;
+
+            let message = rejected_import(&c, &archive).await;
+
+            assert!(message.starts_with(expected), "{message}");
+        }
+        assert!(c.image_repo.get_all().await.unwrap().is_empty());
+    }
+
+    struct FailingAtEof<R>(R);
+
+    impl<R: AsyncRead + Unpin> AsyncRead for FailingAtEof<R> {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            let before = buf.filled().len();
+            match std::pin::Pin::new(&mut self.0).poll_read(cx, buf) {
+                std::task::Poll::Ready(Ok(())) if buf.filled().len() == before => {
+                    std::task::Poll::Ready(Err(io::Error::other("download checksum mismatch")))
+                }
+                other => other,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_error_after_the_tar_terminator_faults_the_import() {
+        let (c, guard) = container().await;
+        let source = ready_image(&c).await;
+        let mut archive = export(&c, source.id).await;
+        archive.extend_from_slice(&[0; 1024]);
+        archive.extend_from_slice(b"trailing bytes after the terminator");
+
+        let message = match c
+            .archive_service
+            .import(FailingAtEof(archive.as_slice()))
+            .await
+        {
+            Err(AppError::InvalidArgument(message)) => message,
+            other => panic!("expected an invalid argument error, got {other:?}"),
+        };
+
+        assert_eq!(message, "malformed archive: download checksum mismatch");
+        assert_eq!(
+            faulted_errors(&c).await,
+            [format!("invalid argument: {message}")]
+        );
+        assert_eq!(image_dirs(&guard), [format!("img-{}", source.id)]);
+
+        let imported = c.archive_service.import(archive.as_slice()).await.unwrap();
+        assert_eq!(imported.status, ImageStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn a_root_partition_that_is_not_archived_is_rejected_without_an_image() {
+        let (c, _guard) = container().await;
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+        manifest["root_partition"] = json!(2);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("p-1.pcl", SMALL),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert!(message.contains("root partition 2"), "{message}");
+        assert!(c.image_repo.get_all().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -833,7 +1245,13 @@ mod tests {
     async fn entries_that_escape_the_import_directory_are_rejected() {
         let (c, guard) = container().await;
 
-        for path in ["../p-1.pcl", "/p-1.pcl", "nested/p-1.pcl"] {
+        for path in [
+            "../p-1.pcl",
+            "/p-1.pcl",
+            "nested/p-1.pcl",
+            "scripts/../p-1.pcl",
+            "scripts/nested/p-1.pcl",
+        ] {
             let archive = tar(&[
                 ("manifest.json", &manifest(&[(1, SMALL)])),
                 ("parttable.bin", TABLE),
@@ -848,7 +1266,7 @@ mod tests {
                 format!("archive entry `{path}` is not a plain file")
             );
         }
-        assert_eq!(faulted_errors(&c).await.len(), 3);
+        assert_eq!(faulted_errors(&c).await.len(), 5);
         assert!(image_dirs(&guard).is_empty());
         assert!(!guard.0.join("p-1.pcl").exists());
     }
@@ -959,9 +1377,13 @@ mod tests {
         std::fs::write(format!("{import_dir}/p-1.pcl"), b"partial").unwrap();
 
         for _ in 0..2 {
-            ArchiveService::start(c.image_repo.clone(), c.image_service.clone())
-                .await
-                .unwrap();
+            ArchiveService::start(
+                c.image_repo.clone(),
+                c.script_repo.clone(),
+                c.image_service.clone(),
+            )
+            .await
+            .unwrap();
         }
 
         let faulted = c.image_repo.get(interrupted.id).await.unwrap();

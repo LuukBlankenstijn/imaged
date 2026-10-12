@@ -35,6 +35,7 @@ static OPENED: AtomicBool = AtomicBool::new(false);
 pub struct Config {
     pub data_dir: PathBuf,
     pub multicast_interface: String,
+    pub script_proxy: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +92,7 @@ impl Imaged {
             pool,
             images_dir.to_string_lossy().into_owned(),
             config.multicast_interface,
+            config.script_proxy,
         )
         .await
         .map_err(io::Error::other)?;

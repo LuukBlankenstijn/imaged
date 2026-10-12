@@ -6,6 +6,7 @@ mod convert;
 pub mod capture;
 pub mod deploy;
 pub mod event;
+pub mod scripts;
 pub mod task;
 
 #[cfg(feature = "server")]

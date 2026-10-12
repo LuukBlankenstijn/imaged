@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM image_scripts WHERE image_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "36d553e476c1ff574855ff0f6bb7546000b65d5c64af9d473a234d38d1b6b9f8"
+}

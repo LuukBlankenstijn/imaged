@@ -1,5 +1,8 @@
-use crate::domain::task::{Task, TaskHost, TaskRepository, TaskState, TaskType};
-use crate::error::Result;
+use crate::domain::script::InputValues;
+use crate::domain::task::{ScriptRun, Task, TaskHost, TaskRepository, TaskState, TaskType};
+use crate::error::{AppError, Result};
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
 use sqlx::SqlitePool;
@@ -44,6 +47,17 @@ impl TaskRepository for SqliteTaskRepository {
         host_ids: Vec<i64>,
         image_id: Option<i64>,
     ) -> Result<Task> {
+        self.create_with_inputs(task_type, host_ids, image_id, &BTreeMap::new())
+            .await
+    }
+
+    async fn create_with_inputs(
+        &self,
+        task_type: TaskType,
+        host_ids: Vec<i64>,
+        image_id: Option<i64>,
+        inputs: &BTreeMap<i64, InputValues>,
+    ) -> Result<Task> {
         let type_str = task_type.to_string();
         let pending_str = TaskState::Pending.to_string();
         let now = Utc::now();
@@ -72,6 +86,17 @@ impl TaskRepository for SqliteTaskRepository {
             )
             .execute(&mut *tx)
             .await?;
+            for (name, value) in inputs.get(host_id).into_iter().flatten() {
+                sqlx::query!(
+                    "INSERT INTO task_host_inputs (task_id, host_id, name, value) VALUES (?, ?, ?, ?)",
+                    task.id,
+                    host_id,
+                    name,
+                    value
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         tx.commit().await?;
 
@@ -185,6 +210,17 @@ impl TaskRepository for SqliteTaskRepository {
         let failed = TaskState::Failed.to_string();
         let cancelled = TaskState::Cancelled.to_string();
 
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!(
+            "DELETE FROM script_runs WHERE task_id = ? AND host_id IN \
+             (SELECT host_id FROM task_hosts WHERE task_id = ? AND (state = ? OR state = ?))",
+            id,
+            id,
+            failed,
+            cancelled
+        )
+        .execute(&mut *tx)
+        .await?;
         sqlx::query!(
             "UPDATE task_hosts SET state = ?, error = NULL, started_at = NULL, finished_at = NULL \
              WHERE task_id = ? AND (state = ? OR state = ?)",
@@ -193,8 +229,9 @@ impl TaskRepository for SqliteTaskRepository {
             failed,
             cancelled
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -318,6 +355,125 @@ impl TaskRepository for SqliteTaskRepository {
 
         Ok(row.map(|r| r.try_into()).transpose()?)
     }
+
+    async fn get_inputs(&self, task_id: i64, host_id: i64) -> Result<InputValues> {
+        Ok(sqlx::query!(
+            "SELECT name, value FROM task_host_inputs WHERE task_id = ? AND host_id = ?",
+            task_id,
+            host_id
+        )
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| (row.name, row.value))
+        .collect())
+    }
+
+    async fn start_script_run(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        script_name: &str,
+    ) -> Result {
+        let now = Utc::now();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!(
+            "DELETE FROM script_runs WHERE task_id = ? AND host_id = ? AND position >= ?",
+            task_id,
+            host_id,
+            position
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!(
+            "INSERT INTO script_runs (task_id, host_id, position, script_name, output, started_at) \
+             VALUES (?, ?, ?, ?, '', ?)",
+            task_id,
+            host_id,
+            position,
+            script_name,
+            now
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn append_script_output(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        output: &str,
+    ) -> Result {
+        let updated = sqlx::query!(
+            "UPDATE script_runs SET output = output || ? \
+             WHERE task_id = ? AND host_id = ? AND position = ? AND finished_at IS NULL",
+            output,
+            task_id,
+            host_id,
+            position
+        )
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(no_running_script(task_id, host_id, position));
+        }
+        Ok(())
+    }
+
+    async fn finish_script_run(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        exit_code: Option<i64>,
+    ) -> Result {
+        let now = Utc::now();
+        let updated = sqlx::query!(
+            "UPDATE script_runs SET exit_code = ?, finished_at = ? \
+             WHERE task_id = ? AND host_id = ? AND position = ? AND finished_at IS NULL",
+            exit_code,
+            now,
+            task_id,
+            host_id,
+            position
+        )
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(no_running_script(task_id, host_id, position));
+        }
+        Ok(())
+    }
+
+    async fn get_script_runs(&self, task_id: i64, host_id: i64) -> Result<Vec<ScriptRun>> {
+        Ok(sqlx::query_as!(
+            ScriptRun,
+            r#"SELECT
+                 position,
+                 script_name,
+                 output,
+                 exit_code,
+                 started_at as "started_at: DateTime<Utc>",
+                 finished_at as "finished_at: DateTime<Utc>"
+               FROM script_runs
+               WHERE task_id = ? AND host_id = ?
+               ORDER BY position"#,
+            task_id,
+            host_id
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+}
+
+fn no_running_script(task_id: i64, host_id: i64, position: i64) -> AppError {
+    AppError::InvalidArgument(format!(
+        "script {position} of task {task_id} is not running on host {host_id}"
+    ))
 }
 
 #[cfg(test)]
@@ -964,5 +1120,50 @@ mod tests {
         let got = c.task_repo.get(t.id).await.unwrap();
         assert!(got.hosts.is_empty());
         assert_eq!(got.aggregate_state(), TaskState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn retrying_forgets_the_script_runs_of_the_hosts_it_resets() {
+        let (c, _g) = container().await;
+        let img = image(&c, "img").await;
+        let failed = host(&c, "aa:bb:cc:dd:ee:01").await;
+        let done = host(&c, "aa:bb:cc:dd:ee:02").await;
+        let task = c
+            .task_repo
+            .create(TaskType::Multicast, vec![failed, done], Some(img))
+            .await
+            .unwrap();
+        for host_id in [failed, done] {
+            c.task_repo.start(task.id, host_id).await.unwrap();
+            c.task_repo
+                .start_script_run(task.id, host_id, 0, "setup")
+                .await
+                .unwrap();
+            c.task_repo
+                .append_script_output(task.id, host_id, 0, "hello\n")
+                .await
+                .unwrap();
+            c.task_repo
+                .finish_script_run(task.id, host_id, 0, Some(1))
+                .await
+                .unwrap();
+        }
+        c.task_repo.mark_failed(task.id, failed, "x").await.unwrap();
+        c.task_repo.mark_finished(task.id, done).await.unwrap();
+
+        c.task_repo.retry(task.id).await.unwrap();
+
+        assert!(
+            c.task_repo
+                .get_script_runs(task.id, failed)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let kept = c.task_repo.get_script_runs(task.id, done).await.unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].output, "hello\n");
+        assert_eq!(kept[0].exit_code, Some(1));
+        assert!(kept[0].finished_at.is_some());
     }
 }

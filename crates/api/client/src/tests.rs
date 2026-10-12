@@ -9,6 +9,7 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::image::ImageStatus;
+use core::domain::script::{InputKind, NewScript, ScriptInput};
 use core::domain::task::{TaskState, TaskType};
 
 use crate::model;
@@ -159,7 +160,7 @@ async fn deploy_task(c: &DIContainer, mac: &str, image_id: i64) -> i64 {
         .await
         .unwrap();
     c.task_repo
-        .create(TaskType::Multicast, vec![host.id], Some(image_id))
+        .create(TaskType::Deploy, vec![host.id], Some(image_id))
         .await
         .unwrap()
         .id
@@ -204,6 +205,9 @@ async fn agent_api_contracts() {
     downloading_partitions_matches_the_repository_in_order(&c).await;
     capturing_the_partition_table_clears_prior_capture_data_and_starts_the_host(&c).await;
     uploading_partition_data_streams_to_disk_and_records_the_row(&c).await;
+    a_capture_reports_the_root_partition_among_its_partitions(&c).await;
+    a_restoring_agent_fetches_its_scripts_and_reports_their_output(&c).await;
+    scripts_need_a_root_partition_and_a_started_task(&c).await;
     the_stream_endpoint_requires_a_websocket_upgrade(&c).await;
     disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_macs(&c).await;
     no_agent_can_act_on_another_agents_task_on_any_endpoint(&c).await;
@@ -244,6 +248,10 @@ async fn agent_identity_is_required_on_every_route() {
         (Method::GET, "/api/client/tasks/1/parttable"),
         (Method::GET, "/api/client/tasks/1/partitions/1/data"),
         (Method::PUT, "/api/client/tasks/1/parttable"),
+        (Method::PUT, "/api/client/tasks/1/root-partition/1"),
+        (Method::GET, "/api/client/tasks/1/scripts"),
+        (Method::PUT, "/api/client/tasks/1/scripts/0/output"),
+        (Method::POST, "/api/client/tasks/1/scripts/0/finished"),
         (
             Method::PUT,
             "/api/client/tasks/1/partitions/1/data?filesystem=ext4&size=1",
@@ -645,7 +653,7 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
         .await
         .unwrap();
     let (_uh, unready_task) =
-        host_task(c, &unready_mac, TaskType::Multicast, Some(unready_img.id)).await;
+        host_task(c, &unready_mac, TaskType::Deploy, Some(unready_img.id)).await;
     let resp = get(
         &format!("/api/client/tasks/{unready_task}/parttable"),
         &unready_mac,
@@ -660,7 +668,7 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let noimg_mac = next_mac();
-    let (_nh, noimg_task) = host_task(c, &noimg_mac, TaskType::Multicast, None).await;
+    let (_nh, noimg_task) = host_task(c, &noimg_mac, TaskType::Deploy, None).await;
     let resp = get(
         &format!("/api/client/tasks/{noimg_task}/parttable"),
         &noimg_mac,
@@ -676,7 +684,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk(c: &DIContai
     let path = c.image_service.get_partition_path(image_id, 1);
     std::fs::create_dir_all(Path::new(&path).parent().unwrap()).unwrap();
     std::fs::write(&path, &payload).unwrap();
-    let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
+    let (_h, task) = host_task(c, &mac, TaskType::Deploy, Some(image_id)).await;
 
     let resp = get(&format!("/api/client/tasks/{task}/partitions/1/data"), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -699,7 +707,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk(c: &DIContai
         .await
         .unwrap();
     let (_uh, unready_task) =
-        host_task(c, &unready_mac, TaskType::Multicast, Some(unready_img.id)).await;
+        host_task(c, &unready_mac, TaskType::Deploy, Some(unready_img.id)).await;
     let resp = get(
         &format!("/api/client/tasks/{unready_task}/partitions/1/data"),
         &unready_mac,
@@ -728,7 +736,7 @@ async fn downloading_partitions_matches_the_repository_in_order(c: &DIContainer)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
-    let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image.id)).await;
+    let (_h, task) = host_task(c, &mac, TaskType::Deploy, Some(image.id)).await;
 
     let resp = get(&format!("/api/client/tasks/{task}/partitions"), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -900,20 +908,267 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row(c: &DICont
     assert_eq!(recorded.fstype, "ext4");
     assert_eq!(recorded.size_bytes, size as u64);
 
-    let mc_mac = next_mac();
-    let mc_img = c
+    let restore_mac = next_mac();
+    let restore_img = c
         .image_repo
-        .create_image(next_name("upload-mc"))
+        .create_image(next_name("upload-restore"))
         .await
         .unwrap();
-    let (_mh, mc_task) = host_task(c, &mc_mac, TaskType::Multicast, Some(mc_img.id)).await;
+    let (_rh, restore_task) =
+        host_task(c, &restore_mac, TaskType::Deploy, Some(restore_img.id)).await;
     let resp = put_stream(
-        &format!("/api/client/tasks/{mc_task}/partitions/1/data?filesystem=ext4&size=1"),
-        &mc_mac,
+        &format!("/api/client/tasks/{restore_task}/partitions/1/data?filesystem=ext4&size=1"),
+        &restore_mac,
         vec![b"x".to_vec()],
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn a_capture_reports_the_root_partition_among_its_partitions(c: &DIContainer) {
+    let mac = next_mac();
+    let image = c
+        .image_repo
+        .create_image(next_name("cap-root"))
+        .await
+        .unwrap();
+    let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
+    let root = format!("/api/client/tasks/{task}/root-partition/2");
+
+    assert_eq!(
+        send(Method::PUT, &root, Some(&mac)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    put_bytes(
+        &format!("/api/client/tasks/{task}/parttable"),
+        &mac,
+        b"t".to_vec(),
+    )
+    .await;
+    put_stream(
+        &format!("/api/client/tasks/{task}/partitions/2/data?filesystem=ext4&size=1"),
+        &mac,
+        vec![b"x".to_vec()],
+    )
+    .await;
+    assert_eq!(
+        send(
+            Method::PUT,
+            &format!("/api/client/tasks/{task}/root-partition/3"),
+            Some(&mac)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(Method::PUT, &root, Some(&next_mac())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(
+        send(Method::PUT, &root, Some(&mac)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        c.image_repo.get(image.id).await.unwrap().root_partition,
+        Some(2)
+    );
+}
+
+fn script_input(name: &str, default_value: Option<&str>) -> ScriptInput {
+    ScriptInput {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: InputKind::Text,
+        required: false,
+        default_value: default_value.map(str::to_string),
+        per_machine: false,
+        choices: Vec::new(),
+    }
+}
+
+async fn scripted_image(c: &DIContainer, scripts: &[(&str, Vec<ScriptInput>)]) -> i64 {
+    let image_id = ready_image(c, &next_name("scripted")).await;
+    let mut ids = Vec::new();
+    for (name, inputs) in scripts {
+        let script = c
+            .script_repo
+            .create(&NewScript {
+                name: next_name(name),
+                body: format!("#!/bin/sh\necho {name}"),
+                inputs: inputs.clone(),
+            })
+            .await
+            .unwrap();
+        ids.push(script.id);
+    }
+    c.script_repo.set_for_image(image_id, &ids).await.unwrap();
+    image_id
+}
+
+async fn script_runs(c: &DIContainer, task: i64, host: i64) -> Vec<(String, String, Option<i64>)> {
+    c.task_repo
+        .get_script_runs(task, host)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|run| (run.script_name, run.output, run.exit_code))
+        .collect()
+}
+
+async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output(c: &DIContainer) {
+    let mac = next_mac();
+    let image_id = scripted_image(
+        c,
+        &[
+            (
+                "first",
+                vec![
+                    script_input("site", Some("lab")),
+                    script_input("note", None),
+                ],
+            ),
+            ("second", vec![]),
+        ],
+    )
+    .await;
+    c.image_repo
+        .set_root_partition(image_id, Some(2))
+        .await
+        .unwrap();
+    let host = c
+        .host_repo
+        .upsert_host(mac.clone(), 1_000_000, None)
+        .await
+        .unwrap()
+        .id;
+    let stored = std::collections::BTreeMap::from([(
+        host,
+        std::collections::BTreeMap::from([("note".to_string(), "hi".to_string())]),
+    )]);
+    let task = c
+        .task_repo
+        .create_with_inputs(TaskType::Deploy, vec![host], Some(image_id), &stored)
+        .await
+        .unwrap()
+        .id;
+    c.task_repo.start(task, host).await.unwrap();
+
+    let response = get(&format!("/api/client/tasks/{task}/scripts"), &mac).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: model::PostInstall = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan.root_partition, Some(2));
+    assert_eq!(plan.proxy, None);
+    type Listed<'a> = (i64, bool, Vec<(&'a str, &'a str)>);
+    let scripts: Vec<Listed> = plan
+        .scripts
+        .iter()
+        .map(|s| {
+            (
+                s.position,
+                s.body.starts_with("#!/bin/sh"),
+                s.inputs
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        scripts,
+        vec![
+            (0, true, vec![("note", "hi"), ("site", "lab")]),
+            (1, true, vec![])
+        ]
+    );
+    let first_name = plan.scripts[0].name.clone();
+    let second_name = plan.scripts[1].name.clone();
+
+    let output = |position: i64, chunks: Vec<&[u8]>| {
+        let uri = format!("/api/client/tasks/{task}/scripts/{position}/output");
+        let chunks = chunks.into_iter().map(<[u8]>::to_vec).collect();
+        let mac = mac.clone();
+        async move { put_stream(&uri, &mac, chunks).await }
+    };
+    let finished = |position: i64, exit_code: Option<i64>| {
+        let uri = format!("/api/client/tasks/{task}/scripts/{position}/finished");
+        let mac = mac.clone();
+        async move { post_json(&uri, &mac, serde_json::json!({ "exit_code": exit_code })).await }
+    };
+
+    assert_eq!(
+        output(0, vec![b"price: \xe2\x82", b"\xac 5\n"])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(finished(0, Some(0)).await.status(), StatusCode::OK);
+    assert_eq!(output(1, vec![b"boom\n"]).await.status(), StatusCode::OK);
+    assert_eq!(finished(1, Some(3)).await.status(), StatusCode::OK);
+    assert_eq!(
+        script_runs(c, task, host).await,
+        vec![
+            (
+                first_name.clone(),
+                "price: \u{20ac} 5\n".to_string(),
+                Some(0)
+            ),
+            (second_name, "boom\n".to_string(), Some(3)),
+        ]
+    );
+
+    assert_eq!(finished(1, Some(0)).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        output(5, vec![b"x"]).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    assert_eq!(output(0, vec![b"again\n"]).await.status(), StatusCode::OK);
+    assert_eq!(
+        script_runs(c, task, host).await,
+        vec![(first_name, "again\n".to_string(), None)]
+    );
+}
+
+async fn scripts_need_a_root_partition_and_a_started_task(c: &DIContainer) {
+    let mac = next_mac();
+    let image_id = scripted_image(c, &[("only", vec![])]).await;
+    let (host, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
+    let scripts = format!("/api/client/tasks/{task}/scripts");
+
+    assert_eq!(get(&scripts, &mac).await.status(), StatusCode::BAD_REQUEST);
+
+    c.task_repo.start(task, host).await.unwrap();
+    assert_eq!(
+        get(&scripts, &mac).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    let plain_mac = next_mac();
+    let plain = ready_image(c, &next_name("plain")).await;
+    let (plain_host, plain_task) = host_task(c, &plain_mac, TaskType::Deploy, Some(plain)).await;
+    c.task_repo.start(plain_task, plain_host).await.unwrap();
+    let response = get(
+        &format!("/api/client/tasks/{plain_task}/scripts"),
+        &plain_mac,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: model::PostInstall = serde_json::from_slice(&body).unwrap();
+    assert!(plan.scripts.is_empty());
+
+    assert_eq!(
+        get(&scripts, &plain_mac).await.status(),
+        StatusCode::BAD_REQUEST
+    );
 }
 
 async fn the_stream_endpoint_requires_a_websocket_upgrade(c: &DIContainer) {
@@ -960,13 +1215,14 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
     let b_mac = next_mac();
     let a_image = ready_image(c, &next_name("iso-a")).await;
     let b_image = ready_image(c, &next_name("iso-b")).await;
-    let (_ah, _a_task) = host_task(c, &a_mac, TaskType::Multicast, Some(a_image)).await;
-    let (_bh, b_task) = host_task(c, &b_mac, TaskType::Multicast, Some(b_image)).await;
+    let (_ah, _a_task) = host_task(c, &a_mac, TaskType::Deploy, Some(a_image)).await;
+    let (_bh, b_task) = host_task(c, &b_mac, TaskType::Deploy, Some(b_image)).await;
 
     for uri in [
         format!("/api/client/tasks/{b_task}/partitions"),
         format!("/api/client/tasks/{b_task}/parttable"),
         format!("/api/client/tasks/{b_task}/partitions/1/data"),
+        format!("/api/client/tasks/{b_task}/scripts"),
     ] {
         assert_eq!(
             get(&uri, &a_mac).await.status(),
@@ -1006,6 +1262,37 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
             &format!("/api/client/tasks/{b_task}/partitions/1/data?filesystem=ext4&size=1"),
             &a_mac,
             vec![b"x".to_vec()],
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    assert_eq!(
+        put_stream(
+            &format!("/api/client/tasks/{b_task}/scripts/0/output"),
+            &a_mac,
+            vec![b"x".to_vec()],
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post_json(
+            &format!("/api/client/tasks/{b_task}/scripts/0/finished"),
+            &a_mac,
+            serde_json::json!({ "exit_code": 0 }),
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(
+            Method::PUT,
+            &format!("/api/client/tasks/{b_task}/root-partition/1"),
+            Some(&a_mac)
         )
         .await
         .status(),

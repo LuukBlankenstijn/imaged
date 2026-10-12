@@ -68,7 +68,7 @@ pub async fn download_partitions(task_id: i64) -> Result<Vec<model::ImagePartiti
 }
 
 #[cfg(feature = "server")]
-async fn get_restore_task_and_verify(mac: &str, task_id: i64) -> Result<(Task, i64)> {
+pub(crate) async fn get_restore_task_and_verify(mac: &str, task_id: i64) -> Result<(Task, i64)> {
     let task = get_next_task(mac).await?;
     if task.id != task_id || !matches!(task.task_type, TaskType::Deploy | TaskType::Multicast) {
         return Err(AppError::InvalidArgument(format!(

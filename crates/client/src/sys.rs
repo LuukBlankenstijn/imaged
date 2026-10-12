@@ -1,4 +1,6 @@
 pub mod disk;
+pub mod fstab;
+pub mod mount;
 
 use std::net::IpAddr;
 

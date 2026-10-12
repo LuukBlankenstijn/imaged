@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::model::{KickRequest, Task};
+use crate::model::{KickRequest, ScriptRun, Task};
 
 #[cfg(feature = "server")]
 use injectable::inject;
@@ -18,6 +18,13 @@ use imaged_shared::error::Result;
 pub async fn get_all_tasks() -> Result<Vec<Task>> {
     let tasks = task_repo.get_all().await?;
     Ok(tasks.into_iter().map(Into::into).collect())
+}
+
+#[get("/api/ui/tasks/{task_id}/hosts/{host_id}/scripts")]
+#[inject(task_repo: TaskRepo)]
+pub async fn get_script_runs(task_id: i64, host_id: i64) -> Result<Vec<ScriptRun>> {
+    let runs = task_repo.get_script_runs(task_id, host_id).await?;
+    Ok(runs.into_iter().map(Into::into).collect())
 }
 
 #[post("/api/ui/tasks/cancel")]

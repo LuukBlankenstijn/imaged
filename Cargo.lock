@@ -2529,6 +2529,7 @@ dependencies = [
  "anyhow",
  "async-compression",
  "axum",
+ "bytes",
  "clap",
  "derive_more",
  "dioxus-fullstack",

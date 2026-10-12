@@ -9,6 +9,7 @@ use crate::api::groups::{
 use crate::api::hosts::{get_all_hosts, get_hosts_by_group, reboot, wake_on_lan};
 use crate::api::images::get_all_images;
 use crate::components::connection::use_connection;
+use crate::components::deploy_inputs::{DeployInputsForm, submitted_inputs};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
@@ -18,8 +19,8 @@ use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, StatusDot,
 };
 use crate::model::{
-    CreateGroupRequest, Group, Host, Image, ImageStatus, MulticastRequest, UpdateGroupRequest,
-    UpdateName,
+    CreateGroupRequest, DeployInputs, Group, Host, Image, ImageStatus, MulticastRequest,
+    UpdateGroupRequest, UpdateName,
 };
 
 #[component]
@@ -503,62 +504,86 @@ fn EditMembersModal(
 #[component]
 fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandler<()>) -> Element {
     let images = use_resource(|| async move { get_all_images().await });
+    let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
     let mut selected = use_signal(|| None::<i64>);
+    let inputs = use_signal(|| None::<DeployInputs>);
+
+    let loaded = match (&*images.read(), &*members.read()) {
+        (Some(Ok(images)), Some(Ok(members))) => Ok(Some((images.clone(), members.clone()))),
+        (Some(Err(e)), _) => Err(("Failed to load images", e.to_string())),
+        (_, Some(Err(e))) => Err(("Failed to load members", e.to_string())),
+        _ => Ok(None),
+    };
 
     rsx! {
-        Modal { open: true, onclose: move |_| onclose.call(()), title: "Multicast image",
+        Modal { open: true, wide: true, onclose: move |_| onclose.call(()), title: "Multicast image",
             p { class: "mb-4 text-sm text-fog-400", "Stream a ready image to every host in this group simultaneously." }
-            match &*images.read() {
-                Some(Ok(list)) => {
+            match loaded {
+                Ok(Some((list, hosts))) => {
                     let ready: Vec<Image> = list
                         .iter()
                         .filter(|i| i.status == ImageStatus::Ready)
                         .cloned()
                         .collect();
-                    if ready.is_empty() {
-                        rsx! {
+                    let chosen = selected()
+                        .and_then(|id| ready.iter().find(|i| i.id == id))
+                        .or(ready.first())
+                        .cloned();
+                    match chosen {
+                        None => rsx! {
                             EmptyState { title: "No ready images", hint: "Capture an image first." }
-                        }
-                    } else {
-                        let default_id = ready.first().map(|i| i.id);
-                        rsx! {
-                            select {
-                                class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
-                                onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
-                                for img in ready.iter() {
-                                    option { key: "{img.id}", value: "{img.id}", "{img.name}" }
+                        },
+                        Some(_) if hosts.is_empty() => rsx! {
+                            EmptyState { title: "Group has no members", hint: "Add hosts to the group first." }
+                        },
+                        Some(image) => {
+                            let image_id = image.id;
+                            let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
+                            rsx! {
+                                select {
+                                    class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                                    value: "{image_id}",
+                                    onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
+                                    for img in ready.iter() {
+                                        option {
+                                            key: "{img.id}",
+                                            value: "{img.id}",
+                                            selected: img.id == image_id,
+                                            "{img.name}"
+                                        }
+                                    }
                                 }
-                            }
-                            div { class: "mt-6 flex justify-end gap-2",
-                                Button { variant: ButtonVariant::Ghost, onclick: move |_| onclose.call(()), "Cancel" }
-                                Button {
-                                    onclick: move |_| {
-                                        let image_id = selected().or(default_id);
-                                        spawn(async move {
-                                            let Some(image_id) = image_id else { return };
-                                            match group_host_ids(group_id).await {
-                                                Ok(ids) if !ids.is_empty() => {
-                                                    match multicast(MulticastRequest { host_ids: ids, image_id }).await {
-                                                        Ok(_) => on_done.call(()),
-                                                        Err(err) => toast_error("Multicast failed", err.to_string()),
-                                                    }
+                                DeployInputsForm { image, hosts, inputs }
+                                div { class: "mt-6 flex justify-end gap-2",
+                                    Button { variant: ButtonVariant::Ghost, onclick: move |_| onclose.call(()), "Cancel" }
+                                    Button {
+                                        disabled: inputs.read().is_none(),
+                                        onclick: move |_| {
+                                            let Some(form) = inputs() else { return };
+                                            let request = MulticastRequest {
+                                                host_ids: host_ids.clone(),
+                                                image_id,
+                                                inputs: submitted_inputs(&form),
+                                            };
+                                            spawn(async move {
+                                                match multicast(request).await {
+                                                    Ok(_) => on_done.call(()),
+                                                    Err(err) => toast_error("Multicast failed", err.to_string()),
                                                 }
-                                                Ok(_) => toast_error("Multicast failed", "Group has no members"),
-                                                Err(err) => toast_error("Multicast failed", err.to_string()),
-                                            }
-                                        });
-                                    },
-                                    Icon { name: "multicast", class: "w-3.5 h-3.5" }
-                                    "Multicast"
+                                            });
+                                        },
+                                        Icon { name: "multicast", class: "w-3.5 h-3.5" }
+                                        "Multicast"
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                Some(Err(e)) => rsx! {
-                    EmptyState { title: "Failed to load images", hint: e.to_string() }
+                Err((title, hint)) => rsx! {
+                    EmptyState { title, hint }
                 },
-                None => rsx! {
+                Ok(None) => rsx! {
                     div { class: "flex justify-center py-8", Spinner {} }
                 },
             }

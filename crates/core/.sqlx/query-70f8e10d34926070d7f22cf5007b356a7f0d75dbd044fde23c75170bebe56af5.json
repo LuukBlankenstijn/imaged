@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE script_runs SET exit_code = ?, finished_at = ? WHERE task_id = ? AND host_id = ? AND position = ? AND finished_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "70f8e10d34926070d7f22cf5007b356a7f0d75dbd044fde23c75170bebe56af5"
+}

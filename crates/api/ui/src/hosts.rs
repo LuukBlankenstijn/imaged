@@ -6,12 +6,16 @@ use crate::model::{DeployRequest, Host, Task, UpdateName};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{HostRepo, MachineIp, Registry, TaskRepo};
+use imaged_core::di::{HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, TaskRepo};
+#[cfg(feature = "server")]
+use imaged_core::domain::script::{DeployInputs, InputValues, resolve_inputs};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
 use imaged_shared::error::Result;
+#[cfg(feature = "server")]
+use std::collections::BTreeMap;
 
 #[get("/api/ui/hosts")]
 #[inject(host_repo: HostRepo)]
@@ -49,8 +53,9 @@ pub async fn delete_host(id: i64) -> Result<()> {
 #[post("/api/ui/hosts/deploy")]
 #[inject(task_repo: TaskRepo, registry: Registry)]
 pub async fn deploy(req: DeployRequest) -> Result<Task> {
+    let inputs = host_inputs(req.image_id, &[req.id], req.inputs.into()).await?;
     let task = task_repo
-        .create(TaskType::Deploy, vec![req.id], Some(req.image_id))
+        .create_with_inputs(TaskType::Deploy, vec![req.id], Some(req.image_id), &inputs)
         .await?;
     registry.send_task(req.id, &task);
     Ok(task.into())
@@ -97,4 +102,22 @@ pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "server")]
+#[inject(image_repo: ImageRepo, script_repo: ScriptRepo)]
+pub(crate) async fn host_inputs(
+    image_id: i64,
+    host_ids: &[i64],
+    inputs: DeployInputs,
+) -> Result<BTreeMap<i64, InputValues>> {
+    let image = image_repo.get(image_id).await?;
+    let scripts = script_repo.get_for_image(image_id).await?;
+    if !scripts.is_empty() && image.root_partition.is_none() {
+        return Err(AppError::FailedPrecondition(format!(
+            "image {} has post-install scripts but no root partition",
+            image.name
+        )));
+    }
+    resolve_inputs(&scripts, host_ids, &inputs)
 }

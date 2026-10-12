@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM script_runs WHERE task_id = ? AND host_id = ? AND position >= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e304d0cd5a12805dfe24fae9bc4cfe6f19e952163e95032920d159970f5f2e3a"
+}

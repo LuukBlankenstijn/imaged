@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +87,7 @@ pub struct Image {
     pub status: ImageStatus,
     pub error_message: Option<String>,
     pub partitions: Vec<ImagePartition>,
+    pub root_partition: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,12 +147,24 @@ pub struct UpdateName {
 pub struct DeployRequest {
     pub id: i64,
     pub image_id: i64,
+    #[serde(default)]
+    pub inputs: DeployInputs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MulticastRequest {
     pub host_ids: Vec<i64>,
     pub image_id: i64,
+    #[serde(default)]
+    pub inputs: DeployInputs,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeployInputs {
+    #[serde(default)]
+    pub shared: BTreeMap<String, String>,
+    #[serde(default)]
+    pub per_machine: BTreeMap<i64, BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,4 +183,67 @@ pub struct CreateGroupRequest {
 pub struct UpdateGroupRequest {
     pub id: i64,
     pub host_ids: Vec<i64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputKind {
+    Text,
+    Number,
+    Choice,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptInput {
+    pub name: String,
+    pub label: String,
+    pub kind: InputKind,
+    pub required: bool,
+    pub default_value: Option<String>,
+    pub per_machine: bool,
+    pub choices: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Script {
+    pub id: i64,
+    pub name: String,
+    pub body: String,
+    pub updated_at: i64,
+    pub inputs: Vec<ScriptInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRequest {
+    pub name: String,
+    pub body: String,
+    pub inputs: Vec<ScriptInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateScriptRequest {
+    pub id: i64,
+    pub script: ScriptRequest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageScriptsRequest {
+    pub image_id: i64,
+    pub script_ids: Vec<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootPartitionRequest {
+    pub image_id: i64,
+    pub partition_number: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRun {
+    pub position: i64,
+    pub script_name: String,
+    pub output: String,
+    pub exit_code: Option<i64>,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
 }

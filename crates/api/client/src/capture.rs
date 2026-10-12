@@ -75,6 +75,24 @@ pub async fn partition_table(task_id: i64, body: Bytes) -> Result {
     Ok(())
 }
 
+#[injectable::inject(image_repo: ImageRepo)]
+#[put(
+    "/api/client/tasks/{task_id}/root-partition/{partition_number}",
+    agent: AgentInfo
+)]
+pub async fn root_partition(task_id: i64, partition_number: i64) -> Result {
+    let (task, image_id) = get_capture_task_and_verify(&agent.mac, task_id).await?;
+    if task.aggregate_state() != TaskState::Running {
+        return Err(AppError::InvalidArgument(
+            "Task has not yet started".to_string(),
+        ));
+    }
+    image_repo
+        .set_root_partition(image_id, Some(partition_number))
+        .await?;
+    Ok(())
+}
+
 #[cfg(feature = "server")]
 async fn get_capture_task_and_verify(
     mac: &str,

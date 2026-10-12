@@ -16,11 +16,12 @@ pub trait RunnableClientTask: ClientTaskExt {
 
         let disk = crate::sys::disk::find_target_disk().await?;
 
-        for partition in self.plan_partitions(&disk).await? {
-            self.handle_partition(partition).await?;
+        let partitions = self.plan_partitions(&disk).await?;
+        for partition in &partitions {
+            self.handle_partition(partition.clone()).await?;
         }
 
-        Ok(())
+        self.after_partitions(&partitions).await
     }
 }
 impl<T: ClientTaskExt + ?Sized> RunnableClientTask for T {}

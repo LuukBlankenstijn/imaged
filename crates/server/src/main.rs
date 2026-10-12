@@ -30,6 +30,8 @@ async fn main() -> std::io::Result<()> {
         public_base: String,
         #[arg(long, env = "USE_HTTPS", value_parser = FalseyValueParser::new())]
         use_https: bool,
+        #[arg(long, env = "SCRIPT_PROXY")]
+        script_proxy: Option<String>,
     }
 
     let args = Args::parse();
@@ -39,6 +41,7 @@ async fn main() -> std::io::Result<()> {
     let imaged = Imaged::open(Config {
         data_dir: args.data_dir,
         multicast_interface: args.multicast_interface,
+        script_proxy: args.script_proxy,
     })
     .await?;
     let server = imaged

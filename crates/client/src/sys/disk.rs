@@ -22,6 +22,14 @@ pub struct BlockDevice {
     pub hotplug: bool,
     #[serde(default, rename = "type")]
     pub device_type: Option<String>,
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub partuuid: Option<String>,
+    #[serde(default)]
+    pub partlabel: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,9 +41,13 @@ pub struct PartitionTarget {
 }
 
 impl PartitionTarget {
+    pub fn is_ext(&self) -> bool {
+        matches!(self.fstype.as_str(), "ext2" | "ext3" | "ext4")
+    }
+
     pub fn partclone_binary(&self) -> Result<&'static str> {
         match self.fstype.as_str() {
-            "ext2" | "ext3" | "ext4" => Ok("partclone.extfs"),
+            _ if self.is_ext() => Ok("partclone.extfs"),
             "vfat" | "fat32" | "fat16" => Ok("partclone.vfat"),
             other => bail!("filetype not supported: {other}"),
         }
@@ -130,7 +142,7 @@ async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
         "-J",
         "-b",
         "-o",
-        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE",
+        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE,UUID,LABEL,PARTUUID,PARTLABEL",
     ]);
     if let Some(d) = device {
         cmd.arg(d);

@@ -4,7 +4,7 @@ use crate::components::connection::use_connection_provider;
 use crate::components::icons::Icon;
 use crate::components::multicast::use_transfer_provider;
 use crate::components::toast::Toaster;
-use crate::views::{Groups, Hosts, Images, Tasks};
+use crate::views::{Groups, Hosts, Images, Scripts, Tasks};
 
 #[derive(Clone, Routable, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[rustfmt::skip]
@@ -14,6 +14,8 @@ pub enum Route {
         Hosts {},
         #[route("/images")]
         Images {},
+        #[route("/scripts")]
+        Scripts {},
         #[route("/groups")]
         Groups {},
         #[route("/tasks")]
@@ -54,6 +56,7 @@ fn Shell() -> Element {
                     nav { class: "flex flex-1 flex-col gap-1 px-3 py-4",
                         NavItem { to: Route::Hosts {}, icon: "host", label: "Hosts" }
                         NavItem { to: Route::Images {}, icon: "image", label: "Images" }
+                        NavItem { to: Route::Scripts {}, icon: "script", label: "Scripts" }
                         NavItem { to: Route::Groups {}, icon: "group", label: "Groups" }
                         NavItem { to: Route::Tasks {}, icon: "tasks", label: "Tasks" }
                     }

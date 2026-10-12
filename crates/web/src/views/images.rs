@@ -2,13 +2,19 @@ use dioxus::prelude::*;
 
 use crate::api::hosts::*;
 use crate::api::images::*;
+use crate::api::scripts::{
+    get_all_scripts, get_image_scripts, set_image_scripts, set_root_partition,
+};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::*;
 use crate::format::{format_bytes, format_relative};
-use crate::model::{CreateImageRequest, Image, ImageStatus, UpdateName};
+use crate::model::{
+    CreateImageRequest, Image, ImageScriptsRequest, ImageStatus, RootPartitionRequest, Script,
+    UpdateName,
+};
 
 #[component]
 pub fn Images() -> Element {
@@ -168,8 +174,15 @@ fn ImportButton(on_imported: EventHandler<()>) -> Element {
 fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element {
     let mut editing = use_signal(|| false);
     let mut confirm_open = use_signal(|| false);
+    let mut setup_open = use_signal(|| false);
 
     let id = image.id;
+    let mut image_scripts = use_resource(move || async move { get_image_scripts(id).await });
+    let script_count = match &*image_scripts.read() {
+        Some(Ok(list)) => list.len(),
+        _ => 0,
+    };
+    let missing_root = script_count > 0 && image.root_partition.is_none();
     let status = image.status;
     let name = image.name.clone();
     let total: u64 = image.partitions.iter().map(|p| p.size_bytes).sum();
@@ -250,9 +263,24 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                             if let Some(rel) = captured_rel {
                                 span { class: "text-fog-600", "· captured {rel}" }
                             }
+                            if script_count > 0 {
+                                span { class: "text-fog-600", "· {script_count} script(s)" }
+                            }
+                            if let Some(root) = image.root_partition {
+                                span { class: "text-fog-600", "· root #{root}" }
+                            }
                         }
                     }
+                    if missing_root {
+                        Badge { tone: Tone::Warn, "no root partition" }
+                    }
                     ImageStatusBadge { status }
+                    Button {
+                        variant: if setup_open() { ButtonVariant::Primary } else { ButtonVariant::Ghost },
+                        class: "px-2",
+                        onclick: move |_| setup_open.toggle(),
+                        Icon { name: "script", class: "w-4 h-4" }
+                    }
                     if status == ImageStatus::Ready {
                         a {
                             class: "{export_classes} px-2",
@@ -268,6 +296,32 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                         class: "px-2",
                         onclick: move |_| confirm_open.set(true),
                         Icon { name: "trash", class: "w-4 h-4" }
+                    }
+                }
+                if missing_root {
+                    div { class: "flex items-start gap-2 border-t border-warn/20 bg-warn/5 px-4 py-2 font-mono text-xs text-warn",
+                        Icon { name: "alert", class: "mt-0.5 w-3.5 h-3.5 shrink-0" }
+                        span { "Post-install scripts are attached but no root partition is set: deploys of this image are refused until one is selected." }
+                    }
+                }
+                if setup_open() {
+                    div { class: "grid gap-6 border-t border-line/60 bg-ink-900/40 px-4 py-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]",
+                        RootPartitionPicker { image: image.clone(), on_changed }
+                        match &*image_scripts.read() {
+                            Some(Ok(current)) => rsx! {
+                                ImageScriptList {
+                                    image_id: id,
+                                    current: current.clone(),
+                                    on_saved: move |_| image_scripts.restart(),
+                                }
+                            },
+                            Some(Err(e)) => rsx! {
+                                p { class: "text-sm text-bad", "Failed to load scripts: {e}" }
+                            },
+                            None => rsx! {
+                                Spinner {}
+                            },
+                        }
                     }
                 }
                 if faulted {
@@ -297,6 +351,166 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                 });
             },
             oncancel: move |_| confirm_open.set(false),
+        }
+    }
+}
+
+#[component]
+fn RootPartitionPicker(image: Image, on_changed: EventHandler<()>) -> Element {
+    let image_id = image.id;
+    let saved = image.root_partition;
+    let mut shown = use_signal(|| saved);
+    use_effect(use_reactive!(|saved| shown.set(saved)));
+    let current = shown().map(|n| n.to_string()).unwrap_or_default();
+
+    rsx! {
+        div {
+            div { class: "mb-1 font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                "Root partition"
+            }
+            if image.partitions.is_empty() {
+                p { class: "text-xs text-fog-600", "No partitions captured yet." }
+            } else {
+                select {
+                    class: "{FIELD_CLASSES} w-full font-mono",
+                    value: "{current}",
+                    onchange: move |e| {
+                        let partition_number = e.value().parse::<i64>().ok();
+                        shown.set(partition_number);
+                        spawn(async move {
+                            match set_root_partition(RootPartitionRequest { image_id, partition_number }).await {
+                                Ok(_) => on_changed.call(()),
+                                Err(err) => {
+                                    shown.set(saved);
+                                    toast_error("Root partition not saved", err.to_string());
+                                }
+                            }
+                        });
+                    },
+                    option { value: "", selected: shown().is_none(), "none" }
+                    for p in image.partitions.iter() {
+                        option {
+                            key: "{p.partition_number}",
+                            value: "{p.partition_number}",
+                            selected: shown() == Some(p.partition_number),
+                            {format!("#{} · {} · {}", p.partition_number, p.fstype, format_bytes(p.size_bytes))}
+                        }
+                    }
+                }
+            }
+            p { class: "mt-1.5 text-xs text-fog-600",
+                "Post-install scripts run chrooted in this partition after the image is restored."
+            }
+        }
+    }
+}
+
+#[component]
+fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<()>) -> Element {
+    let all_scripts = use_resource(|| async move { get_all_scripts().await });
+    let mut draft = use_signal({
+        let seed = current.clone();
+        move || seed
+    });
+    let mut saving = use_signal(|| false);
+
+    let list = draft();
+    let count = list.len();
+    let ids: Vec<i64> = list.iter().map(|s| s.id).collect();
+    let current_ids: Vec<i64> = current.iter().map(|s| s.id).collect();
+    let dirty = ids != current_ids;
+    let available: Vec<Script> = match &*all_scripts.read() {
+        Some(Ok(all)) => all
+            .iter()
+            .filter(|s| !ids.contains(&s.id))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    rsx! {
+        div {
+            div { class: "mb-1 font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                "Post-install scripts"
+            }
+            if list.is_empty() {
+                p { class: "rounded-md border border-line bg-ink-900/60 px-3 py-2 text-xs text-fog-600",
+                    "No scripts run after deploying this image."
+                }
+            } else {
+                div { class: "flex flex-col divide-y divide-line/60 rounded-md border border-line",
+                    for (index , script) in list.iter().enumerate() {
+                        div { key: "{script.id}", class: "flex items-center gap-3 px-3 py-1.5",
+                            span { class: "w-5 font-mono text-xs text-fog-600", "{index + 1}" }
+                            span { class: "min-w-0 flex-1 truncate font-mono text-sm text-fog-100", "{script.name}" }
+                            span { class: "font-mono text-[11px] text-fog-600", "{script.inputs.len()} input(s)" }
+                            Button {
+                                variant: ButtonVariant::Subtle,
+                                class: "px-1.5",
+                                disabled: index == 0,
+                                onclick: move |_| draft.write().swap(index, index - 1),
+                                Icon { name: "chevron", class: "w-3.5 h-3.5 rotate-180" }
+                            }
+                            Button {
+                                variant: ButtonVariant::Subtle,
+                                class: "px-1.5",
+                                disabled: index + 1 == count,
+                                onclick: move |_| draft.write().swap(index, index + 1),
+                                Icon { name: "chevron", class: "w-3.5 h-3.5" }
+                            }
+                            Button {
+                                variant: ButtonVariant::Subtle,
+                                class: "px-1.5 hover:text-bad",
+                                onclick: move |_| {
+                                    draft.write().remove(index);
+                                },
+                                Icon { name: "close", class: "w-3.5 h-3.5" }
+                            }
+                        }
+                    }
+                }
+            }
+            div { class: "mt-2 flex flex-wrap items-center gap-2",
+                select {
+                    class: "{FIELD_CLASSES} min-w-48 flex-1 font-mono",
+                    value: "",
+                    disabled: available.is_empty(),
+                    onchange: {
+                        let available = available.clone();
+                        move |e: FormEvent| {
+                            let picked = e.value().parse::<i64>().ok();
+                            if let Some(script) = available.iter().find(|s| Some(s.id) == picked) {
+                                draft.write().push(script.clone());
+                            }
+                        }
+                    },
+                    option { value: "", selected: true, "add script…" }
+                    for script in available.iter() {
+                        option { key: "{script.id}", value: "{script.id}", "{script.name}" }
+                    }
+                }
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    disabled: !dirty || saving(),
+                    onclick: move |_| draft.set(current.clone()),
+                    "Reset"
+                }
+                Button {
+                    disabled: !dirty || saving(),
+                    onclick: move |_| {
+                        let script_ids = ids.clone();
+                        saving.set(true);
+                        spawn(async move {
+                            match set_image_scripts(ImageScriptsRequest { image_id, script_ids }).await {
+                                Ok(_) => on_saved.call(()),
+                                Err(err) => toast_error("Scripts not saved", err.to_string()),
+                            }
+                            saving.set(false);
+                        });
+                    },
+                    "Save"
+                }
+            }
         }
     }
 }

@@ -55,15 +55,22 @@ pub async fn build_di_container(
     pool: SqlitePool,
     images_dir: String,
     multicast_interface: String,
+    script_proxy: Option<String>,
 ) -> Result<DIContainer, BoxError> {
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());
     let task_repo = repository::task_repo(pool.clone());
+    let script_repo = repository::script_repo(pool.clone());
     let group_repo = repository::group_repo(pool);
     let host_registry = Arc::new(registry::HostRegistry::default());
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
     let archive_service = Arc::new(
-        service::archive::ArchiveService::start(image_repo.clone(), image_service.clone()).await?,
+        service::archive::ArchiveService::start(
+            image_repo.clone(),
+            script_repo.clone(),
+            image_service.clone(),
+        )
+        .await?,
     );
     let multicast_manager = Arc::new(
         MulticastManager::start(
@@ -87,12 +94,14 @@ pub async fn build_di_container(
         image_repo,
         task_repo,
         group_repo,
+        script_repo,
         host_registry,
         image_service,
         archive_service,
         multicast_manager,
         machine_ip,
         agent_liveness,
+        script_proxy.map(Arc::from),
     ))
 }
 
@@ -105,6 +114,7 @@ pub async fn build_test_container(dir: &Path) -> DIContainer {
         pool,
         dir.join("images").to_string_lossy().to_string(),
         "lo".to_string(),
+        None,
     )
     .await
     .unwrap();

@@ -1,4 +1,5 @@
 pub mod implementations;
+mod post_install;
 pub mod types;
 
 use std::{ops::Deref, sync::Arc};

@@ -8,18 +8,25 @@ pub fn Modal(
     open: bool,
     onclose: EventHandler<()>,
     #[props(default)] title: String,
+    #[props(default)] wide: bool,
+    #[props(default = true)] dismissible: bool,
     children: Element,
 ) -> Element {
     if !open {
         return rsx! {};
     }
+    let width = if wide { "max-w-5xl" } else { "max-w-lg" };
     rsx! {
         div { class: "fixed inset-0 z-50 flex items-center justify-center p-4",
             div {
                 class: "absolute inset-0 bg-ink-950/75 backdrop-blur-sm",
-                onclick: move |_| onclose.call(()),
+                onclick: move |_| {
+                    if dismissible {
+                        onclose.call(())
+                    }
+                },
             }
-            div { class: "relative z-10 w-full max-w-lg rounded-xl border border-line bg-ink-850 shadow-2xl rise",
+            div { class: "relative z-10 flex max-h-[calc(100vh-2rem)] w-full {width} flex-col rounded-xl border border-line bg-ink-850 text-left shadow-2xl rise",
                 if !title.is_empty() {
                     div { class: "flex items-center justify-between border-b border-line px-5 py-3",
                         h3 { class: "font-display text-lg text-fog-100", "{title}" }
@@ -30,7 +37,7 @@ pub fn Modal(
                         }
                     }
                 }
-                div { class: "p-5", {children} }
+                div { class: "min-h-0 overflow-y-auto p-5", {children} }
             }
         }
     }
