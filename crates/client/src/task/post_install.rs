@@ -29,7 +29,7 @@ struct Agent {
 impl Agent {
     fn current() -> Result<Self> {
         Ok(Self {
-            mac: crate::sys::get_mac()?.to_string(),
+            mac: crate::sys::get_mac()?.to_string().to_ascii_lowercase(),
             ip: crate::sys::get_ip()
                 .map(|ip| ip.to_string())
                 .unwrap_or_default(),

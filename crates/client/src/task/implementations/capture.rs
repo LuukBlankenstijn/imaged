@@ -88,10 +88,10 @@ impl ClientTaskExt for CaptureTask {
             }
         }
         match systems.as_slice() {
-            [root] => {
-                info!(partition=%root, "found the root partition");
-                api::capture::root_partition(self.task_id, *root).await?;
-            }
+            [root] => match api::capture::root_partition(self.task_id, *root).await {
+                Ok(()) => info!(partition=%root, "reported the root partition"),
+                Err(e) => warn!(partition=%root, error=%e, "could not report the root partition"),
+            },
             _ => info!(?systems, "no single partition holds /etc/os-release"),
         }
         Ok(())

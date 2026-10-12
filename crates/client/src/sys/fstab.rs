@@ -24,9 +24,10 @@ pub fn plan_mounts(fstab: &str, disk: &BlockDevice) -> Vec<PlannedMount> {
                 tracing::info!(%spec, %mountpoint, "fstab entry is not on the target disk, not mounting it");
                 return None;
             };
-            let fstype = match fstype.as_str() {
-                "auto" => partition.fstype.clone()?,
-                _ => fstype,
+            let fstype = match (&partition.fstype, fstype.as_str()) {
+                (Some(detected), _) => detected.clone(),
+                (None, "auto") => return None,
+                (None, _) => fstype,
             };
             Some(PlannedMount {
                 device: partition.get_device(),
@@ -143,6 +144,7 @@ mod tests {
 UUID=0b8c5c3e-7f6e-4d4b-9c1a-1e2f3a4b5c6d /               ext4    errors=remount-ro 0 1
 UUID=ABCD-1234                            /boot/efi/linux vfat    umask=0077        0 1
 LABEL=root                                /boot           auto    defaults          0 2
+PARTLABEL=srv                             /srv            ext3    defaults          0 2
 UUID=aaaa                                 none            swap    sw                0 0
 tmpfs                                     /tmp            tmpfs   defaults          0 0
 UUID=ffffffff-0000-0000-0000-000000000000 /mnt/usb        ext4    nofail            0 2
@@ -153,9 +155,22 @@ server:/export                            /mnt/nfs        nfs     defaults      
             plan_mounts(fstab, &disk()),
             vec![
                 planned("/dev/nvme0n1p2", "boot", "ext4"),
+                planned("/dev/nvme0n1p3", "srv", "ext4"),
                 planned("/dev/nvme0n1p1", "boot/efi/linux", "vfat"),
             ]
         );
+    }
+
+    #[test]
+    fn the_fstab_type_is_only_used_when_the_partition_has_no_detected_one() {
+        let mut disk = disk();
+        disk.children[2].fstype = None;
+
+        assert_eq!(
+            plan_mounts("PARTLABEL=srv /srv xfs defaults", &disk),
+            vec![planned("/dev/nvme0n1p3", "srv", "xfs")]
+        );
+        assert!(plan_mounts("PARTLABEL=srv /srv auto defaults", &disk).is_empty());
     }
 
     #[test]

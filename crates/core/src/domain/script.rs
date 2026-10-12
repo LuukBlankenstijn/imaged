@@ -275,7 +275,6 @@ pub trait ScriptRepository: Send + Sync {
 
     async fn delete(&self, id: i64) -> Result;
 
-    // creates the script, or replaces the body and inputs of the one with its name
     async fn upsert(&self, script: &NewScript) -> Result<Script>;
 
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>>;

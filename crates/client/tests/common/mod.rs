@@ -19,7 +19,7 @@ use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
-use api::model::ImagePartition;
+use api::model::{ImagePartition, PostInstall};
 use imaged_shared::ServerEvent;
 
 const CHUNK: usize = 512;
@@ -65,6 +65,7 @@ pub struct StubConfig {
     pub events: Vec<ServerEvent>,
     pub force_status: HashMap<Route, u16>,
     pub stream_behavior: StreamBehavior,
+    pub post_install: HashMap<i64, PostInstall>,
 }
 
 impl StubConfig {
@@ -94,6 +95,11 @@ impl StubConfig {
 
     pub fn stream_behavior(mut self, behavior: StreamBehavior) -> Self {
         self.stream_behavior = behavior;
+        self
+    }
+
+    pub fn with_post_install(mut self, task_id: i64, plan: PostInstall) -> Self {
+        self.post_install.insert(task_id, plan);
         self
     }
 
@@ -203,6 +209,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
             "/api/client/tasks/{task_id}/partitions/{n}/data",
             get(partition_data),
         )
+        .route("/api/client/tasks/{task_id}/scripts", get(post_install))
         .route("/api/client/tasks/{task_id}/finished", post(finished_route))
         .route("/api/client/tasks/{task_id}/failed", post(failed_route))
         .route("/api/client/stream/disconnect", post(disconnect))
@@ -301,6 +308,20 @@ async fn partition_data(
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from_stream(stream))
         .unwrap()
+}
+
+async fn post_install(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) -> Response {
+    let plan = s
+        .cfg
+        .post_install
+        .get(&task_id)
+        .cloned()
+        .unwrap_or(PostInstall {
+            root_partition: None,
+            proxy: None,
+            scripts: Vec::new(),
+        });
+    Json(plan).into_response()
 }
 
 async fn finished_route(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) -> Response {

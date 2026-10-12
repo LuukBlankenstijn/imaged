@@ -1220,6 +1220,7 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
         format!("/api/client/tasks/{b_task}/partitions"),
         format!("/api/client/tasks/{b_task}/parttable"),
         format!("/api/client/tasks/{b_task}/partitions/1/data"),
+        format!("/api/client/tasks/{b_task}/scripts"),
     ] {
         assert_eq!(
             get(&uri, &a_mac).await.status(),
@@ -1259,6 +1260,37 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
             &format!("/api/client/tasks/{b_task}/partitions/1/data?filesystem=ext4&size=1"),
             &a_mac,
             vec![b"x".to_vec()],
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    assert_eq!(
+        put_stream(
+            &format!("/api/client/tasks/{b_task}/scripts/0/output"),
+            &a_mac,
+            vec![b"x".to_vec()],
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post_json(
+            &format!("/api/client/tasks/{b_task}/scripts/0/finished"),
+            &a_mac,
+            serde_json::json!({ "exit_code": 0 }),
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(
+            Method::PUT,
+            &format!("/api/client/tasks/{b_task}/root-partition/1"),
+            Some(&a_mac)
         )
         .await
         .status(),

@@ -147,7 +147,6 @@ pub trait TaskRepository: Send + Sync {
         image_id: Option<i64>,
     ) -> Result<Task>;
 
-    // create a new task with each host's script input values
     async fn create_with_inputs(
         &self,
         task_type: TaskType,
@@ -186,7 +185,6 @@ pub trait TaskRepository: Send + Sync {
 
     async fn get_inputs(&self, task_id: i64, host_id: i64) -> Result<InputValues>;
 
-    // starts a script run, replacing the runs at and after its position
     async fn start_script_run(
         &self,
         task_id: i64,
