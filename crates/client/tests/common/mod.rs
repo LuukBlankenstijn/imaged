@@ -319,6 +319,7 @@ async fn post_install(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) 
         .unwrap_or(PostInstall {
             root_partition: None,
             proxy: None,
+            variables: Default::default(),
             scripts: Vec::new(),
         });
     Json(plan).into_response()

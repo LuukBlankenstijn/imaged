@@ -29,6 +29,7 @@ fn config(data_dir: &Path) -> Config {
         data_dir: data_dir.to_path_buf(),
         multicast_interface: "lo".to_string(),
         script_proxy: None,
+        script_variables: Default::default(),
     }
 }
 

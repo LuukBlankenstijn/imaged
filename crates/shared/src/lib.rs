@@ -5,6 +5,7 @@ pub mod error;
 mod logging;
 #[cfg(feature = "multicast")]
 mod multicast;
+pub mod script_env;
 #[cfg(feature = "types")]
 mod types;
 

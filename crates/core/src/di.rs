@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -31,6 +32,7 @@ pub struct DIContainer {
     pub machine_ip: Arc<RwLock<Option<IpAddr>>>,
     pub agent_liveness: AgentLiveness,
     pub script_proxy: Option<Arc<str>>,
+    pub script_variables: Arc<BTreeMap<String, String>>,
 }
 
 install_injectable_container!(DIContainer);
@@ -47,3 +49,7 @@ register_injectable!(MulticastMgr(Arc<MulticastManager>), multicast_manager);
 register_injectable!(MachineIp(Arc<RwLock<Option<IpAddr>>>), machine_ip);
 register_injectable!(Liveness(AgentLiveness), agent_liveness);
 register_injectable!(ScriptProxy(Option<Arc<str>>), script_proxy);
+register_injectable!(
+    ScriptVariables(Arc<BTreeMap<String, String>>),
+    script_variables
+);

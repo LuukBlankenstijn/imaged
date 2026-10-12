@@ -9,7 +9,9 @@ pub mod repository;
 pub mod service;
 pub mod tftp;
 
-use std::{future::Future, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, future::Future, net::SocketAddr, path::Path, sync::Arc, time::Duration,
+};
 
 use axum::{Router, serve::Listener};
 use sqlx::{
@@ -56,7 +58,11 @@ pub async fn build_di_container(
     images_dir: String,
     multicast_interface: String,
     script_proxy: Option<String>,
+    script_variables: BTreeMap<String, String>,
 ) -> Result<DIContainer, BoxError> {
+    for (name, value) in &script_variables {
+        imaged_shared::script_env::check_variable(name, value)?;
+    }
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());
     let task_repo = repository::task_repo(pool.clone());
@@ -102,6 +108,7 @@ pub async fn build_di_container(
         machine_ip,
         agent_liveness,
         script_proxy.map(Arc::from),
+        Arc::new(script_variables),
     ))
 }
 
@@ -115,6 +122,7 @@ pub async fn build_test_container(dir: &Path) -> DIContainer {
         dir.join("images").to_string_lossy().to_string(),
         "lo".to_string(),
         None,
+        BTreeMap::new(),
     )
     .await
     .unwrap();

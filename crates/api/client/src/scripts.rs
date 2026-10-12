@@ -8,14 +8,16 @@ use crate::{AgentInfo, deploy::get_restore_task_and_verify};
 use futures::TryStreamExt;
 #[cfg(feature = "server")]
 use imaged_core::{
-    di::{HostRepo, ImageRepo, ScriptProxy, ScriptRepo, TaskRepo},
+    di::{HostRepo, ImageRepo, ScriptProxy, ScriptRepo, ScriptVariables, TaskRepo},
     domain::{script::Script, task::TaskState},
     service::script_output::{ScriptRunKey, record_output},
 };
 #[cfg(feature = "server")]
 use imaged_shared::error::AppError;
+#[cfg(feature = "server")]
+use std::collections::BTreeMap;
 
-#[injectable::inject(image_repo: ImageRepo, script_repo: ScriptRepo, task_repo: TaskRepo, script_proxy: ScriptProxy)]
+#[injectable::inject(image_repo: ImageRepo, script_repo: ScriptRepo, task_repo: TaskRepo, script_proxy: ScriptProxy, script_variables: ScriptVariables)]
 #[get("/api/client/tasks/{task_id}/scripts", agent: AgentInfo)]
 pub async fn post_install(task_id: i64) -> Result<model::PostInstall> {
     let run = running_restore_task(&agent.mac, task_id).await?;
@@ -31,6 +33,7 @@ pub async fn post_install(task_id: i64) -> Result<model::PostInstall> {
     Ok(model::PostInstall {
         root_partition: image.root_partition,
         proxy: script_proxy.as_deref().map(str::to_owned),
+        variables: BTreeMap::clone(&script_variables),
         scripts: scripts
             .into_iter()
             .zip(0..)
