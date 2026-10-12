@@ -14,6 +14,8 @@ pub struct ImagePartition {
 pub struct PostInstall {
     pub root_partition: Option<i64>,
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
     pub scripts: Vec<PostInstallScript>,
 }
 

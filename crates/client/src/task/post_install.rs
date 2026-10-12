@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::Stdio;
@@ -8,6 +9,7 @@ use api::model::{PostInstall, PostInstallScript};
 use bytes::Bytes;
 use dioxus_fullstack::ByteStream;
 use futures::{Stream, StreamExt};
+use imaged_shared::script_env::{AGENT_VARIABLES, INPUT_PREFIX, PROXY_VARIABLES};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -18,7 +20,6 @@ use crate::sys::mount::MountedSystem;
 const SCRIPT_PATH: &str = "/tmp/imaged-script";
 const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
-const PROXY_VARIABLES: [&str; 4] = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"];
 
 struct Agent {
     mac: String,
@@ -60,7 +61,7 @@ async fn run_scripts(
     agent: &Agent,
 ) -> Result<()> {
     for script in &plan.scripts {
-        let env = script_env(script, agent, plan.proxy.as_deref());
+        let env = script_env(script, agent, plan.proxy.as_deref(), &plan.variables);
         run_script(task_id, system.root(), script, env).await?;
     }
     Ok(())
@@ -83,17 +84,22 @@ fn script_env(
     script: &PostInstallScript,
     agent: &Agent,
     proxy: Option<&str>,
+    variables: &BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
-    let mut env = vec![
-        ("PATH".to_string(), PATH.to_string()),
-        ("HOME".to_string(), "/root".to_string()),
-        ("IMAGED_MAC".to_string(), agent.mac.clone()),
-        ("IMAGED_IP".to_string(), agent.ip.clone()),
-        ("IMAGED_SERVER".to_string(), agent.server.clone()),
-    ];
+    let agent_values = [PATH, "/root", &agent.mac, &agent.ip, &agent.server];
+    let mut env: Vec<(String, String)> = AGENT_VARIABLES
+        .iter()
+        .zip(agent_values)
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    env.extend(
+        variables
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
     env.extend(script.inputs.iter().map(|(name, value)| {
         (
-            format!("IMAGED_INPUT_{}", name.to_ascii_uppercase()),
+            format!("{INPUT_PREFIX}{}", name.to_ascii_uppercase()),
             value.clone(),
         )
     }));
@@ -245,6 +251,7 @@ mod tests {
             &script(&[("host_name", "pc-1"), ("site", "")]),
             &agent(),
             None,
+            &BTreeMap::new(),
         );
 
         assert_eq!(lookup(&env, "IMAGED_INPUT_HOST_NAME"), Some("pc-1"));
@@ -258,11 +265,24 @@ mod tests {
 
     #[test]
     fn a_configured_proxy_is_exported_in_both_spellings() {
-        let env = script_env(&script(&[]), &agent(), Some("http://proxy:3128"));
+        let env = script_env(
+            &script(&[]),
+            &agent(),
+            Some("http://proxy:3128"),
+            &BTreeMap::new(),
+        );
 
         for name in PROXY_VARIABLES {
             assert_eq!(lookup(&env, name), Some("http://proxy:3128"), "{name}");
         }
+    }
+
+    #[test]
+    fn variables_from_the_server_reach_every_script() {
+        let variables = BTreeMap::from([("IMAGED_IMAGE_TOKEN".to_string(), "secret".to_string())]);
+        let env = script_env(&script(&[]), &agent(), None, &variables);
+
+        assert_eq!(lookup(&env, "IMAGED_IMAGE_TOKEN"), Some("secret"));
     }
 
     #[test]

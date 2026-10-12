@@ -42,6 +42,7 @@ async fn main() -> std::io::Result<()> {
         data_dir: args.data_dir,
         multicast_interface: args.multicast_interface,
         script_proxy: args.script_proxy,
+        script_variables: Default::default(),
     })
     .await?;
     let server = imaged

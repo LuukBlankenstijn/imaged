@@ -1,6 +1,7 @@
 #![cfg(feature = "server")]
 
 use std::{
+    collections::BTreeMap,
     future::Future,
     io,
     net::{IpAddr, SocketAddr},
@@ -36,6 +37,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub multicast_interface: String,
     pub script_proxy: Option<String>,
+    pub script_variables: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,6 +95,7 @@ impl Imaged {
             images_dir.to_string_lossy().into_owned(),
             config.multicast_interface,
             config.script_proxy,
+            config.script_variables,
         )
         .await
         .map_err(io::Error::other)?;

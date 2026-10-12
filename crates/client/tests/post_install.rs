@@ -19,6 +19,7 @@ fn plan(root_partition: Option<i64>) -> PostInstall {
     PostInstall {
         root_partition,
         proxy: None,
+        variables: Default::default(),
         scripts: vec![PostInstallScript {
             position: 0,
             name: "setup".to_string(),

@@ -50,7 +50,7 @@ agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
 and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 
 With the `server` feature it is also a library for embedding imaged in another
-program: `Imaged::open(Config { data_dir, multicast_interface, script_proxy })` once per
+program: `Imaged::open(Config { data_dir, multicast_interface, script_proxy, script_variables })` once per
 process, then `imaged.serve(Listeners { machine, public_url, tftp, dashboard })`
 returns a `Server`. `stop()` disconnects every agent, gives open requests a
 short grace period and then cuts off whatever connection is left, after which
@@ -159,6 +159,9 @@ variables:
 - `IMAGED_MAC`, `IMAGED_IP` and `IMAGED_SERVER` of the client,
 - `http_proxy`, `https_proxy`, `HTTP_PROXY` and `HTTPS_PROXY` when the server
   runs with `--script-proxy <url>` (`SCRIPT_PROXY`, `Config::script_proxy`).
+- every entry of `Config::script_variables`, which an embedding program uses to
+  hand scripts values such as credentials; names must be shell identifiers and
+  cannot be one of the variables above.
 
 Stdout and stderr go to the client log and, as the script runs, to the server,
 which keeps the full output and exit code of every run per task host
