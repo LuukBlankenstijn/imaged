@@ -343,19 +343,21 @@ impl ArchiveService {
         tokio::fs::rename(&import_dir, self.image_service.image_dir(image_id))
             .await
             .map_err(store_failed)?;
-        let mut script_ids = Vec::with_capacity(manifest.scripts.len());
-        for archived in &manifest.scripts {
-            let script = NewScript {
-                name: archived.name.clone(),
-                body: bodies.remove(&archived.file).ok_or_else(|| {
-                    AppError::InvalidArgument(format!("archive is missing `{}`", archived.file))
-                })?,
-                inputs: archived.inputs.clone(),
-            };
-            script_ids.push(self.script_repo.upsert(&script).await?.id);
-        }
+        let scripts = manifest
+            .scripts
+            .iter()
+            .map(|archived| {
+                Ok(NewScript {
+                    name: archived.name.clone(),
+                    body: bodies.remove(&archived.file).ok_or_else(|| {
+                        AppError::InvalidArgument(format!("archive is missing `{}`", archived.file))
+                    })?,
+                    inputs: archived.inputs.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         self.script_repo
-            .set_for_image(image_id, &script_ids)
+            .import_for_image(image_id, &scripts)
             .await?;
         self.image_repo
             .finish_import(
@@ -981,6 +983,43 @@ mod tests {
 
         assert_eq!(message, "checksum mismatch for `scripts/setup.sh`");
         assert!(c.script_repo.get_all().await.unwrap().is_empty());
+        assert!(image_dirs(&guard).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_invalid_script_after_a_valid_one_leaves_the_library_untouched() {
+        let (c, guard) = container().await;
+        c.script_repo
+            .create(&NewScript {
+                name: "setup".into(),
+                body: "echo old".into(),
+                inputs: vec![],
+            })
+            .await
+            .unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&manifest(&[])).unwrap();
+        manifest["scripts"] = json!([
+            { "name": "setup", "file": "scripts/setup.sh", "sha256": sha256(b"echo new"), "inputs": [] },
+            { "name": "blank", "file": "scripts/blank.sh", "sha256": sha256(b"\n"), "inputs": [] },
+        ]);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("scripts/setup.sh", b"echo new"),
+            ("scripts/blank.sh", b"\n"),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert_eq!(message, "script `blank` has an empty body");
+        let library = c.script_repo.get_all().await.unwrap();
+        let listed: Vec<(&str, &str)> = library
+            .iter()
+            .map(|s| (s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(listed, [("setup", "echo old")]);
         assert!(image_dirs(&guard).is_empty());
     }
 

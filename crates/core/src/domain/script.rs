@@ -71,6 +71,9 @@ pub struct DeployInputs {
 
 impl ScriptInput {
     pub fn check(&self, value: &str) -> std::result::Result<(), String> {
+        if value.contains('\0') {
+            return Err(format!("input `{}` cannot contain NUL bytes", self.name));
+        }
         match self.kind {
             InputKind::Text => Ok(()),
             InputKind::Number => match value.trim().parse::<f64>() {
@@ -275,7 +278,7 @@ pub trait ScriptRepository: Send + Sync {
 
     async fn delete(&self, id: i64) -> Result;
 
-    async fn upsert(&self, script: &NewScript) -> Result<Script>;
+    async fn import_for_image(&self, image_id: i64, scripts: &[NewScript]) -> Result;
 
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>>;
 
@@ -466,7 +469,7 @@ mod tests {
         let number = input("count", InputKind::Number);
         let mut choice = input("mode", InputKind::Choice);
         choice.choices = vec!["fast".into(), "safe".into()];
-        let scripts = [script(vec![number, choice])];
+        let scripts = [script(vec![number, choice, input("note", InputKind::Text)])];
         let deploy = |pairs: &[(&str, &str)]| {
             resolve_inputs(
                 &scripts,
@@ -481,6 +484,7 @@ mod tests {
         assert!(rejected(deploy(&[("count", "ten")])).contains("number"));
         assert!(rejected(deploy(&[("count", "inf")])).contains("number"));
         assert!(rejected(deploy(&[("mode", "slow")])).contains("fast, safe"));
+        assert!(rejected(deploy(&[("count", "1"), ("note", "a\0b")])).contains("NUL"));
         deploy(&[("count", "-3.5"), ("mode", "safe")]).unwrap();
     }
 

@@ -129,41 +129,16 @@ impl ScriptRepository for SqliteScriptRepository {
 
     async fn create(&self, script: &NewScript) -> Result<Script> {
         script.validate()?;
-        let now = Utc::now();
         let mut tx = self.pool.begin().await?;
-        let id = sqlx::query_scalar!(
-            r#"INSERT INTO scripts (name, body, updated_at) VALUES (?, ?, ?) RETURNING id as "id!""#,
-            script.name,
-            script.body,
-            now
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        insert_inputs(&mut tx, id, script).await?;
+        let id = write_script(&mut tx, None, script).await?;
         tx.commit().await?;
         self.get(id).await
     }
 
     async fn update(&self, id: i64, script: &NewScript) -> Result<Script> {
         script.validate()?;
-        let now = Utc::now();
         let mut tx = self.pool.begin().await?;
-        let updated = sqlx::query!(
-            "UPDATE scripts SET name = ?, body = ?, updated_at = ? WHERE id = ?",
-            script.name,
-            script.body,
-            now,
-            id
-        )
-        .execute(&mut *tx)
-        .await?;
-        if updated.rows_affected() == 0 {
-            return Err(AppError::NotFound(format!("script {id}")));
-        }
-        sqlx::query!("DELETE FROM script_inputs WHERE script_id = ?", id)
-            .execute(&mut *tx)
-            .await?;
-        insert_inputs(&mut tx, id, script).await?;
+        write_script(&mut tx, Some(id), script).await?;
         tx.commit().await?;
         self.get(id).await
     }
@@ -191,17 +166,24 @@ impl ScriptRepository for SqliteScriptRepository {
         Ok(())
     }
 
-    async fn upsert(&self, script: &NewScript) -> Result<Script> {
-        let existing = sqlx::query_scalar!(
-            r#"SELECT id as "id!" FROM scripts WHERE name = ?"#,
-            script.name
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        match existing {
-            Some(id) => self.update(id, script).await,
-            None => self.create(script).await,
+    async fn import_for_image(&self, image_id: i64, scripts: &[NewScript]) -> Result {
+        for script in scripts {
+            script.validate()?;
         }
+        let mut tx = self.pool.begin().await?;
+        let mut ids = Vec::with_capacity(scripts.len());
+        for script in scripts {
+            let existing = sqlx::query_scalar!(
+                r#"SELECT id as "id!" FROM scripts WHERE name = ?"#,
+                script.name
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            ids.push(write_script(&mut tx, existing, script).await?);
+        }
+        link_scripts(&mut tx, image_id, &ids).await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>> {
@@ -220,39 +202,84 @@ impl ScriptRepository for SqliteScriptRepository {
 
     async fn set_for_image(&self, image_id: i64, script_ids: &[i64]) -> Result {
         let mut tx = self.pool.begin().await?;
-        sqlx::query_scalar!(
-            "SELECT id FROM images WHERE id = ? AND deleted_at IS NULL",
-            image_id
-        )
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("image {image_id}")))?;
-        sqlx::query!("DELETE FROM image_scripts WHERE image_id = ?", image_id)
-            .execute(&mut *tx)
-            .await?;
-        for (position, script_id) in script_ids.iter().enumerate() {
-            if script_ids[..position].contains(script_id) {
-                return Err(AppError::InvalidArgument(format!(
-                    "script {script_id} is listed twice"
-                )));
-            }
-            sqlx::query_scalar!("SELECT id FROM scripts WHERE id = ?", script_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or_else(|| AppError::NotFound(format!("script {script_id}")))?;
-            let position = position as i64;
-            sqlx::query!(
-                "INSERT INTO image_scripts (image_id, position, script_id) VALUES (?, ?, ?)",
-                image_id,
-                position,
-                script_id
-            )
-            .execute(&mut *tx)
-            .await?;
-        }
+        link_scripts(&mut tx, image_id, script_ids).await?;
         tx.commit().await?;
         Ok(())
     }
+}
+
+async fn write_script(
+    conn: &mut SqliteConnection,
+    id: Option<i64>,
+    script: &NewScript,
+) -> Result<i64> {
+    let now = Utc::now();
+    let id = match id {
+        None => {
+            sqlx::query_scalar!(
+                r#"INSERT INTO scripts (name, body, updated_at) VALUES (?, ?, ?) RETURNING id as "id!""#,
+                script.name,
+                script.body,
+                now
+            )
+            .fetch_one(&mut *conn)
+            .await?
+        }
+        Some(id) => {
+            let updated = sqlx::query!(
+                "UPDATE scripts SET name = ?, body = ?, updated_at = ? WHERE id = ?",
+                script.name,
+                script.body,
+                now,
+                id
+            )
+            .execute(&mut *conn)
+            .await?;
+            if updated.rows_affected() == 0 {
+                return Err(AppError::NotFound(format!("script {id}")));
+            }
+            sqlx::query!("DELETE FROM script_inputs WHERE script_id = ?", id)
+                .execute(&mut *conn)
+                .await?;
+            id
+        }
+    };
+    insert_inputs(conn, id, script).await?;
+    Ok(id)
+}
+
+async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[i64]) -> Result {
+    sqlx::query_scalar!(
+        "SELECT id FROM images WHERE id = ? AND deleted_at IS NULL",
+        image_id
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("image {image_id}")))?;
+    sqlx::query!("DELETE FROM image_scripts WHERE image_id = ?", image_id)
+        .execute(&mut *conn)
+        .await?;
+    for (position, script_id) in script_ids.iter().enumerate() {
+        if script_ids[..position].contains(script_id) {
+            return Err(AppError::InvalidArgument(format!(
+                "script {script_id} is listed twice"
+            )));
+        }
+        sqlx::query_scalar!("SELECT id FROM scripts WHERE id = ?", script_id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("script {script_id}")))?;
+        let position = position as i64;
+        sqlx::query!(
+            "INSERT INTO image_scripts (image_id, position, script_id) VALUES (?, ?, ?)",
+            image_id,
+            position,
+            script_id
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -534,9 +561,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upserting_by_name_replaces_the_existing_script_in_place() {
+    async fn importing_replaces_scripts_by_name_and_attaches_them_in_order() {
         let (c, _g) = container().await;
-        let image = c.image_repo.create_image("img".into()).await.unwrap();
+        let other = c.image_repo.create_image("other".into()).await.unwrap();
+        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
         let original = c
             .script_repo
             .create(&new_script(
@@ -547,25 +575,67 @@ mod tests {
             .await
             .unwrap();
         c.script_repo
-            .set_for_image(image.id, &[original.id])
+            .set_for_image(other.id, &[original.id])
             .await
             .unwrap();
 
-        let replaced = c
-            .script_repo
-            .upsert(&new_script("setup", "new", vec![]))
-            .await
-            .unwrap();
-        let added = c
-            .script_repo
-            .upsert(&new_script("other", "x", vec![]))
+        c.script_repo
+            .import_for_image(
+                imported.id,
+                &[
+                    new_script("added", "x", vec![]),
+                    new_script("setup", "new", vec![]),
+                ],
+            )
             .await
             .unwrap();
 
-        assert_eq!(replaced.id, original.id);
-        let used = c.script_repo.get_for_image(image.id).await.unwrap();
+        let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
+        let names: Vec<&str> = attached.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["added", "setup"]);
+        assert_eq!(attached[1].id, original.id);
+        let used = c.script_repo.get_for_image(other.id).await.unwrap();
         assert_eq!((used[0].body.as_str(), used[0].inputs.len()), ("new", 0));
-        assert_ne!(added.id, original.id);
-        assert_eq!(c.script_repo.get_all().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn an_import_with_one_invalid_script_changes_nothing() {
+        let (c, _g) = container().await;
+        let image = c.image_repo.create_image("imported".into()).await.unwrap();
+        c.script_repo
+            .create(&new_script("setup", "old", vec![]))
+            .await
+            .unwrap();
+        let twice = vec![
+            input("x", InputKind::Number, &[]),
+            input("x", InputKind::Number, &[]),
+        ];
+
+        let err = c
+            .script_repo
+            .import_for_image(
+                image.id,
+                &[
+                    new_script("setup", "new", vec![]),
+                    new_script("bad", "y", twice),
+                ],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::InvalidArgument(_)), "{err:?}");
+        let library = c.script_repo.get_all().await.unwrap();
+        let listed: Vec<(&str, &str)> = library
+            .iter()
+            .map(|s| (s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(listed, [("setup", "old")]);
+        assert!(
+            c.script_repo
+                .get_for_image(image.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

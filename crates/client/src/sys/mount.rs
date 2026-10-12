@@ -9,6 +9,8 @@ use crate::sys::fstab::plan_mounts;
 
 const PROBE_DIR: &str = "/tmp/imaged-probe";
 const ROOT_DIR: &str = "/tmp/imaged-root";
+const STOP_ATTEMPTS: usize = 50;
+const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub fn has_os_release(device: &str, fstype: &str) -> Result<bool> {
     std::fs::create_dir_all(PROBE_DIR).with_context(|| format!("creating {PROBE_DIR}"))?;
@@ -93,18 +95,68 @@ impl MountedSystem {
         self.mounted.push(target);
         Ok(())
     }
+
+    pub fn unmount(mut self) -> Result<()> {
+        self.release()
+    }
+
+    fn release(&mut self) -> Result<()> {
+        stop_processes_inside(&self.root);
+        let mut failure = None;
+        while let Some(target) = self.mounted.pop() {
+            if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::empty()) {
+                let detached = rustix::mount::unmount(&target, UnmountFlags::DETACH);
+                tracing::error!(target=%target.display(), error=%e, ?detached, "could not unmount");
+                failure.get_or_insert(anyhow::anyhow!(
+                    "could not unmount {}: {e}",
+                    target.display()
+                ));
+            }
+        }
+        rustix::fs::sync();
+        failure.map_or(Ok(()), Err)
+    }
 }
 
 impl Drop for MountedSystem {
     fn drop(&mut self) {
-        while let Some(target) = self.mounted.pop() {
-            if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::empty()) {
-                tracing::warn!(target=%target.display(), error=%e, "unmount failed, detaching instead");
-                if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::DETACH) {
-                    tracing::error!(target=%target.display(), error=%e, "could not detach");
-                }
-            }
+        if let Err(e) = self.release() {
+            tracing::error!(error=%format!("{e:#}"), "could not undo the mounts");
         }
-        rustix::fs::sync();
     }
+}
+
+fn stop_processes_inside(root: &Path) {
+    for _ in 0..STOP_ATTEMPTS {
+        let inside = processes_inside(root);
+        if inside.is_empty() {
+            return;
+        }
+        for pid in inside {
+            tracing::warn!(
+                pid = pid.as_raw_nonzero(),
+                "killing a process left in the restored system"
+            );
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        std::thread::sleep(STOP_POLL);
+    }
+    tracing::error!(
+        remaining = processes_inside(root).len(),
+        "processes in the restored system did not exit"
+    );
+}
+
+fn processes_inside(root: &Path) -> Vec<rustix::process::Pid> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let pid = rustix::process::Pid::from_raw(entry.file_name().to_str()?.parse().ok()?)?;
+            let process_root = std::fs::read_link(entry.path().join("root")).ok()?;
+            process_root.starts_with(root).then_some(pid)
+        })
+        .collect()
 }

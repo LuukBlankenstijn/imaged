@@ -47,8 +47,20 @@ pub async fn run(task_id: i64, partitions: &[PartitionTarget]) -> Result<()> {
     let disk = crate::sys::disk::find_target_disk().await?;
     let agent = Agent::current()?;
     let system = MountedSystem::mount(root, &disk)?;
+    let ran = run_scripts(task_id, &system, &plan, &agent).await;
+    let unmounted = system.unmount();
+    ran?;
+    unmounted
+}
+
+async fn run_scripts(
+    task_id: i64,
+    system: &MountedSystem,
+    plan: &PostInstall,
+    agent: &Agent,
+) -> Result<()> {
     for script in &plan.scripts {
-        let env = script_env(script, &agent, plan.proxy.as_deref());
+        let env = script_env(script, agent, plan.proxy.as_deref());
         run_script(task_id, system.root(), script, env).await?;
     }
     Ok(())
