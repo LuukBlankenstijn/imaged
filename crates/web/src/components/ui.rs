@@ -27,6 +27,8 @@ pub fn button_classes(variant: ButtonVariant) -> String {
     format!("{base} {v}")
 }
 
+pub const FIELD_CLASSES: &str = "rounded-md border border-ink-600 bg-ink-900 px-2.5 py-1.5 text-sm text-fog-100 placeholder:text-fog-600 focus:border-amber-500/60 focus:outline-none focus-visible:glow-amber";
+
 #[component]
 pub fn Button(
     #[props(default)] variant: ButtonVariant,

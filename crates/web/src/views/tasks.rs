@@ -1,16 +1,17 @@
 use dioxus::prelude::*;
 
-use crate::api::tasks::{cancel_task, get_all_tasks, retry_task};
-use crate::components::hooks::use_poll;
+use crate::api::tasks::{cancel_task, get_all_tasks, get_script_runs, retry_task};
+use crate::components::hooks::{use_poll, use_poll_while};
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
 use crate::components::multicast::use_transfer;
 use crate::components::toast::toast_error;
 use crate::components::ui::{
-    Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge, TaskTypeBadge,
+    Badge, Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge,
+    TaskTypeBadge, Tone,
 };
 use crate::format::{format_bytes, format_duration, format_relative};
-use crate::model::{MulticastProgress, Task, TaskState, TaskType};
+use crate::model::{MulticastProgress, ScriptRun, Task, TaskHost, TaskState, TaskType};
 
 fn select_class() -> &'static str {
     "rounded-md border border-ink-600 bg-ink-900 px-3 py-1.5 text-sm text-fog-200 focus:outline-none focus-visible:glow-amber"
@@ -140,7 +141,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         task.state,
         TaskState::Cancelled | TaskState::Failed | TaskState::Partial
     );
-    let needs_confirm = matches!(task.r#type, TaskType::Deploy | TaskType::Multicast);
+    let restores_disk = matches!(task.r#type, TaskType::Deploy | TaskType::Multicast);
 
     let image_label = task
         .image_name
@@ -183,7 +184,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                         Button {
                             variant: ButtonVariant::Danger,
                             onclick: move |_| {
-                                if needs_confirm {
+                                if restores_disk {
                                     cancel_open.set(true);
                                 } else {
                                     do_cancel();
@@ -216,18 +217,11 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                 div { class: "border-t border-line/60 px-4 py-3",
                     div { class: "flex flex-col gap-2",
                         for h in hosts.iter() {
-                            div { key: "{h.host_id}", class: "flex flex-wrap items-center gap-3 text-sm",
-                                span { class: "font-mono text-xs text-fog-500", "host {h.host_id}" }
-                                TaskStateBadge { state: h.state }
-                                if let Some(started) = h.started_at {
-                                    span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
-                                }
-                                if let Some(finished) = h.finished_at {
-                                    span { class: "font-mono text-xs text-fog-600", "end {format_relative(finished)}" }
-                                }
-                                if let Some(err) = h.error.clone() {
-                                    span { class: "text-xs text-bad", "{err}" }
-                                }
+                            TaskHostRow {
+                                key: "{h.host_id}",
+                                task_id,
+                                host: h.clone(),
+                                has_scripts: restores_disk,
                             }
                         }
                     }
@@ -244,6 +238,107 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                     do_cancel();
                 },
                 oncancel: move |_| cancel_open.set(false),
+            }
+        }
+    }
+}
+
+#[component]
+fn TaskHostRow(task_id: i64, host: TaskHost, has_scripts: bool) -> Element {
+    let mut scripts_open = use_signal(|| false);
+    let running = matches!(host.state, TaskState::Pending | TaskState::Running);
+
+    rsx! {
+        div {
+            div { class: "flex flex-wrap items-center gap-3 text-sm",
+                span { class: "font-mono text-xs text-fog-500", "host {host.host_id}" }
+                TaskStateBadge { state: host.state }
+                if let Some(started) = host.started_at {
+                    span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
+                }
+                if let Some(finished) = host.finished_at {
+                    span { class: "font-mono text-xs text-fog-600", "end {format_relative(finished)}" }
+                }
+                if let Some(err) = host.error.clone() {
+                    span { class: "text-xs text-bad", "{err}" }
+                }
+                if has_scripts {
+                    Button {
+                        variant: if scripts_open() { ButtonVariant::Primary } else { ButtonVariant::Subtle },
+                        class: "ml-auto px-2 py-1 text-xs",
+                        onclick: move |_| scripts_open.toggle(),
+                        Icon { name: "script", class: "w-3.5 h-3.5" }
+                        "Script output"
+                    }
+                }
+            }
+            if scripts_open() {
+                ScriptRuns { task_id, host_id: host.host_id, running }
+            }
+        }
+    }
+}
+
+#[component]
+fn ScriptRuns(task_id: i64, host_id: i64, running: ReadSignal<bool>) -> Element {
+    let runs = use_poll_while(
+        1500,
+        move || running(),
+        move || async move { get_script_runs(task_id, host_id).await },
+    );
+
+    rsx! {
+        div { class: "mt-2 mb-1 flex flex-col gap-2 border-l-2 border-line pl-3",
+            match &*runs.read() {
+                Some(Ok(list)) if list.is_empty() => rsx! {
+                    p { class: "text-xs text-fog-600", "No post-install scripts have run on this host." }
+                },
+                Some(Ok(list)) => rsx! {
+                    for run in list.iter() {
+                        ScriptRunView { key: "{run.position}", run: run.clone() }
+                    }
+                },
+                Some(Err(e)) => rsx! {
+                    p { class: "text-xs text-bad", "Failed to load script output: {e}" }
+                },
+                None => rsx! {
+                    Spinner { class: "w-4 h-4" }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn ScriptRunView(run: ScriptRun) -> Element {
+    let (tone, status) = match (run.exit_code, run.finished_at) {
+        (_, None) => (Tone::Run, "running".to_string()),
+        (Some(0), Some(_)) => (Tone::Ok, "ok".to_string()),
+        (Some(code), Some(_)) => (Tone::Bad, format!("exit {code}")),
+        (None, Some(_)) => (Tone::Bad, "no exit code".to_string()),
+    };
+    let timing = match run.finished_at {
+        Some(finished) => {
+            let seconds = (finished - run.started_at).max(0) as u64 / 1000;
+            format_duration(seconds)
+        }
+        None => format!("started {}", format_relative(run.started_at)),
+    };
+
+    rsx! {
+        div { class: "overflow-hidden rounded-md border border-line bg-ink-900/60",
+            div { class: "flex items-center gap-3 border-b border-line/60 px-3 py-1.5",
+                span { class: "font-mono text-xs text-fog-600", "{run.position + 1}" }
+                span { class: "min-w-0 flex-1 truncate font-mono text-sm text-fog-100", "{run.script_name}" }
+                span { class: "font-mono text-[11px] text-fog-500", "{timing}" }
+                Badge { tone, "{status}" }
+            }
+            if run.output.is_empty() {
+                p { class: "px-3 py-2 font-mono text-xs text-fog-600", "no output" }
+            } else {
+                pre { class: "max-h-80 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-xs leading-relaxed text-fog-300",
+                    "{run.output}"
+                }
             }
         }
     }

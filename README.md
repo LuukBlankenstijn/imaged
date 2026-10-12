@@ -29,7 +29,10 @@ a root partition still import.
 ### `crates/web` — `imaged-web`
 
 Dioxus fullstack library that renders the dashboard (hydrated wasm client) and
-mounts the server-side routes.
+mounts the server-side routes. The Scripts page edits the script library; each image
+lists its scripts and root partition; the deploy and multicast dialogs ask for
+the inputs of the image's scripts (shared values once, per-machine values per
+host); and the Tasks page shows each host's script output.
 
 ### `crates/api/ui` — `imaged-api-ui`
 

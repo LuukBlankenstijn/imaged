@@ -23,6 +23,11 @@ pub fn Icon(name: &'static str, #[props(default)] class: String) -> Element {
             polyline { points: "3,12 12,16.5 21,12" }
             polyline { points: "3,16.5 12,21 21,16.5" }
         },
+        "script" => rsx! {
+            rect { x: "3", y: "4", width: "18", height: "16", rx: "2" }
+            polyline { points: "7,9 10,12 7,15" }
+            line { x1: "12", y1: "15", x2: "17", y2: "15" }
+        },
         "tasks" => rsx! {
             line { x1: "9", y1: "6", x2: "20", y2: "6" }
             line { x1: "9", y1: "12", x2: "20", y2: "12" }

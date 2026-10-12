@@ -1,17 +1,21 @@
 //! Unit tests for the pure, presentational components and formatting helpers,
 //! rendered to HTML with `dioxus-ssr`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use dioxus::prelude::*;
 
+use crate::components::deploy_inputs::{form_fields, initial_inputs, submitted_inputs};
 use crate::components::icons::Icon;
 use crate::components::ui::{
     Button, EmptyState, ImageStatusBadge, StatusDot, TaskStateBadge, TaskTypeBadge,
 };
 use crate::format::{format_bytes, format_relative};
-use crate::model::{ImageStatus, TaskState, TaskType};
+use crate::model::{
+    DeployInputs, ImageStatus, InputKind, Script, ScriptInput, TaskState, TaskType,
+};
 use crate::views::groups::{all_selected, toggle_visible};
+use crate::views::scripts::InputDraft;
 
 fn render(el: Element) -> String {
     dioxus_ssr::render_element(el)
@@ -219,4 +223,134 @@ fn selecting_all_with_nothing_visible_changes_nothing() {
     let mut selected = HashSet::from([5]);
     toggle_visible(&mut selected, &[]);
     assert_eq!(selected, HashSet::from([5]));
+}
+
+fn input(name: &str, per_machine: bool, default_value: Option<&str>) -> ScriptInput {
+    ScriptInput {
+        name: name.to_string(),
+        label: String::new(),
+        kind: InputKind::Text,
+        required: false,
+        default_value: default_value.map(str::to_string),
+        per_machine,
+        choices: Vec::new(),
+    }
+}
+
+fn script(id: i64, inputs: Vec<ScriptInput>) -> Script {
+    Script {
+        id,
+        name: format!("script-{id}"),
+        body: String::new(),
+        updated_at: 0,
+        inputs,
+    }
+}
+
+fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect()
+}
+
+#[test]
+fn the_deploy_form_asks_for_an_input_shared_by_several_scripts_once_in_first_declaration_order() {
+    let scripts = [
+        script(
+            1,
+            vec![input("site", false, None), input("hostname", true, None)],
+        ),
+        script(
+            2,
+            vec![
+                input("hostname", true, Some("pc")),
+                input("role", false, None),
+            ],
+        ),
+    ];
+
+    let fields = form_fields(&scripts);
+
+    let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["site", "hostname", "role"]);
+    assert_eq!(fields[1].default_value, None);
+}
+
+#[test]
+fn the_deploy_form_prefills_defaults_shared_once_and_per_machine_for_every_host() {
+    let fields = [
+        input("site", false, Some("hq")),
+        input("role", false, None),
+        input("hostname", true, Some("pc")),
+    ];
+
+    let form = initial_inputs(&fields, &[4, 7]);
+
+    assert_eq!(form.shared, values(&[("site", "hq")]));
+    assert_eq!(
+        form.per_machine,
+        BTreeMap::from([
+            (4, values(&[("hostname", "pc")])),
+            (7, values(&[("hostname", "pc")]))
+        ])
+    );
+}
+
+#[test]
+fn submitting_the_deploy_form_leaves_out_cleared_values_and_hosts_without_any() {
+    let form = DeployInputs {
+        shared: values(&[("site", "hq"), ("role", "")]),
+        per_machine: BTreeMap::from([
+            (4, values(&[("hostname", "pc-4"), ("seat", "")])),
+            (7, values(&[("hostname", "")])),
+        ]),
+    };
+
+    let sent = submitted_inputs(&form);
+
+    assert_eq!(sent.shared, values(&[("site", "hq")]));
+    assert_eq!(
+        sent.per_machine,
+        BTreeMap::from([(4, values(&[("hostname", "pc-4")]))])
+    );
+}
+
+#[test]
+fn a_choice_input_draft_saves_its_trimmed_comma_separated_choices() {
+    let draft = InputDraft {
+        name: " edition ".to_string(),
+        label: " Edition ".to_string(),
+        kind: InputKind::Choice,
+        required: true,
+        default_value: " pro ".to_string(),
+        per_machine: false,
+        choices: "home, pro ,, edu".to_string(),
+    };
+
+    let saved = ScriptInput::from(&draft);
+
+    assert_eq!(saved.name, "edition");
+    assert_eq!(saved.label, "Edition");
+    assert_eq!(saved.default_value.as_deref(), Some("pro"));
+    assert_eq!(saved.choices, ["home", "pro", "edu"]);
+}
+
+#[test]
+fn a_draft_switched_away_from_choice_drops_its_choices_and_an_empty_default() {
+    let draft = InputDraft {
+        name: "count".to_string(),
+        label: String::new(),
+        kind: InputKind::Number,
+        required: false,
+        default_value: "  ".to_string(),
+        per_machine: true,
+        choices: "a, b".to_string(),
+    };
+
+    let saved = ScriptInput::from(&draft);
+
+    assert!(saved.choices.is_empty());
+    assert_eq!(saved.default_value, None);
+    assert!(saved.per_machine);
 }

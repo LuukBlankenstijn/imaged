@@ -5,6 +5,7 @@ use crate::api::hosts::{
 };
 use crate::api::images::get_all_images;
 use crate::components::connection::{Connections, use_connection};
+use crate::components::deploy_inputs::{DeployInputsForm, submitted_inputs};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
@@ -14,7 +15,7 @@ use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, StatusDot,
 };
 use crate::format::format_bytes;
-use crate::model::{DeployRequest, Host, Image, ImageStatus, UpdateName};
+use crate::model::{DeployInputs, DeployRequest, Host, Image, ImageStatus, UpdateName};
 
 #[component]
 pub fn Hosts() -> Element {
@@ -345,9 +346,10 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
     let host_name = host.name.clone();
     let images = use_resource(|| async move { get_all_images().await });
     let mut selected = use_signal(|| None::<i64>);
+    let inputs = use_signal(|| None::<DeployInputs>);
 
     rsx! {
-        Modal { open: true, onclose: move |_| onclose.call(()), title: "Deploy image",
+        Modal { open: true, wide: true, onclose: move |_| onclose.call(()), title: "Deploy image",
             p { class: "mb-4 text-sm text-fog-400",
                 "Select a ready image to deploy to "
                 span { class: "font-medium text-fog-100", "{host_name}" }
@@ -361,44 +363,61 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                             .filter(|i| i.status == ImageStatus::Ready)
                             .cloned()
                             .collect();
-                        if ready.is_empty() {
-                            rsx! {
+                        let chosen = selected()
+                            .and_then(|id| ready.iter().find(|i| i.id == id))
+                            .or(ready.first())
+                            .cloned();
+                        match chosen {
+                            None => rsx! {
                                 EmptyState {
                                     title: "No ready images",
                                     hint: "Capture an image and wait for it to finish first.",
                                 }
-                            }
-                        } else {
-                            let default_id = ready.first().map(|i| i.id);
-                            rsx! {
-                                select {
-                                    class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
-                                    onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
-                                    for img in ready.iter() {
-                                        option { key: "{img.id}", value: "{img.id}", "{img.name}" }
+                            },
+                            Some(image) => {
+                                let image_id = image.id;
+                                rsx! {
+                                    select {
+                                        class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                                        value: "{image_id}",
+                                        onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
+                                        for img in ready.iter() {
+                                            option {
+                                                key: "{img.id}",
+                                                value: "{img.id}",
+                                                selected: img.id == image_id,
+                                                "{img.name}"
+                                            }
+                                        }
                                     }
-                                }
-                                div { class: "mt-6 flex justify-end gap-2",
-                                    Button {
-                                        variant: ButtonVariant::Ghost,
-                                        onclick: move |_| onclose.call(()),
-                                        "Cancel"
+                                    DeployInputsForm {
+                                        image,
+                                        hosts: vec![host.clone()],
+                                        inputs,
                                     }
-                                    Button {
-                                        onclick: move |_| {
-                                            let image_id = selected().or(default_id);
-                                            spawn(async move {
-                                                let Some(image_id) = image_id else {
+                                    div { class: "mt-6 flex justify-end gap-2",
+                                        Button {
+                                            variant: ButtonVariant::Ghost,
+                                            onclick: move |_| onclose.call(()),
+                                            "Cancel"
+                                        }
+                                        Button {
+                                            disabled: inputs.read().is_none(),
+                                            onclick: move |_| {
+                                                let Some(form) = inputs() else {
                                                     return;
                                                 };
-                                                match deploy(DeployRequest { id: host_id, image_id, inputs: Default::default() }).await {
-                                                    Ok(_) => on_deployed.call(()),
-                                                    Err(err) => toast_error("Deploy failed", err.to_string()),
-                                                }
-                                            });
-                                        },
-                                        Icon { name: "deploy", class: "w-3.5 h-3.5" }
-                                        "Deploy"
+                                                let inputs = submitted_inputs(&form);
+                                                spawn(async move {
+                                                    match deploy(DeployRequest { id: host_id, image_id, inputs }).await {
+                                                        Ok(_) => on_deployed.call(()),
+                                                        Err(err) => toast_error("Deploy failed", err.to_string()),
+                                                    }
+                                                });
+                                            },
+                                            Icon { name: "deploy", class: "w-3.5 h-3.5" }
+                                            "Deploy"
+                                        }
                                     }
                                 }
                             }

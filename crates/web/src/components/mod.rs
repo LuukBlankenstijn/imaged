@@ -1,4 +1,5 @@
 pub mod connection;
+pub mod deploy_inputs;
 pub mod hooks;
 pub mod icons;
 pub mod menu;

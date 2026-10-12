@@ -5,9 +5,11 @@
 pub(crate) mod groups;
 mod hosts;
 mod images;
+pub(crate) mod scripts;
 mod tasks;
 
 pub use groups::Groups;
 pub use hosts::Hosts;
 pub use images::Images;
+pub use scripts::Scripts;
 pub use tasks::Tasks;
