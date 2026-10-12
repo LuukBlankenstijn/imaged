@@ -18,7 +18,8 @@ holding `manifest.json` (name, capture date, partitions, the optional root
 partition and post-install scripts with their inputs, and a sha256 per file),
 `parttable.bin`, one `p-<n>.pcl` per partition and one `scripts/<name>.sh` per
 script (`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An
-import stays `importing` until every checksum matches and then turns `ready`; a
+import stays `importing` until every checksum matches and the upload has been
+read to its end, and then turns `ready`; a
 rejected import turns `faulted`, and one cut short by a crash is marked faulted
 the next time the server opens its data dir. Imported scripts replace the body
 and inputs of the library script with the same name (or are added) and are
