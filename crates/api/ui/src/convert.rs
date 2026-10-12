@@ -4,7 +4,9 @@ use imaged_core::domain::{
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
     task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
 };
-use imaged_core::multicast::MulticastProgress as DProgress;
+use imaged_core::multicast::{
+    MulticastProgress as DProgress, ReceiverProgress as DReceiver, TransferPhase as DPhase,
+};
 use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
 
 use crate::model;
@@ -43,12 +45,38 @@ impl From<DProgress> for model::MulticastProgress {
     fn from(p: DProgress) -> Self {
         Self {
             task_id: p.task_id,
+            phase: p.phase.into(),
             fraction: p.fraction,
             bytes_per_second: p.bytes_per_second,
-            receivers: p.receivers,
             step: p.step,
             steps: p.steps,
             eta_seconds: p.eta.map(|eta| eta.as_secs()),
+            hosts: p.hosts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<DPhase> for model::TransferPhase {
+    fn from(p: DPhase) -> Self {
+        match p {
+            DPhase::Gathering => Self::Gathering,
+            DPhase::Sending => Self::Sending,
+            DPhase::Draining => Self::Draining,
+        }
+    }
+}
+
+impl From<DReceiver> for model::ReceiverProgress {
+    fn from(r: DReceiver) -> Self {
+        Self {
+            host_id: r.host_id,
+            name: r.name,
+            joined: r.joined,
+            limiting: r.limiting,
+            slices_behind: r.slices_behind,
+            loss: r.loss,
+            naks: r.naks,
+            sink_stall_ms: r.sink_stall_ms,
         }
     }
 }

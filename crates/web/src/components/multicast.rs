@@ -26,5 +26,10 @@ pub fn use_transfer_provider() {
 
 pub fn use_transfer(task_id: i64) -> Option<MulticastProgress> {
     let transfer = use_context::<Transfer>();
-    transfer.0.read().filter(|p| p.task_id == task_id)
+    transfer
+        .0
+        .read()
+        .as_ref()
+        .filter(|p| p.task_id == task_id)
+        .cloned()
 }

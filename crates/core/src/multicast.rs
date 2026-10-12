@@ -23,15 +23,35 @@ const DB_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const ORPHANED: &str = "Server stopped while task was running";
 const DISCONNECTED: &str = "Host disconnected before reporting the multicast result";
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TransferPhase {
+    Gathering,
+    Sending,
+    Draining,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MulticastProgress {
     pub task_id: i64,
+    pub phase: TransferPhase,
     pub fraction: f64,
     pub bytes_per_second: f64,
-    pub receivers: usize,
     pub step: usize,
     pub steps: usize,
     pub eta: Option<Duration>,
+    pub hosts: Vec<ReceiverProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceiverProgress {
+    pub host_id: i64,
+    pub name: String,
+    pub joined: bool,
+    pub limiting: bool,
+    pub slices_behind: u32,
+    pub loss: f64,
+    pub naks: u64,
+    pub sink_stall_ms: u32,
 }
 
 pub struct MulticastManager {
@@ -192,7 +212,7 @@ mod tests {
     use super::*;
     use crate::di::DIContainer;
     use imaged_shared::{ServerEvent, get_multicast_port, multicast_group};
-    use scuttlecast::receiver::Receiver;
+    use scuttlecast::{error::ProtoError, receiver::Receiver};
     use std::{
         net::Ipv4Addr,
         path::PathBuf,
@@ -218,9 +238,9 @@ mod tests {
         (c, TestDir(dir))
     }
 
-    async fn db_host(c: &DIContainer, mac: &str) -> i64 {
+    async fn db_host(c: &DIContainer, mac: &str, ip: Option<&str>) -> i64 {
         c.host_repo
-            .upsert_host(mac.to_string(), 1_000_000, None)
+            .upsert_host(mac.to_string(), 1_000_000, ip.map(Into::into))
             .await
             .unwrap()
             .id
@@ -244,8 +264,8 @@ mod tests {
         image.id
     }
 
-    fn receive(task_id: i64, slot: i64) -> JoinHandle<Vec<u8>> {
-        let receiver = Receiver::builder()
+    fn receiver(task_id: i64, slot: i64) -> Receiver {
+        Receiver::builder()
             .socket(
                 Ipv4Addr::LOCALHOST,
                 multicast_group(task_id),
@@ -253,7 +273,11 @@ mod tests {
             )
             .expect("bind receiver")
             .max_wait(SETTLE)
-            .build();
+            .build()
+    }
+
+    fn receive(task_id: i64, slot: i64) -> JoinHandle<Vec<u8>> {
+        let receiver = receiver(task_id, slot);
         tokio::spawn(async move {
             let mut received = Vec::new();
             receiver.recv_to(&mut received).await.expect("receive");
@@ -288,8 +312,8 @@ mod tests {
     async fn a_session_delivers_every_file_and_fails_only_hosts_that_disconnected() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let connected = db_host(&c, "aa:bb:cc:dd:ee:01").await;
-        let gone = db_host(&c, "aa:bb:cc:dd:ee:02").await;
+        let connected = db_host(&c, "aa:bb:cc:dd:ee:01", None).await;
+        let gone = db_host(&c, "aa:bb:cc:dd:ee:02", None).await;
         let mut registration = c.host_registry.register(connected);
         let parttable: Vec<u8> = (0..4096).map(|i| (i % 7) as u8).collect();
         let partition: Vec<u8> = (0..256 * 1024).map(|i| (i % 251) as u8).collect();
@@ -326,8 +350,8 @@ mod tests {
     async fn cancelling_a_gathering_session_moves_on_to_the_next_task_in_queue_order() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let first_host = db_host(&c, "aa:bb:cc:dd:ee:03").await;
-        let second_host = db_host(&c, "aa:bb:cc:dd:ee:04").await;
+        let first_host = db_host(&c, "aa:bb:cc:dd:ee:03", None).await;
+        let second_host = db_host(&c, "aa:bb:cc:dd:ee:04", None).await;
         let image_id = image(&c, b"table", b"data").await;
         let first = c
             .task_repo
@@ -362,7 +386,7 @@ mod tests {
     async fn a_host_busy_with_another_task_is_failed_instead_of_left_running() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let busy = db_host(&c, "aa:bb:cc:dd:ee:07").await;
+        let busy = db_host(&c, "aa:bb:cc:dd:ee:07", None).await;
         let deploy = c
             .task_repo
             .create(TaskType::Deploy, vec![busy], None)
@@ -383,11 +407,59 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn kicking_a_host_evicts_its_receiver_and_reports_it_as_not_joined() {
+        let _session = SESSIONS.lock().await;
+        let (c, _dir) = container().await;
+        let kicked = db_host(&c, "aa:bb:cc:dd:ee:08", Some("127.0.0.1")).await;
+        let missing = db_host(&c, "aa:bb:cc:dd:ee:09", None).await;
+        let image_id = image(&c, b"table", b"data").await;
+        let task = c
+            .task_repo
+            .create(TaskType::Multicast, vec![kicked, missing], Some(image_id))
+            .await
+            .unwrap();
+        let receiving = tokio::spawn(receiver(task.id, 0).recv_to(Vec::new()));
+        let mut progress = c.multicast_manager.progress();
+
+        c.multicast_manager.wake();
+        let joined = |p: &Option<MulticastProgress>| {
+            p.as_ref()
+                .is_some_and(|p| p.hosts.iter().any(|h| h.host_id == kicked && h.joined))
+        };
+        tokio::time::timeout(SETTLE, progress.wait_for(joined))
+            .await
+            .unwrap()
+            .unwrap();
+
+        c.task_repo
+            .mark_failed(task.id, kicked, "kicked")
+            .await
+            .unwrap();
+        c.multicast_manager.wake();
+
+        let outcome = tokio::time::timeout(SETTLE, receiving)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(outcome, Err(ProtoError::Evicted(_))),
+            "{outcome:?}"
+        );
+        tokio::time::timeout(SETTLE, progress.wait_for(|p| !joined(p)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(state_of(&c, task.id, missing).await, TaskState::Running);
+        c.task_repo.cancel(task.id).await.unwrap();
+        c.multicast_manager.wake();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn startup_fails_hosts_that_were_mid_transfer_but_keeps_queued_ones() {
         let _session = SESSIONS.lock().await;
         let (c, _dir) = container().await;
-        let interrupted = db_host(&c, "aa:bb:cc:dd:ee:05").await;
-        let queued = db_host(&c, "aa:bb:cc:dd:ee:06").await;
+        let interrupted = db_host(&c, "aa:bb:cc:dd:ee:05", None).await;
+        let queued = db_host(&c, "aa:bb:cc:dd:ee:06", None).await;
         let image_id = image(&c, b"table", b"data").await;
         let task = c
             .task_repo
