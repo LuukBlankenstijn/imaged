@@ -174,6 +174,8 @@
             setup-net
             teardown-net
             ;
+          boot-assets = bootAssets;
+          ipxe-assets = ipxeAssets;
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
             inherit
               bootAssets
