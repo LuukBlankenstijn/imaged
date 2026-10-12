@@ -14,12 +14,16 @@ storage, DI wiring, and the PXE routes. Image partitions are stored on disk
 under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
 Images can be exported and imported as `.imaged` archives: an uncompressed tar
-holding `manifest.json` (name, capture date, partitions and a sha256 per file),
-`parttable.bin` and one `p-<n>.pcl` per partition
-(`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An import
-stays `importing` until every checksum matches and then turns `ready`; a
+holding `manifest.json` (name, capture date, partitions, the optional root
+partition and post-install scripts with their inputs, and a sha256 per file),
+`parttable.bin`, one `p-<n>.pcl` per partition and one `scripts/<name>.sh` per
+script (`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An
+import stays `importing` until every checksum matches and then turns `ready`; a
 rejected import turns `faulted`, and one cut short by a crash is marked faulted
-the next time the server opens its data dir.
+the next time the server opens its data dir. Imported scripts replace the body
+and inputs of the library script with the same name (or are added) and are
+attached to the new image in their archived order; archives without scripts or
+a root partition still import.
 
 ### `crates/web` — `imaged-web`
 
@@ -124,8 +128,7 @@ also carry a root partition (`POST /api/ui/images/root-partition`), the
 partition the scripts run in. A capture finds it by mounting every ext
 partition read-only after cloning it: when exactly one holds `/etc/os-release`
 it becomes the image's root partition, otherwise it is left unset for the
-dashboard to choose. Archives carry it as the optional `root_partition`
-manifest field.
+dashboard to choose.
 
 A deploy (`POST /api/ui/hosts/deploy`) or multicast
 (`POST /api/ui/groups/multicast`) of an image with scripts takes the input

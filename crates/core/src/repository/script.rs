@@ -191,6 +191,19 @@ impl ScriptRepository for SqliteScriptRepository {
         Ok(())
     }
 
+    async fn upsert(&self, script: &NewScript) -> Result<Script> {
+        let existing = sqlx::query_scalar!(
+            r#"SELECT id as "id!" FROM scripts WHERE name = ?"#,
+            script.name
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        match existing {
+            Some(id) => self.update(id, script).await,
+            None => self.create(script).await,
+        }
+    }
+
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>> {
         let rows = sqlx::query_as!(
             ScriptRow,
@@ -518,5 +531,41 @@ mod tests {
         c.image_repo.delete_image(image.id).await.unwrap();
         c.script_repo.delete(script.id).await.unwrap();
         assert!(c.script_repo.get_all().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upserting_by_name_replaces_the_existing_script_in_place() {
+        let (c, _g) = container().await;
+        let image = c.image_repo.create_image("img".into()).await.unwrap();
+        let original = c
+            .script_repo
+            .create(&new_script(
+                "setup",
+                "old",
+                vec![input("a", InputKind::Number, &[])],
+            ))
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(image.id, &[original.id])
+            .await
+            .unwrap();
+
+        let replaced = c
+            .script_repo
+            .upsert(&new_script("setup", "new", vec![]))
+            .await
+            .unwrap();
+        let added = c
+            .script_repo
+            .upsert(&new_script("other", "x", vec![]))
+            .await
+            .unwrap();
+
+        assert_eq!(replaced.id, original.id);
+        let used = c.script_repo.get_for_image(image.id).await.unwrap();
+        assert_eq!((used[0].body.as_str(), used[0].inputs.len()), ("new", 0));
+        assert_ne!(added.id, original.id);
+        assert_eq!(c.script_repo.get_all().await.unwrap().len(), 2);
     }
 }

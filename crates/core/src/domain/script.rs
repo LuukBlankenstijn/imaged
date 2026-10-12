@@ -30,11 +30,16 @@ impl InputKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptInput {
     pub name: String,
+    #[serde(default)]
     pub label: String,
     pub kind: InputKind,
+    #[serde(default)]
     pub required: bool,
+    #[serde(default)]
     pub default_value: Option<String>,
+    #[serde(default)]
     pub per_machine: bool,
+    #[serde(default)]
     pub choices: Vec<String>,
 }
 
@@ -55,6 +60,8 @@ pub struct NewScript {
 }
 
 pub type InputValues = BTreeMap<String, String>;
+
+pub const MAX_SCRIPT_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeployInputs {
@@ -87,7 +94,7 @@ impl ScriptInput {
             .or(self.default_value.as_deref())
     }
 
-    fn validate(&self) -> Result {
+    pub fn validate(&self) -> Result {
         if !is_input_name(&self.name) {
             return Err(AppError::InvalidArgument(format!(
                 "input name `{}` may only contain a-z, 0-9 and _",
@@ -123,14 +130,18 @@ impl ScriptInput {
     }
 }
 
+pub fn validate_script_name(name: &str) -> Result {
+    if !is_script_name(name) {
+        return Err(AppError::InvalidArgument(format!(
+            "script name `{name}` must be 1 to {MAX_SCRIPT_NAME_LEN} letters, digits, -, _ or . and cannot start with ."
+        )));
+    }
+    Ok(())
+}
+
 impl NewScript {
     pub fn validate(&self) -> Result {
-        if !is_script_name(&self.name) {
-            return Err(AppError::InvalidArgument(format!(
-                "script name `{}` may only contain letters, digits, -, _ and . and cannot start with .",
-                self.name
-            )));
-        }
+        validate_script_name(&self.name)?;
         if self.body.trim().is_empty() {
             return Err(AppError::InvalidArgument(format!(
                 "script `{}` has an empty body",
@@ -240,6 +251,7 @@ fn is_input_name(name: &str) -> bool {
 
 fn is_script_name(name: &str) -> bool {
     !name.is_empty()
+        && name.len() <= MAX_SCRIPT_NAME_LEN
         && !name.starts_with('.')
         && name
             .bytes()
@@ -262,6 +274,9 @@ pub trait ScriptRepository: Send + Sync {
     async fn update(&self, id: i64, script: &NewScript) -> Result<Script>;
 
     async fn delete(&self, id: i64) -> Result;
+
+    // creates the script, or replaces the body and inputs of the one with its name
+    async fn upsert(&self, script: &NewScript) -> Result<Script>;
 
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>>;
 
@@ -321,7 +336,11 @@ mod tests {
         for name in ["setup", "set-hostname_2.v1", "A1"] {
             new_script(name, vec![]).validate().unwrap();
         }
-        for name in ["", ".hidden", "with space", "a/b", "..", "naïve"] {
+        new_script(&"a".repeat(MAX_SCRIPT_NAME_LEN), vec![])
+            .validate()
+            .unwrap();
+        let too_long = "a".repeat(MAX_SCRIPT_NAME_LEN + 1);
+        for name in ["", ".hidden", "with space", "a/b", "..", "naïve", &too_long] {
             rejected(new_script(name, vec![]).validate());
         }
     }
