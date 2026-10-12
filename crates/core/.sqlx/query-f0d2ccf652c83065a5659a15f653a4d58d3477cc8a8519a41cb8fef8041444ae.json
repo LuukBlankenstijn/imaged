@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.id as \"id!\", s.name, s.body, s.updated_at as \"updated_at: DateTime<Utc>\"\n               FROM image_scripts i JOIN scripts s ON s.id = i.script_id\n               WHERE i.image_id = ?\n               ORDER BY i.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "body",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at: DateTime<Utc>",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f0d2ccf652c83065a5659a15f653a4d58d3477cc8a8519a41cb8fef8041444ae"
+}

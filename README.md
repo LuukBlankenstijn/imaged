@@ -110,3 +110,15 @@ with the matching kernel and initramfs. See `dnsmasq.conf` for a working setup.
 
 `imaged-server --tftp-bind-address 0.0.0.0:69` also serves the iPXE binaries,
 kernels and initramfs over TFTP, so no separate TFTP server is needed.
+
+## Post-install scripts
+
+Scripts are a library on the server (`/api/ui/scripts`): a unique name (letters,
+digits, `-`, `_`, `.`), a body and a list of declared inputs. An input has a
+name (`[a-z0-9_]+`), a label, a kind (`text`, `number` or `choice` with its
+choices), whether it is required, an optional default and whether its value is
+given per machine or shared by every machine of a deployment. An image keeps an
+ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
+current version; a script that an image still uses cannot be deleted. Images
+also carry a root partition (`POST /api/ui/images/root-partition`), the
+partition the scripts run in.

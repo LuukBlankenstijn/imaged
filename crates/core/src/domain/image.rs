@@ -33,6 +33,7 @@ pub struct Image {
     pub status: ImageStatus,
     pub error: Option<String>,
     pub partitions: Vec<ImagePartition>,
+    pub root_partition: Option<i64>,
 }
 
 #[derive(Debug, Constructor, Serialize)]
@@ -57,6 +58,8 @@ pub trait ImageRepository: Send + Sync {
     async fn create_image(&self, name: String) -> Result<Image>;
 
     async fn update_name(&self, id: i64, new_name: String) -> Result<Image>;
+
+    async fn set_root_partition(&self, id: i64, partition_number: Option<i64>) -> Result<Image>;
 
     async fn get_all(&self) -> Result<Vec<Image>>;
 

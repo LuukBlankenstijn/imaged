@@ -32,6 +32,11 @@
         "name": "deleted_at",
         "ordinal": 5,
         "type_info": "Text"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 6,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -42,6 +47,7 @@
       false,
       true,
       false,
+      true,
       true,
       true
     ]

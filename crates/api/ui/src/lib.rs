@@ -4,6 +4,7 @@ pub mod groups;
 pub mod hosts;
 pub mod images;
 pub mod realtime;
+pub mod scripts;
 pub mod tasks;
 
 #[cfg(feature = "server")]

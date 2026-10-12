@@ -2,6 +2,10 @@ use imaged_core::domain::{
     group::Group as DGroup,
     host::Host as DHost,
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
+    script::{
+        InputKind as DInputKind, NewScript as DNewScript, Script as DScript,
+        ScriptInput as DScriptInput,
+    },
     task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
 };
 use imaged_core::multicast::MulticastProgress as DProgress;
@@ -85,6 +89,7 @@ impl From<DImage> for model::Image {
             status: i.status.into(),
             error_message: i.error,
             partitions: i.partitions.into_iter().map(Into::into).collect(),
+            root_partition: i.root_partition,
         }
     }
 }
@@ -146,6 +151,76 @@ impl From<DGroup> for model::Group {
         Self {
             id: g.id,
             name: g.name,
+        }
+    }
+}
+
+impl From<DInputKind> for model::InputKind {
+    fn from(k: DInputKind) -> Self {
+        match k {
+            DInputKind::Text => Self::Text,
+            DInputKind::Number => Self::Number,
+            DInputKind::Choice => Self::Choice,
+        }
+    }
+}
+
+impl From<model::InputKind> for DInputKind {
+    fn from(k: model::InputKind) -> Self {
+        match k {
+            model::InputKind::Text => Self::Text,
+            model::InputKind::Number => Self::Number,
+            model::InputKind::Choice => Self::Choice,
+        }
+    }
+}
+
+impl From<DScriptInput> for model::ScriptInput {
+    fn from(i: DScriptInput) -> Self {
+        Self {
+            name: i.name,
+            label: i.label,
+            kind: i.kind.into(),
+            required: i.required,
+            default_value: i.default_value,
+            per_machine: i.per_machine,
+            choices: i.choices,
+        }
+    }
+}
+
+impl From<model::ScriptInput> for DScriptInput {
+    fn from(i: model::ScriptInput) -> Self {
+        Self {
+            name: i.name,
+            label: i.label,
+            kind: i.kind.into(),
+            required: i.required,
+            default_value: i.default_value,
+            per_machine: i.per_machine,
+            choices: i.choices,
+        }
+    }
+}
+
+impl From<DScript> for model::Script {
+    fn from(s: DScript) -> Self {
+        Self {
+            id: s.id,
+            name: s.name,
+            body: s.body,
+            updated_at: s.updated_at.timestamp_millis(),
+            inputs: s.inputs.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<model::ScriptRequest> for DNewScript {
+    fn from(s: model::ScriptRequest) -> Self {
+        Self {
+            name: s.name,
+            body: s.body,
+            inputs: s.inputs.into_iter().map(Into::into).collect(),
         }
     }
 }

@@ -510,6 +510,7 @@ async fn ui_api_contracts() {
     multicast_creates_a_task_for_every_host(&c).await;
     waking_hosts_is_accepted(&c).await;
     images_are_exported_and_imported_as_archives(&c).await;
+    scripts_are_managed_and_attached_to_images(&c).await;
 }
 
 async fn reads_are_get_only(c: &DIContainer) {
@@ -523,6 +524,7 @@ async fn reads_are_get_only(c: &DIContainer) {
         "/api/ui/images",
         "/api/ui/groups",
         "/api/ui/tasks",
+        "/api/ui/scripts",
     ] {
         assert_eq!(get(uri).await.status(), StatusCode::OK, "{uri}");
         assert_eq!(
@@ -754,6 +756,90 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
         response.headers()["content-disposition"],
         "attachment; filename=\"golden_image.imaged\""
     );
+}
+
+async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
+    let hostname = serde_json::json!({
+        "name": "hostname", "label": "Hostname", "kind": "text", "required": true,
+        "default_value": null, "per_machine": true, "choices": []
+    });
+    let response = post(
+        "/api/ui/scripts/create",
+        serde_json::json!({ "req": { "name": "set-hostname", "body": "#!/bin/sh\nhostname", "inputs": [hostname] } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let script: model::Script = json(response).await;
+    assert_eq!(script.inputs[0].kind, model::InputKind::Text);
+    assert!(script.inputs[0].per_machine);
+
+    let invalid = post(
+        "/api/ui/scripts/create",
+        serde_json::json!({ "req": { "name": "bad name", "body": "x", "inputs": [] } }),
+    )
+    .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    let response = post(
+        "/api/ui/scripts/update",
+        serde_json::json!({ "req": { "id": script.id, "script": { "name": "hostname", "body": "echo", "inputs": [] } } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated: model::Script = json(response).await;
+    assert_eq!(
+        (updated.name.as_str(), updated.inputs.len()),
+        ("hostname", 0)
+    );
+
+    let image = c.image_repo.create_image("scripted".into()).await.unwrap();
+    c.image_repo
+        .save_partition(image.id, 2, "ext4", 4096)
+        .await
+        .unwrap();
+    let response = post(
+        "/api/ui/images/scripts",
+        serde_json::json!({ "req": { "image_id": image.id, "script_ids": [script.id] } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let attached: Vec<model::Script> =
+        json(get(&format!("/api/ui/images/{}/scripts", image.id)).await).await;
+    assert_eq!(
+        attached.iter().map(|s| s.id).collect::<Vec<_>>(),
+        vec![script.id]
+    );
+
+    assert_eq!(
+        post(
+            "/api/ui/scripts/delete",
+            serde_json::json!({ "id": script.id })
+        )
+        .await
+        .status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    assert_eq!(
+        post(
+            "/api/ui/images/root-partition",
+            serde_json::json!({ "req": { "image_id": image.id, "partition_number": 7 } }),
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let response = post(
+        "/api/ui/images/root-partition",
+        serde_json::json!({ "req": { "image_id": image.id, "partition_number": 2 } }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let image: model::Image = json(response).await;
+    assert_eq!(image.root_partition, Some(2));
+
+    let scripts: Vec<model::Script> = json(get("/api/ui/scripts").await).await;
+    assert!(scripts.iter().any(|s| s.id == script.id));
 }
 
 #[tokio::test]

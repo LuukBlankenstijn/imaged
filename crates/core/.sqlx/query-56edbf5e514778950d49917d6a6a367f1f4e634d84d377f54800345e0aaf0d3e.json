@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT i.name FROM image_scripts s JOIN images i ON i.id = s.image_id WHERE s.script_id = ? ORDER BY i.name",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "56edbf5e514778950d49917d6a6a367f1f4e634d84d377f54800345e0aaf0d3e"
+}

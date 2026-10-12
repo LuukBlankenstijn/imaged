@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error\n               FROM images WHERE id = ? AND deleted_at IS NULL",
+  "query": "UPDATE images SET name = ? WHERE id = ?\n               RETURNING\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition\n            ",
   "describe": {
     "columns": [
       {
@@ -27,18 +27,24 @@
         "name": "error",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 5,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
       false,
       true,
       false,
+      true,
       true
     ]
   },
-  "hash": "d216238ef7e01109f816f6bcb6d126323d73cb991ad1a50f5e28f9583a5faede"
+  "hash": "e2d53fef95d8e91c43deaaf2dd3c8aa31fcb289c9a312170147986d953cc76db"
 }

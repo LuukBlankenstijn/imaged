@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                 script_id,\n                 name,\n                 label,\n                 kind,\n                 required as \"required: bool\",\n                 default_value,\n                 per_machine as \"per_machine: bool\",\n                 choices as \"choices: Json<Vec<String>>\"\n               FROM script_inputs\n               WHERE script_id IN (SELECT value FROM json_each(?))\n               ORDER BY script_id, position",
+  "describe": {
+    "columns": [
+      {
+        "name": "script_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "label",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "required: bool",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "default_value",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "per_machine: bool",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "choices: Json<Vec<String>>",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e16660e56b26b1c38a9eff2138deb0b92f19def5f9e57d7f8107cb8830a7ac87"
+}

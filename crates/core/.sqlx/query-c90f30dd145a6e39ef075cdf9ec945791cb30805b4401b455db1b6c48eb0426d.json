@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM script_inputs WHERE script_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c90f30dd145a6e39ef075cdf9ec945791cb30805b4401b455db1b6c48eb0426d"
+}

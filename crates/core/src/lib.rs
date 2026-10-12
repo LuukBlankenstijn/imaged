@@ -59,6 +59,7 @@ pub async fn build_di_container(
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());
     let task_repo = repository::task_repo(pool.clone());
+    let script_repo = repository::script_repo(pool.clone());
     let group_repo = repository::group_repo(pool);
     let host_registry = Arc::new(registry::HostRegistry::default());
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
@@ -87,6 +88,7 @@ pub async fn build_di_container(
         image_repo,
         task_repo,
         group_repo,
+        script_repo,
         host_registry,
         image_service,
         archive_service,

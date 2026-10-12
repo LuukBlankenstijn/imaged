@@ -33,6 +33,7 @@ impl SqliteImageRepository {
             ImageStatus::from_string(image.status)?,
             image.error,
             Vec::new(),
+            None,
         ))
     }
 }
@@ -53,7 +54,8 @@ impl ImageRepository for SqliteImageRepository {
                  name,
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
-                 error
+                 error,
+                 root_partition
                FROM images WHERE id = ? AND deleted_at IS NULL"#,
             id
         )
@@ -67,6 +69,7 @@ impl ImageRepository for SqliteImageRepository {
             ImageStatus::from_string(image.status)?,
             image.error,
             self.get_partitions(id).await?,
+            image.root_partition,
         ))
     }
 
@@ -82,7 +85,8 @@ impl ImageRepository for SqliteImageRepository {
                  name,
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
-                 error
+                 error,
+                 root_partition
             "#,
             name,
             id
@@ -119,7 +123,30 @@ impl ImageRepository for SqliteImageRepository {
             ImageStatus::from_string(image.status)?,
             image.error,
             partitions,
+            image.root_partition,
         ))
+    }
+
+    async fn set_root_partition(&self, id: i64, partition_number: Option<i64>) -> Result<Image> {
+        let image = self.get(id).await?;
+        if let Some(number) = partition_number
+            && !image
+                .partitions
+                .iter()
+                .any(|p| p.partition_number == number)
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "image {id} has no partition {number}"
+            )));
+        }
+        sqlx::query!(
+            "UPDATE images SET root_partition = ? WHERE id = ?",
+            partition_number,
+            id
+        )
+        .execute(&self.pool)
+        .await?;
+        self.get(id).await
     }
 
     async fn get_all(&self) -> Result<Vec<Image>> {
@@ -133,6 +160,7 @@ impl ImageRepository for SqliteImageRepository {
                 i.status AS "image_status!",
                 i.error AS "error",
                 i.captured_at as "captured_at: DateTime<Utc>",
+                i.root_partition,
                 p.id AS "p_id?: i64",
                 p.partition_number AS "p_num?: i64",
                 p.fstype AS "p_fstype?",
@@ -163,6 +191,7 @@ impl ImageRepository for SqliteImageRepository {
                         ImageStatus::from_string(row.image_status)?,
                         row.error,
                         Vec::new(),
+                        row.root_partition,
                     );
                     images_map.entry(id).or_insert(image)
                 }
@@ -226,9 +255,14 @@ impl ImageRepository for SqliteImageRepository {
         // "no image"). The heavy partition blobs are reclaimed separately by
         // `image_service.clear_image_data`.
         let now = Utc::now();
+        let mut tx = self.pool.begin().await?;
         sqlx::query!("UPDATE images SET deleted_at = ? WHERE id = ?", now, id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        sqlx::query!("DELETE FROM image_scripts WHERE image_id = ?", id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -238,9 +272,13 @@ impl ImageRepository for SqliteImageRepository {
         sqlx::query!("DELETE FROM image_partitions WHERE image_id = ?", id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query!("UPDATE images SET status = ? WHERE id = ?", status, id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE images SET status = ?, root_partition = NULL WHERE id = ?",
+            status,
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
 
         Ok(())
@@ -838,5 +876,54 @@ mod tests {
             c.image_repo.get_status(img.id).await.unwrap(),
             ImageStatus::Importing
         );
+    }
+
+    #[tokio::test]
+    async fn the_root_partition_must_be_one_of_the_image_partitions() {
+        let (c, _g) = container().await;
+        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 2, "ext4", 20)
+            .await
+            .unwrap();
+
+        let err = c
+            .image_repo
+            .set_root_partition(img.id, Some(3))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidArgument(_)), "got {err:?}");
+
+        let image = c
+            .image_repo
+            .set_root_partition(img.id, Some(2))
+            .await
+            .unwrap();
+        assert_eq!(image.root_partition, Some(2));
+        assert_eq!(
+            find_in_get_all(&c, img.id).await.unwrap().root_partition,
+            Some(2)
+        );
+
+        let cleared = c.image_repo.set_root_partition(img.id, None).await.unwrap();
+        assert_eq!(cleared.root_partition, None);
+    }
+
+    #[tokio::test]
+    async fn recapturing_forgets_the_root_partition() {
+        let (c, _g) = container().await;
+        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", 20)
+            .await
+            .unwrap();
+        c.image_repo
+            .set_root_partition(img.id, Some(1))
+            .await
+            .unwrap();
+
+        c.image_repo.start_capture(img.id).await.unwrap();
+
+        assert_eq!(c.image_repo.get(img.id).await.unwrap().root_partition, None);
     }
 }

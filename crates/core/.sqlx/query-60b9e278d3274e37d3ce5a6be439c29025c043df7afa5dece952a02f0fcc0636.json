@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO image_scripts (image_id, position, script_id) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "60b9e278d3274e37d3ce5a6be439c29025c043df7afa5dece952a02f0fcc0636"
+}

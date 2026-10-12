@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
+  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                i.root_partition,\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
   "describe": {
     "columns": [
       {
@@ -29,23 +29,28 @@
         "type_info": "Text"
       },
       {
-        "name": "p_id?: i64",
+        "name": "root_partition",
         "ordinal": 5,
         "type_info": "Integer"
       },
       {
-        "name": "p_num?: i64",
+        "name": "p_id?: i64",
         "ordinal": 6,
         "type_info": "Integer"
       },
       {
-        "name": "p_fstype?",
+        "name": "p_num?: i64",
         "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_fstype?",
+        "ordinal": 8,
         "type_info": "Text"
       },
       {
         "name": "p_size?: i64",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Integer"
       }
     ],
@@ -61,8 +66,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "4b86b90de364ac37a05e18f20fc0f2bb3afee97d78ea376cd5caf2316a1cc028"
+  "hash": "dba1d574f0a225a88d71df42d2f3a04b9b454b37b7049cacdfaf20a8aa6181cd"
 }
