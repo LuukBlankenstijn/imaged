@@ -1063,7 +1063,8 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output(c: &DICo
     let plan: model::PostInstall = serde_json::from_slice(&body).unwrap();
     assert_eq!(plan.root_partition, Some(2));
     assert_eq!(plan.proxy, None);
-    let scripts: Vec<(i64, bool, Vec<(&str, &str)>)> = plan
+    type Listed<'a> = (i64, bool, Vec<(&'a str, &'a str)>);
+    let scripts: Vec<Listed> = plan
         .scripts
         .iter()
         .map(|s| {

@@ -283,7 +283,7 @@ fn TaskHostRow(task_id: i64, host: TaskHost, has_scripts: bool) -> Element {
 fn ScriptRuns(task_id: i64, host_id: i64, running: ReadSignal<bool>) -> Element {
     let runs = use_poll_while(
         1500,
-        move || running(),
+        move || *running.read(),
         move || async move { get_script_runs(task_id, host_id).await },
     );
 
