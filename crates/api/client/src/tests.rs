@@ -204,6 +204,7 @@ async fn agent_api_contracts() {
     downloading_partitions_matches_the_repository_in_order(&c).await;
     capturing_the_partition_table_clears_prior_capture_data_and_starts_the_host(&c).await;
     uploading_partition_data_streams_to_disk_and_records_the_row(&c).await;
+    a_capture_reports_the_root_partition_among_its_partitions(&c).await;
     the_stream_endpoint_requires_a_websocket_upgrade(&c).await;
     disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_macs(&c).await;
     no_agent_can_act_on_another_agents_task_on_any_endpoint(&c).await;
@@ -244,6 +245,7 @@ async fn agent_identity_is_required_on_every_route() {
         (Method::GET, "/api/client/tasks/1/parttable"),
         (Method::GET, "/api/client/tasks/1/partitions/1/data"),
         (Method::PUT, "/api/client/tasks/1/parttable"),
+        (Method::PUT, "/api/client/tasks/1/root-partition/1"),
         (
             Method::PUT,
             "/api/client/tasks/1/partitions/1/data?filesystem=ext4&size=1",
@@ -914,6 +916,58 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row(c: &DICont
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn a_capture_reports_the_root_partition_among_its_partitions(c: &DIContainer) {
+    let mac = next_mac();
+    let image = c
+        .image_repo
+        .create_image(next_name("cap-root"))
+        .await
+        .unwrap();
+    let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
+    let root = format!("/api/client/tasks/{task}/root-partition/2");
+
+    assert_eq!(
+        send(Method::PUT, &root, Some(&mac)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    put_bytes(
+        &format!("/api/client/tasks/{task}/parttable"),
+        &mac,
+        b"t".to_vec(),
+    )
+    .await;
+    put_stream(
+        &format!("/api/client/tasks/{task}/partitions/2/data?filesystem=ext4&size=1"),
+        &mac,
+        vec![b"x".to_vec()],
+    )
+    .await;
+    assert_eq!(
+        send(
+            Method::PUT,
+            &format!("/api/client/tasks/{task}/root-partition/3"),
+            Some(&mac)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(Method::PUT, &root, Some(&next_mac())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(
+        send(Method::PUT, &root, Some(&mac)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        c.image_repo.get(image.id).await.unwrap().root_partition,
+        Some(2)
+    );
 }
 
 async fn the_stream_endpoint_requires_a_websocket_upgrade(c: &DIContainer) {

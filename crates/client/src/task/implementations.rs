@@ -33,6 +33,10 @@ pub trait ClientTaskExt: std::fmt::Display {
         Ok(())
     }
 
+    async fn after_partitions(&self, _: &[PartitionTarget]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn finalize(&self) -> anyhow::Result<()> {
         report_finished(self).await
     }

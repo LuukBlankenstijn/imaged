@@ -89,6 +89,7 @@ pub trait ImageRepository: Send + Sync {
         id: i64,
         captured_at: Option<DateTime<Utc>>,
         partitions: &[NewImagePartition],
+        root_partition: Option<i64>,
     ) -> Result<Image>;
 
     async fn fault_unfinished_imports(&self, error: &str) -> Result;

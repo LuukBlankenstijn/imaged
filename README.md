@@ -121,4 +121,8 @@ given per machine or shared by every machine of a deployment. An image keeps an
 ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
 current version; a script that an image still uses cannot be deleted. Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the
-partition the scripts run in.
+partition the scripts run in. A capture finds it by mounting every ext
+partition read-only after cloning it: when exactly one holds `/etc/os-release`
+it becomes the image's root partition, otherwise it is left unset for the
+dashboard to choose. Archives carry it as the optional `root_partition`
+manifest field.

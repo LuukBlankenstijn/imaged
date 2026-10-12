@@ -320,6 +320,7 @@ impl ImageRepository for SqliteImageRepository {
         id: i64,
         captured_at: Option<DateTime<Utc>>,
         partitions: &[NewImagePartition],
+        root_partition: Option<i64>,
     ) -> Result<Image> {
         let status = ImageStatus::Ready.to_string();
         let mut tx = self.pool.begin().await?;
@@ -341,9 +342,11 @@ impl ImageRepository for SqliteImageRepository {
             .await?;
         }
         let updated = sqlx::query!(
-            "UPDATE images SET status = ?, captured_at = ? WHERE id = ? AND deleted_at IS NULL",
+            "UPDATE images SET status = ?, captured_at = ?, root_partition = ? \
+             WHERE id = ? AND deleted_at IS NULL",
             status,
             captured_at,
+            root_partition,
             id
         )
         .execute(&mut *tx)
@@ -834,6 +837,7 @@ mod tests {
                     fstype: "ntfs".into(),
                     size_bytes: 1 << 40,
                 }],
+                Some(1),
             )
             .await
             .unwrap();
@@ -842,6 +846,7 @@ mod tests {
         assert_eq!(ready.captured_at, Some(captured_at));
         assert_eq!(ready.partitions.len(), 1);
         assert_eq!(ready.partitions[0].size_bytes, 1 << 40);
+        assert_eq!(ready.root_partition, Some(1));
     }
 
     #[tokio::test]
@@ -860,6 +865,7 @@ mod tests {
                     fstype: "ntfs".into(),
                     size_bytes: 4096,
                 }],
+                None,
             )
             .await
             .unwrap_err();

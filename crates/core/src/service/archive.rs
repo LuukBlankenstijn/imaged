@@ -37,6 +37,8 @@ struct Manifest {
     captured_at: Option<DateTime<Utc>>,
     partition_table: ArchivedFile,
     partitions: Vec<ArchivedPartition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_partition: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,6 +89,13 @@ impl Manifest {
                     partition.number
                 )));
             }
+        }
+        if let Some(root) = self.root_partition
+            && !self.partitions.iter().any(|p| p.number == root)
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "root partition {root} is not one of the archived partitions"
+            )));
         }
         Ok(checksums)
     }
@@ -197,6 +206,7 @@ impl ArchiveService {
                     sha256: hashed.sha256.clone(),
                 })
                 .collect(),
+            root_partition: image.root_partition,
         };
         let manifest_json =
             serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?;
@@ -281,7 +291,12 @@ impl ArchiveService {
             .await
             .map_err(store_failed)?;
         self.image_repo
-            .finish_import(image_id, manifest.captured_at, &manifest.partitions())
+            .finish_import(
+                image_id,
+                manifest.captured_at,
+                &manifest.partitions(),
+                manifest.root_partition,
+            )
             .await
     }
 
@@ -634,6 +649,11 @@ mod tests {
     async fn export_then_import_reproduces_the_image_under_a_new_id() {
         let (c, guard) = container().await;
         let source = ready_image(&c).await;
+        let source = c
+            .image_repo
+            .set_root_partition(source.id, Some(2))
+            .await
+            .unwrap();
 
         let imported = c
             .archive_service
@@ -645,6 +665,7 @@ mod tests {
         assert_eq!(imported.name, source.name);
         assert_eq!(imported.status, ImageStatus::Ready);
         assert_eq!(imported.captured_at, source.captured_at);
+        assert_eq!(imported.root_partition, Some(2));
         let layout = |image: &Image| -> Vec<(i64, String, u64)> {
             image
                 .partitions
@@ -701,6 +722,26 @@ mod tests {
         assert_eq!(files[1].1, TABLE);
         assert_eq!(files[2].1, large());
         assert_eq!(files[3].1, SMALL);
+    }
+
+    #[tokio::test]
+    async fn a_root_partition_that_is_not_archived_is_rejected_without_an_image() {
+        let (c, _guard) = container().await;
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+        manifest["root_partition"] = json!(2);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("p-1.pcl", SMALL),
+        ])
+        .await;
+
+        let message = rejected_import(&c, &archive).await;
+
+        assert!(message.contains("root partition 2"), "{message}");
+        assert!(c.image_repo.get_all().await.unwrap().is_empty());
     }
 
     #[tokio::test]

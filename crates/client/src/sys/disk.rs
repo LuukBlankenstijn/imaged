@@ -33,9 +33,13 @@ pub struct PartitionTarget {
 }
 
 impl PartitionTarget {
+    pub fn is_ext(&self) -> bool {
+        matches!(self.fstype.as_str(), "ext2" | "ext3" | "ext4")
+    }
+
     pub fn partclone_binary(&self) -> Result<&'static str> {
         match self.fstype.as_str() {
-            "ext2" | "ext3" | "ext4" => Ok("partclone.extfs"),
+            _ if self.is_ext() => Ok("partclone.extfs"),
             "vfat" | "fat32" | "fat16" => Ok("partclone.vfat"),
             other => bail!("filetype not supported: {other}"),
         }
