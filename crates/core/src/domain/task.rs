@@ -1,3 +1,4 @@
+use crate::domain::script::InputValues;
 use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
@@ -62,6 +63,16 @@ pub struct TaskHost {
     pub state: TaskState,
     pub error: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptRun {
+    pub position: i64,
+    pub script_name: String,
+    pub output: String,
+    pub exit_code: Option<i64>,
+    pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
 
@@ -162,6 +173,35 @@ pub trait TaskRepository: Send + Sync {
     async fn get(&self, id: i64) -> Result<Task>;
 
     async fn get_next_multicast(&self) -> Result<Option<Task>>;
+
+    async fn get_inputs(&self, task_id: i64, host_id: i64) -> Result<InputValues>;
+
+    // starts a script run, replacing the runs at and after its position
+    async fn start_script_run(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        script_name: &str,
+    ) -> Result;
+
+    async fn append_script_output(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        output: &str,
+    ) -> Result;
+
+    async fn finish_script_run(
+        &self,
+        task_id: i64,
+        host_id: i64,
+        position: i64,
+        exit_code: Option<i64>,
+    ) -> Result;
+
+    async fn get_script_runs(&self, task_id: i64, host_id: i64) -> Result<Vec<ScriptRun>>;
 }
 
 #[cfg(test)]

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO script_runs (task_id, host_id, position, script_name, output, started_at) VALUES (?, ?, ?, ?, '', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b3ca26d3e439b9a746c8cd8afd1601b8979acc8f521a3385cda200e8de09fb24"
+}

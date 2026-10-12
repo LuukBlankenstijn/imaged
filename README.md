@@ -42,7 +42,7 @@ agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
 and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 
 With the `server` feature it is also a library for embedding imaged in another
-program: `Imaged::open(Config { data_dir, multicast_interface })` once per
+program: `Imaged::open(Config { data_dir, multicast_interface, script_proxy })` once per
 process, then `imaged.serve(Listeners { machine, public_url, tftp, dashboard })`
 returns a `Server`. `stop()` disconnects every agent, gives open requests a
 short grace period and then cuts off whatever connection is left, after which
@@ -126,3 +126,25 @@ partition read-only after cloning it: when exactly one holds `/etc/os-release`
 it becomes the image's root partition, otherwise it is left unset for the
 dashboard to choose. Archives carry it as the optional `root_partition`
 manifest field.
+
+After a deploy or multicast has restored every partition, the client fetches
+the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
+any, mounts the root partition under `/tmp/imaged-root`, then every entry of
+the image's `/etc/fstab` that names a partition of the restored disk (by
+`UUID=`, `LABEL=`, `PARTUUID=`, `PARTLABEL=` or device path), then `/proc`,
+`/sys` and `/dev`. Each script is written to `/tmp` inside that root and run
+with `chroot`, through its shebang or `/bin/sh` without one, with these
+variables:
+
+- `IMAGED_INPUT_<NAME>` for each of its inputs that has a value (the name
+  uppercased),
+- `IMAGED_MAC`, `IMAGED_IP` and `IMAGED_SERVER` of the client,
+- `http_proxy`, `https_proxy`, `HTTP_PROXY` and `HTTPS_PROXY` when the server
+  runs with `--script-proxy <url>` (`SCRIPT_PROXY`, `Config::script_proxy`).
+
+Stdout and stderr go to the client log and, as the script runs, to the server,
+which keeps the full output and exit code of every run per task host
+(`GET /api/ui/tasks/{task_id}/hosts/{host_id}/scripts`). A script that exits
+non-zero stops the deploy and fails that host with the script's name; the
+mounts are always undone in reverse order before the client reports back and
+reboots.

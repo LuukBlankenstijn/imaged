@@ -55,6 +55,7 @@ pub async fn build_di_container(
     pool: SqlitePool,
     images_dir: String,
     multicast_interface: String,
+    script_proxy: Option<String>,
 ) -> Result<DIContainer, BoxError> {
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());
@@ -95,6 +96,7 @@ pub async fn build_di_container(
         multicast_manager,
         machine_ip,
         agent_liveness,
+        script_proxy.map(Arc::from),
     ))
 }
 
@@ -107,6 +109,7 @@ pub async fn build_test_container(dir: &Path) -> DIContainer {
         pool,
         dir.join("images").to_string_lossy().to_string(),
         "lo".to_string(),
+        None,
     )
     .await
     .unwrap();

@@ -6,7 +6,10 @@ use imaged_core::domain::{
         InputKind as DInputKind, NewScript as DNewScript, Script as DScript,
         ScriptInput as DScriptInput,
     },
-    task::{Task as DTask, TaskHost as DTaskHost, TaskState as DState, TaskType as DType},
+    task::{
+        ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskState as DState,
+        TaskType as DType,
+    },
 };
 use imaged_core::multicast::MulticastProgress as DProgress;
 use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
@@ -221,6 +224,19 @@ impl From<model::ScriptRequest> for DNewScript {
             name: s.name,
             body: s.body,
             inputs: s.inputs.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<DScriptRun> for model::ScriptRun {
+    fn from(r: DScriptRun) -> Self {
+        Self {
+            position: r.position,
+            script_name: r.script_name,
+            output: r.output,
+            exit_code: r.exit_code,
+            started_at: r.started_at.timestamp_millis(),
+            finished_at: r.finished_at.map(|t| t.timestamp_millis()),
         }
     }
 }

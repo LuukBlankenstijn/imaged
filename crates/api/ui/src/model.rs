@@ -196,3 +196,13 @@ pub struct RootPartitionRequest {
     pub image_id: i64,
     pub partition_number: Option<i64>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRun {
+    pub position: i64,
+    pub script_name: String,
+    pub output: String,
+    pub exit_code: Option<i64>,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+}

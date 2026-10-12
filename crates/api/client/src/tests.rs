@@ -9,6 +9,7 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::image::ImageStatus;
+use core::domain::script::{InputKind, NewScript, ScriptInput};
 use core::domain::task::{TaskState, TaskType};
 
 use crate::model;
@@ -205,6 +206,8 @@ async fn agent_api_contracts() {
     capturing_the_partition_table_clears_prior_capture_data_and_starts_the_host(&c).await;
     uploading_partition_data_streams_to_disk_and_records_the_row(&c).await;
     a_capture_reports_the_root_partition_among_its_partitions(&c).await;
+    a_restoring_agent_fetches_its_scripts_and_reports_their_output(&c).await;
+    scripts_need_a_root_partition_and_a_started_task(&c).await;
     the_stream_endpoint_requires_a_websocket_upgrade(&c).await;
     disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_macs(&c).await;
     no_agent_can_act_on_another_agents_task_on_any_endpoint(&c).await;
@@ -246,6 +249,9 @@ async fn agent_identity_is_required_on_every_route() {
         (Method::GET, "/api/client/tasks/1/partitions/1/data"),
         (Method::PUT, "/api/client/tasks/1/parttable"),
         (Method::PUT, "/api/client/tasks/1/root-partition/1"),
+        (Method::GET, "/api/client/tasks/1/scripts"),
+        (Method::PUT, "/api/client/tasks/1/scripts/0/output"),
+        (Method::POST, "/api/client/tasks/1/scripts/0/finished"),
         (
             Method::PUT,
             "/api/client/tasks/1/partitions/1/data?filesystem=ext4&size=1",
@@ -967,6 +973,181 @@ async fn a_capture_reports_the_root_partition_among_its_partitions(c: &DIContain
     assert_eq!(
         c.image_repo.get(image.id).await.unwrap().root_partition,
         Some(2)
+    );
+}
+
+fn script_input(name: &str, default_value: Option<&str>) -> ScriptInput {
+    ScriptInput {
+        name: name.to_string(),
+        label: name.to_string(),
+        kind: InputKind::Text,
+        required: false,
+        default_value: default_value.map(str::to_string),
+        per_machine: false,
+        choices: Vec::new(),
+    }
+}
+
+async fn scripted_image(c: &DIContainer, scripts: &[(&str, Vec<ScriptInput>)]) -> i64 {
+    let image_id = ready_image(c, &next_name("scripted")).await;
+    let mut ids = Vec::new();
+    for (name, inputs) in scripts {
+        let script = c
+            .script_repo
+            .create(&NewScript {
+                name: next_name(name),
+                body: format!("#!/bin/sh\necho {name}"),
+                inputs: inputs.clone(),
+            })
+            .await
+            .unwrap();
+        ids.push(script.id);
+    }
+    c.script_repo.set_for_image(image_id, &ids).await.unwrap();
+    image_id
+}
+
+async fn script_runs(c: &DIContainer, task: i64, host: i64) -> Vec<(String, String, Option<i64>)> {
+    c.task_repo
+        .get_script_runs(task, host)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|run| (run.script_name, run.output, run.exit_code))
+        .collect()
+}
+
+async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output(c: &DIContainer) {
+    let mac = next_mac();
+    let image_id = scripted_image(
+        c,
+        &[
+            (
+                "first",
+                vec![
+                    script_input("site", Some("lab")),
+                    script_input("note", None),
+                ],
+            ),
+            ("second", vec![]),
+        ],
+    )
+    .await;
+    c.image_repo
+        .set_root_partition(image_id, Some(2))
+        .await
+        .unwrap();
+    let (host, task) = host_task(c, &mac, TaskType::Deploy, Some(image_id)).await;
+    c.task_repo.start(task, host).await.unwrap();
+
+    let response = get(&format!("/api/client/tasks/{task}/scripts"), &mac).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: model::PostInstall = serde_json::from_slice(&body).unwrap();
+    assert_eq!(plan.root_partition, Some(2));
+    assert_eq!(plan.proxy, None);
+    let scripts: Vec<(i64, bool, Vec<(&str, &str)>)> = plan
+        .scripts
+        .iter()
+        .map(|s| {
+            (
+                s.position,
+                s.body.starts_with("#!/bin/sh"),
+                s.inputs
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        scripts,
+        vec![(0, true, vec![("site", "lab")]), (1, true, vec![])]
+    );
+    let first_name = plan.scripts[0].name.clone();
+    let second_name = plan.scripts[1].name.clone();
+
+    let output = |position: i64, chunks: Vec<&[u8]>| {
+        let uri = format!("/api/client/tasks/{task}/scripts/{position}/output");
+        let chunks = chunks.into_iter().map(<[u8]>::to_vec).collect();
+        let mac = mac.clone();
+        async move { put_stream(&uri, &mac, chunks).await }
+    };
+    let finished = |position: i64, exit_code: Option<i64>| {
+        let uri = format!("/api/client/tasks/{task}/scripts/{position}/finished");
+        let mac = mac.clone();
+        async move { post_json(&uri, &mac, serde_json::json!({ "exit_code": exit_code })).await }
+    };
+
+    assert_eq!(
+        output(0, vec![b"price: \xe2\x82", b"\xac 5\n"])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(finished(0, Some(0)).await.status(), StatusCode::OK);
+    assert_eq!(output(1, vec![b"boom\n"]).await.status(), StatusCode::OK);
+    assert_eq!(finished(1, Some(3)).await.status(), StatusCode::OK);
+    assert_eq!(
+        script_runs(c, task, host).await,
+        vec![
+            (
+                first_name.clone(),
+                "price: \u{20ac} 5\n".to_string(),
+                Some(0)
+            ),
+            (second_name, "boom\n".to_string(), Some(3)),
+        ]
+    );
+
+    assert_eq!(finished(1, Some(0)).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        output(5, vec![b"x"]).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    assert_eq!(output(0, vec![b"again\n"]).await.status(), StatusCode::OK);
+    assert_eq!(
+        script_runs(c, task, host).await,
+        vec![(first_name, "again\n".to_string(), None)]
+    );
+}
+
+async fn scripts_need_a_root_partition_and_a_started_task(c: &DIContainer) {
+    let mac = next_mac();
+    let image_id = scripted_image(c, &[("only", vec![])]).await;
+    let (host, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
+    let scripts = format!("/api/client/tasks/{task}/scripts");
+
+    assert_eq!(get(&scripts, &mac).await.status(), StatusCode::BAD_REQUEST);
+
+    c.task_repo.start(task, host).await.unwrap();
+    assert_eq!(
+        get(&scripts, &mac).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    let plain_mac = next_mac();
+    let plain = ready_image(c, &next_name("plain")).await;
+    let (plain_host, plain_task) = host_task(c, &plain_mac, TaskType::Deploy, Some(plain)).await;
+    c.task_repo.start(plain_task, plain_host).await.unwrap();
+    let response = get(
+        &format!("/api/client/tasks/{plain_task}/scripts"),
+        &plain_mac,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let plan: model::PostInstall = serde_json::from_slice(&body).unwrap();
+    assert!(plan.scripts.is_empty());
+
+    assert_eq!(
+        get(&scripts, &plain_mac).await.status(),
+        StatusCode::BAD_REQUEST
     );
 }
 

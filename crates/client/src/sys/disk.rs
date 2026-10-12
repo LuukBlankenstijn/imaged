@@ -22,6 +22,14 @@ pub struct BlockDevice {
     pub hotplug: bool,
     #[serde(default, rename = "type")]
     pub device_type: Option<String>,
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub partuuid: Option<String>,
+    #[serde(default)]
+    pub partlabel: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,7 +142,7 @@ async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
         "-J",
         "-b",
         "-o",
-        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE",
+        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE,UUID,LABEL,PARTUUID,PARTLABEL",
     ]);
     if let Some(d) = device {
         cmd.arg(d);

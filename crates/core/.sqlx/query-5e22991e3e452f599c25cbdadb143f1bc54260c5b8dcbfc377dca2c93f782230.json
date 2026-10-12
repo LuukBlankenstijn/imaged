@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM script_runs WHERE task_id = ? AND host_id IN (SELECT host_id FROM task_hosts WHERE task_id = ? AND (state = ? OR state = ?))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "5e22991e3e452f599c25cbdadb143f1bc54260c5b8dcbfc377dca2c93f782230"
+}

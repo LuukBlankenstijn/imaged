@@ -109,6 +109,13 @@ impl ClientTaskExt for DeployTask {
         Ok(())
     }
 
+    async fn after_partitions(
+        &self,
+        partitions: &[crate::sys::disk::PartitionTarget],
+    ) -> anyhow::Result<()> {
+        crate::task::post_install::run(self.task_id, partitions).await
+    }
+
     async fn finalize(&self) -> anyhow::Result<()> {
         super::finish_and_reboot(self).await
     }

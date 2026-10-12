@@ -78,6 +78,12 @@ impl ClientTaskExt for RecordingTask {
         Ok(())
     }
 
+    async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
+        let numbers: Vec<String> = partitions.iter().map(|p| p.number.to_string()).collect();
+        self.record(format!("after:{}", numbers.join(",")));
+        Ok(())
+    }
+
     async fn finalize(&self) -> anyhow::Result<()> {
         self.record("finalize");
         Ok(())
@@ -194,7 +200,7 @@ async fn after_completion_the_running_task_slot_is_cleared() {
 }
 
 #[tokio::test]
-async fn run_processes_partition_table_then_plans_then_each_partition_in_order() {
+async fn run_processes_partition_table_then_plans_then_each_partition_then_the_restored_set() {
     let task = RecordingTask::new(vec![pt(1), pt(2), pt(3)]);
     let disk = imaged_client::sys::disk::find_target_disk().await;
     let result = task.run().await;
@@ -205,7 +211,10 @@ async fn run_processes_partition_table_then_plans_then_each_partition_in_order()
             result.expect("run should succeed once the fake owns every hook");
             assert_eq!(log[0], format!("table:/dev/{}", disk.name));
             assert_eq!(log[1], format!("plan:{}", disk.name));
-            assert_eq!(&log[2..], ["partition:1", "partition:2", "partition:3"]);
+            assert_eq!(
+                &log[2..],
+                ["partition:1", "partition:2", "partition:3", "after:1,2,3"]
+            );
             assert!(!log.iter().any(|e| e == "finalize"));
             assert!(!log.iter().any(|e| e.starts_with("finalize_error")));
         }
@@ -229,6 +238,7 @@ async fn run_bails_on_the_first_partition_error_without_processing_the_rest() {
             assert!(log.iter().any(|e| e == "partition:1"));
             assert!(!log.iter().any(|e| e == "partition:2"));
             assert!(!log.iter().any(|e| e == "partition:3"));
+            assert!(!log.iter().any(|e| e.starts_with("after:")));
         }
         Err(_) => assert!(log.is_empty()),
     }

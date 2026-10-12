@@ -840,6 +840,41 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
 
     let scripts: Vec<model::Script> = json(get("/api/ui/scripts").await).await;
     assert!(scripts.iter().any(|s| s.id == script.id));
+
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:19".into(), 1_000_000, None)
+        .await
+        .unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Deploy, vec![host.id], Some(image.id))
+        .await
+        .unwrap();
+    c.task_repo
+        .start_script_run(task.id, host.id, 0, "hostname")
+        .await
+        .unwrap();
+    c.task_repo
+        .append_script_output(task.id, host.id, 0, "set\n")
+        .await
+        .unwrap();
+    let response = get(&format!(
+        "/api/ui/tasks/{}/hosts/{}/scripts",
+        task.id, host.id
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let runs: Vec<model::ScriptRun> = json(response).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        (
+            runs[0].script_name.as_str(),
+            runs[0].output.as_str(),
+            runs[0].finished_at
+        ),
+        ("hostname", "set\n", None)
+    );
 }
 
 #[tokio::test]

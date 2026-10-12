@@ -52,6 +52,12 @@ in
       example = "192.168.100.1:8080";
       description = "host:port that iPXE scripts point booting machines at; the binary's default (localhost:8080) when null.";
     };
+    scriptProxy = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "http://192.168.100.1:3128";
+      description = "Proxy URL handed to post-install scripts as http_proxy/https_proxy; unset when null.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -67,7 +73,7 @@ in
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/imaged-server --data-dir ${cfg.dataDir} --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}${optionalString (cfg.publicBase != null) " --public-base ${cfg.publicBase}"}";
+        ExecStart = "${cfg.package}/bin/imaged-server --data-dir ${cfg.dataDir} --bind-address ${cfg.bindAddress} --log-level ${cfg.logLevel} --multicast-interface ${cfg.multicastInterface}${optionalString (cfg.webBindAddress != null) " --web-bind-address ${cfg.webBindAddress}"}${optionalString (cfg.tftpBindAddress != null) " --tftp-bind-address ${cfg.tftpBindAddress}"}${optionalString (cfg.publicBase != null) " --public-base ${cfg.publicBase}"}${optionalString (cfg.scriptProxy != null) " --script-proxy ${cfg.scriptProxy}"}";
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";

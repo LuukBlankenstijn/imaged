@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 tracing.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "fs", "time", "sync"] }
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,6 +23,7 @@ tokio-util.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 clap.workspace = true
 dioxus-fullstack = "0.7"
+bytes = "1"
 
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 

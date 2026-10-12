@@ -30,6 +30,7 @@ pub struct DIContainer {
     pub multicast_manager: Arc<MulticastManager>,
     pub machine_ip: Arc<RwLock<Option<IpAddr>>>,
     pub agent_liveness: AgentLiveness,
+    pub script_proxy: Option<Arc<str>>,
 }
 
 install_injectable_container!(DIContainer);
@@ -45,3 +46,4 @@ register_injectable!(ArchiveSvc(Arc<ArchiveService>), archive_service);
 register_injectable!(MulticastMgr(Arc<MulticastManager>), multicast_manager);
 register_injectable!(MachineIp(Arc<RwLock<Option<IpAddr>>>), machine_ip);
 register_injectable!(Liveness(AgentLiveness), agent_liveness);
+register_injectable!(ScriptProxy(Option<Arc<str>>), script_proxy);
