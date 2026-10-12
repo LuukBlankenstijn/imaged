@@ -309,7 +309,7 @@ impl ArchiveService {
         let image = self.image_repo.start_import(manifest.name.clone()).await?;
 
         match self
-            .receive(image.id, &manifest, checksums, &mut entries)
+            .receive(image.id, &manifest, checksums, entries, archive)
             .await
         {
             Ok(imported) => Ok(imported),
@@ -320,14 +320,16 @@ impl ArchiveService {
         }
     }
 
-    async fn receive<A, S>(
+    async fn receive<R, A, S>(
         &self,
         image_id: i64,
         manifest: &Manifest,
         checksums: BTreeMap<&str, &str>,
-        entries: &mut S,
+        mut entries: S,
+        archive: Archive<R>,
     ) -> Result<Image>
     where
+        R: AsyncRead + Unpin,
         A: AsyncRead + Unpin,
         S: Stream<Item = io::Result<Entry<A>>> + Unpin,
     {
@@ -335,7 +337,9 @@ impl ArchiveService {
         tokio::fs::create_dir_all(&import_dir)
             .await
             .map_err(store_failed)?;
-        let mut bodies = unpack(entries, Path::new(&import_dir), checksums).await?;
+        let mut bodies = unpack(&mut entries, Path::new(&import_dir), checksums).await?;
+        drop(entries);
+        read_to_end(archive).await?;
         tokio::fs::rename(&import_dir, self.image_service.image_dir(image_id))
             .await
             .map_err(store_failed)?;
@@ -460,6 +464,21 @@ where
         )));
     }
     serde_json::from_slice(&json).map_err(invalid_manifest)
+}
+
+async fn read_to_end<R>(archive: Archive<R>) -> Result
+where
+    R: AsyncRead + Unpin,
+{
+    let Ok(mut reader) = archive.into_inner() else {
+        return Err(AppError::Internal(
+            "archive reader is still in use after the last entry".to_string(),
+        ));
+    };
+    tokio::io::copy(&mut reader, &mut tokio::io::sink())
+        .await
+        .map_err(malformed)?;
+    Ok(())
 }
 
 async fn unpack<A, S>(
@@ -989,6 +1008,52 @@ mod tests {
             assert!(message.starts_with(expected), "{message}");
         }
         assert!(c.image_repo.get_all().await.unwrap().is_empty());
+    }
+
+    struct FailingAtEof<R>(R);
+
+    impl<R: AsyncRead + Unpin> AsyncRead for FailingAtEof<R> {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            let before = buf.filled().len();
+            match std::pin::Pin::new(&mut self.0).poll_read(cx, buf) {
+                std::task::Poll::Ready(Ok(())) if buf.filled().len() == before => {
+                    std::task::Poll::Ready(Err(io::Error::other("download checksum mismatch")))
+                }
+                other => other,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_error_after_the_tar_terminator_faults_the_import() {
+        let (c, guard) = container().await;
+        let source = ready_image(&c).await;
+        let mut archive = export(&c, source.id).await;
+        archive.extend_from_slice(&[0; 1024]);
+        archive.extend_from_slice(b"trailing bytes after the terminator");
+
+        let message = match c
+            .archive_service
+            .import(FailingAtEof(archive.as_slice()))
+            .await
+        {
+            Err(AppError::InvalidArgument(message)) => message,
+            other => panic!("expected an invalid argument error, got {other:?}"),
+        };
+
+        assert_eq!(message, "malformed archive: download checksum mismatch");
+        assert_eq!(
+            faulted_errors(&c).await,
+            [format!("invalid argument: {message}")]
+        );
+        assert_eq!(image_dirs(&guard), [format!("img-{}", source.id)]);
+
+        let imported = c.archive_service.import(archive.as_slice()).await.unwrap();
+        assert_eq!(imported.status, ImageStatus::Ready);
     }
 
     #[tokio::test]
