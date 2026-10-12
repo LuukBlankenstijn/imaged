@@ -160,7 +160,7 @@ async fn deploy_task(c: &DIContainer, mac: &str, image_id: i64) -> i64 {
         .await
         .unwrap();
     c.task_repo
-        .create(TaskType::Multicast, vec![host.id], Some(image_id))
+        .create(TaskType::Deploy, vec![host.id], Some(image_id))
         .await
         .unwrap()
         .id
@@ -653,7 +653,7 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
         .await
         .unwrap();
     let (_uh, unready_task) =
-        host_task(c, &unready_mac, TaskType::Multicast, Some(unready_img.id)).await;
+        host_task(c, &unready_mac, TaskType::Deploy, Some(unready_img.id)).await;
     let resp = get(
         &format!("/api/client/tasks/{unready_task}/parttable"),
         &unready_mac,
@@ -668,7 +668,7 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let noimg_mac = next_mac();
-    let (_nh, noimg_task) = host_task(c, &noimg_mac, TaskType::Multicast, None).await;
+    let (_nh, noimg_task) = host_task(c, &noimg_mac, TaskType::Deploy, None).await;
     let resp = get(
         &format!("/api/client/tasks/{noimg_task}/parttable"),
         &noimg_mac,
@@ -684,7 +684,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk(c: &DIContai
     let path = c.image_service.get_partition_path(image_id, 1);
     std::fs::create_dir_all(Path::new(&path).parent().unwrap()).unwrap();
     std::fs::write(&path, &payload).unwrap();
-    let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
+    let (_h, task) = host_task(c, &mac, TaskType::Deploy, Some(image_id)).await;
 
     let resp = get(&format!("/api/client/tasks/{task}/partitions/1/data"), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -707,7 +707,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk(c: &DIContai
         .await
         .unwrap();
     let (_uh, unready_task) =
-        host_task(c, &unready_mac, TaskType::Multicast, Some(unready_img.id)).await;
+        host_task(c, &unready_mac, TaskType::Deploy, Some(unready_img.id)).await;
     let resp = get(
         &format!("/api/client/tasks/{unready_task}/partitions/1/data"),
         &unready_mac,
@@ -736,7 +736,7 @@ async fn downloading_partitions_matches_the_repository_in_order(c: &DIContainer)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
-    let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image.id)).await;
+    let (_h, task) = host_task(c, &mac, TaskType::Deploy, Some(image.id)).await;
 
     let resp = get(&format!("/api/client/tasks/{task}/partitions"), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -908,16 +908,17 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row(c: &DICont
     assert_eq!(recorded.fstype, "ext4");
     assert_eq!(recorded.size_bytes, size as u64);
 
-    let mc_mac = next_mac();
-    let mc_img = c
+    let restore_mac = next_mac();
+    let restore_img = c
         .image_repo
-        .create_image(next_name("upload-mc"))
+        .create_image(next_name("upload-restore"))
         .await
         .unwrap();
-    let (_mh, mc_task) = host_task(c, &mc_mac, TaskType::Multicast, Some(mc_img.id)).await;
+    let (_rh, restore_task) =
+        host_task(c, &restore_mac, TaskType::Deploy, Some(restore_img.id)).await;
     let resp = put_stream(
-        &format!("/api/client/tasks/{mc_task}/partitions/1/data?filesystem=ext4&size=1"),
-        &mc_mac,
+        &format!("/api/client/tasks/{restore_task}/partitions/1/data?filesystem=ext4&size=1"),
+        &restore_mac,
         vec![b"x".to_vec()],
     )
     .await;
@@ -1214,8 +1215,8 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint(c: &DIContainer
     let b_mac = next_mac();
     let a_image = ready_image(c, &next_name("iso-a")).await;
     let b_image = ready_image(c, &next_name("iso-b")).await;
-    let (_ah, _a_task) = host_task(c, &a_mac, TaskType::Multicast, Some(a_image)).await;
-    let (_bh, b_task) = host_task(c, &b_mac, TaskType::Multicast, Some(b_image)).await;
+    let (_ah, _a_task) = host_task(c, &a_mac, TaskType::Deploy, Some(a_image)).await;
+    let (_bh, b_task) = host_task(c, &b_mac, TaskType::Deploy, Some(b_image)).await;
 
     for uri in [
         format!("/api/client/tasks/{b_task}/partitions"),
