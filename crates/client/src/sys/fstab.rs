@@ -82,7 +82,7 @@ fn same_id(id: &Option<String>, value: &str) -> bool {
         .is_some_and(|id| id.eq_ignore_ascii_case(value))
 }
 
-fn unescape(field: &str) -> String {
+pub(crate) fn unescape(field: &str) -> String {
     let mut decoded = Vec::with_capacity(field.len());
     let mut rest = field.as_bytes();
     while let Some((&first, tail)) = rest.split_first() {

@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use rustix::mount::{MountFlags, UnmountFlags};
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
-use crate::sys::fstab::plan_mounts;
+use crate::sys::fstab::{plan_mounts, unescape};
 
 const PROBE_DIR: &str = "/tmp/imaged-probe";
 const ROOT_DIR: &str = "/tmp/imaged-root";
@@ -101,7 +101,14 @@ impl MountedSystem {
     }
 
     fn release(&mut self) -> Result<()> {
+        if self.mounted.is_empty() {
+            return Ok(());
+        }
         stop_processes_inside(&self.root);
+        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")
+            .context("reading /proc/self/mountinfo")?;
+        self.mounted = mounts_under(&mountinfo, &self.root);
+        self.mounted.reverse();
         let mut failure = None;
         while let Some(target) = self.mounted.pop() {
             if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::empty()) {
@@ -124,6 +131,18 @@ impl Drop for MountedSystem {
             tracing::error!(error=%format!("{e:#}"), "could not undo the mounts");
         }
     }
+}
+
+fn mounts_under(mountinfo: &str, root: &Path) -> Vec<PathBuf> {
+    let mut mounts: Vec<PathBuf> = mountinfo
+        .lines()
+        .rev()
+        .filter_map(|line| line.split(' ').nth(4))
+        .map(|field| PathBuf::from(unescape(field)))
+        .filter(|target| target.starts_with(root))
+        .collect();
+    mounts.sort_by_key(|target| std::cmp::Reverse(target.components().count()));
+    mounts
 }
 
 fn stop_processes_inside(root: &Path) {
@@ -159,4 +178,40 @@ fn processes_inside(root: &Path) -> Vec<rustix::process::Pid> {
             process_root.starts_with(root).then_some(pid)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn everything_mounted_below_the_root_is_unmounted_deepest_and_newest_first() {
+        let mountinfo = "\
+22 1 0:20 / / rw - rootfs rootfs rw
+40 22 254:2 / /tmp/imaged-root rw - ext4 /dev/vda2 rw
+41 40 254:1 / /tmp/imaged-root/boot/efi rw - vfat /dev/vda1 rw
+42 40 0:5 / /tmp/imaged-root/sys rw - sysfs none rw
+43 42 0:30 / /tmp/imaged-root/sys/firmware/efi/efivars rw - efivarfs efivarfs rw
+44 40 0:31 / /tmp/imaged-root/mnt/my\\040data rw - tmpfs tmpfs rw
+45 40 0:32 / /tmp/imaged-root/mnt rw - tmpfs tmpfs rw
+46 22 0:33 / /tmp/imaged-rootless rw - tmpfs tmpfs rw
+";
+
+        let order: Vec<String> = mounts_under(mountinfo, Path::new("/tmp/imaged-root"))
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+
+        assert_eq!(
+            order,
+            [
+                "/tmp/imaged-root/sys/firmware/efi/efivars",
+                "/tmp/imaged-root/mnt/my data",
+                "/tmp/imaged-root/boot/efi",
+                "/tmp/imaged-root/mnt",
+                "/tmp/imaged-root/sys",
+                "/tmp/imaged-root",
+            ]
+        );
+    }
 }
