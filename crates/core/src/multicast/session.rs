@@ -9,12 +9,12 @@ use imaged_shared::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
 use scuttlecast::{
     error::ProtoError,
     sender::{Sender, Sending},
-    state::{LimitingFactor, ReceiverState, TransferState},
+    state::{LimitingFactor, Phase, ReceiverState, TransferState},
 };
 use tokio::{sync::watch, time::Instant};
 use tracing::{info, warn};
 
-use super::{MulticastProgress, Worker};
+use super::{MulticastProgress, ReceiverProgress, TransferPhase, Worker};
 use crate::{
     domain::{host::Host, task::Task},
     error::{AppError, Result},
@@ -23,6 +23,16 @@ use crate::{
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const PORT_RELEASE_WAIT: Duration = Duration::from_secs(2);
 const PORT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+impl From<Phase> for TransferPhase {
+    fn from(phase: Phase) -> Self {
+        match phase {
+            Phase::Gathering => Self::Gathering,
+            Phase::Sending => Self::Sending,
+            Phase::Draining => Self::Draining,
+        }
+    }
+}
 
 struct File {
     path: PathBuf,
@@ -88,6 +98,7 @@ impl Worker {
         targets: &Targets,
         woken: &mut watch::Receiver<()>,
     ) -> Result<Option<usize>> {
+        let kicker = sending.kicker();
         let mut progress = sending.progress();
         let mut log = tokio::time::interval_at(
             Instant::now() + PROGRESS_LOG_INTERVAL,
@@ -99,14 +110,29 @@ impl Worker {
                 biased;
                 result = &mut sending => break result,
                 Ok(()) = woken.changed() => {
-                    if !self.still_running(step.task_id).await {
+                    let running = match self.running(step.task_id).await {
+                        Ok(running) => running,
+                        Err(e) => {
+                            warn!(task_id = step.task_id, err = %e, "could not check the multicast task, keeping it running");
+                            continue;
+                        }
+                    };
+                    if running.is_empty() {
                         return Ok(None);
+                    }
+                    for receiver in &progress.borrow().receivers {
+                        if targets
+                            .host_at(receiver.address.ip())
+                            .is_some_and(|t| !running.contains(&t.host_id))
+                        {
+                            kicker.kick(receiver.receiver_id);
+                        }
                     }
                 }
                 Ok(()) = progress.changed() => {
                     let state = progress.borrow_and_update();
                     joined = joined.max(state.receivers.len());
-                    self.progress.send_replace(Some(step.progress(&state)));
+                    self.progress.send_replace(Some(step.progress(&state, targets)));
                 }
                 _ = log.tick() => log_progress(&progress.borrow(), step.task_id, targets),
             }
@@ -125,16 +151,6 @@ impl Worker {
                 Ok(Some(complete))
             }
             Err(e) => Err(AppError::Internal(format!("multicast send failed: {e}"))),
-        }
-    }
-
-    async fn still_running(&self, task_id: i64) -> bool {
-        match self.running(task_id).await {
-            Ok(running) => !running.is_empty(),
-            Err(e) => {
-                warn!(task_id, err = %e, "could not check the multicast task, keeping it running");
-                true
-            }
         }
     }
 
@@ -193,27 +209,77 @@ async fn bind_sender(
     }
 }
 
-struct Targets(HashMap<IpAddr, String>);
+struct Target {
+    host_id: i64,
+    name: String,
+}
+
+struct Targets {
+    participants: Vec<Target>,
+    by_ip: HashMap<IpAddr, usize>,
+}
 
 impl Targets {
     fn new(hosts: Vec<Host>, participants: &[i64]) -> Self {
-        Self(
-            hosts
+        let hosts: Vec<Host> = hosts
+            .into_iter()
+            .filter(|h| participants.contains(&h.id))
+            .collect();
+        let mut by_ip: HashMap<IpAddr, Option<usize>> = HashMap::new();
+        for (index, host) in hosts.iter().enumerate() {
+            if let Some(ip) = host.ip.as_deref().and_then(|ip| ip.parse().ok()) {
+                by_ip
+                    .entry(ip)
+                    .and_modify(|shared| *shared = None)
+                    .or_insert(Some(index));
+            }
+        }
+        Self {
+            participants: hosts
                 .into_iter()
-                .filter(|h| participants.contains(&h.id))
-                .filter_map(|h| {
-                    Some((
-                        h.ip.as_deref()?.parse().ok()?,
-                        format!("{} (#{})", h.name, h.id),
-                    ))
+                .map(|h| Target {
+                    name: format!("{} (#{})", h.name, h.id),
+                    host_id: h.id,
                 })
                 .collect(),
-        )
+            by_ip: by_ip
+                .into_iter()
+                .filter_map(|(ip, index)| Some((ip, index?)))
+                .collect(),
+        }
+    }
+
+    fn host_at(&self, ip: IpAddr) -> Option<&Target> {
+        self.by_ip.get(&ip).map(|&index| &self.participants[index])
     }
 
     fn name(&self, receiver: &ReceiverState) -> String {
         let ip = receiver.address.ip();
-        self.0.get(&ip).cloned().unwrap_or_else(|| ip.to_string())
+        self.host_at(ip)
+            .map_or_else(|| ip.to_string(), |target| target.name.clone())
+    }
+
+    fn hosts(&self, state: &TransferState) -> Vec<ReceiverProgress> {
+        let culprit = limiting_receiver(state).map(|r| r.receiver_id);
+        self.participants
+            .iter()
+            .map(|target| {
+                let receiver = state.receivers.iter().find(|r| {
+                    self.host_at(r.address.ip())
+                        .is_some_and(|t| t.host_id == target.host_id)
+                });
+                ReceiverProgress {
+                    host_id: target.host_id,
+                    name: target.name.clone(),
+                    joined: receiver.is_some(),
+                    limiting: receiver.is_some_and(|r| Some(r.receiver_id) == culprit),
+                    slices_behind: receiver.map_or(0, |r| r.slices_behind),
+                    loss: receiver.map_or(0.0, |r| r.unrecovered_loss),
+                    naks: receiver.map_or(0, |r| r.naks),
+                    sink_stall_ms: receiver.map_or(0, |r| r.sink_stall_ms),
+                }
+            })
+            .collect()
     }
 }
 
@@ -226,21 +292,22 @@ struct TransferStep {
 }
 
 impl TransferStep {
-    fn progress(&self, state: &TransferState) -> MulticastProgress {
+    fn progress(&self, state: &TransferState, targets: &Targets) -> MulticastProgress {
         let sent = self.bytes_before + state.bytes_sent();
         let left = self.total_bytes.saturating_sub(sent);
         let bytes_per_second = state.bytes_per_second();
         MulticastProgress {
             task_id: self.task_id,
+            phase: state.phase.into(),
             fraction: match self.total_bytes {
                 0 => 0.0,
                 total => (sent as f64 / total as f64).min(1.0),
             },
             bytes_per_second,
-            receivers: state.receivers.len(),
             step: self.step,
             steps: self.steps,
             eta: Duration::try_from_secs_f64(left as f64 / bytes_per_second).ok(),
+            hosts: targets.hosts(state),
         }
     }
 }
@@ -389,21 +456,24 @@ mod tests {
         }
     }
 
+    fn no_targets() -> Targets {
+        Targets::new(Vec::new(), &[])
+    }
+
     #[test]
     fn progress_covers_the_whole_task_rather_than_the_file_being_sent() {
-        let reported = step(1000, 4000).progress(&sending_state(10, 5.0));
+        let reported = step(1000, 4000).progress(&sending_state(10, 5.0), &no_targets());
 
         assert_eq!(reported.task_id, 4);
         assert_eq!(reported.fraction, 0.5);
         assert_eq!(reported.bytes_per_second, 500.0);
         assert_eq!(reported.eta, Some(Duration::from_secs(4)));
         assert_eq!((reported.step, reported.steps), (2, 3));
-        assert_eq!(reported.receivers, 1);
     }
 
     #[test]
     fn a_stalled_transfer_reports_progress_without_an_eta() {
-        let reported = step(1000, 4000).progress(&sending_state(0, 0.0));
+        let reported = step(1000, 4000).progress(&sending_state(0, 0.0), &no_targets());
 
         assert_eq!(reported.fraction, 0.25);
         assert_eq!(reported.eta, None);
@@ -411,8 +481,52 @@ mod tests {
 
     #[test]
     fn progress_stays_in_range_when_sizes_are_unknown_or_overshot() {
-        assert_eq!(step(0, 0).progress(&sending_state(10, 1.0)).fraction, 0.0);
-        assert_eq!(step(0, 500).progress(&sending_state(10, 1.0)).fraction, 1.0);
+        let fraction =
+            |s: TransferStep| s.progress(&sending_state(10, 1.0), &no_targets()).fraction;
+        assert_eq!(fraction(step(0, 0)), 0.0);
+        assert_eq!(fraction(step(0, 500)), 1.0);
+    }
+
+    #[test]
+    fn each_participant_is_reported_with_its_receiver_and_the_one_holding_the_transfer_up() {
+        let targets = Targets::new(
+            vec![
+                host(7, "10.0.0.1"),
+                host(8, "10.0.0.2"),
+                host(9, "10.0.0.9"),
+            ],
+            &[7, 8, 9],
+        );
+        let mut stalled = receiver_state(22, "10.0.0.2:5000");
+        stalled.sink_stall_ms = 80;
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000"), stalled],
+            limiting: LimitingFactor::SinkStalled {
+                receiver: 22,
+                stall_ms: 80,
+            },
+            ..TransferState::default()
+        };
+
+        let hosts = targets.hosts(&state);
+        let row = |id: i64| hosts.iter().find(|h| h.host_id == id).unwrap();
+
+        assert!(row(7).joined && !row(7).limiting);
+        assert!(row(8).joined && row(8).limiting);
+        assert_eq!(row(8).sink_stall_ms, 80);
+        assert!(!row(9).joined && !row(9).limiting);
+    }
+
+    #[test]
+    fn hosts_sharing_an_address_are_never_matched_to_a_receiver() {
+        let targets = Targets::new(vec![host(7, "10.0.0.1"), host(8, "10.0.0.1")], &[7, 8]);
+        let state = TransferState {
+            receivers: vec![receiver_state(11, "10.0.0.1:5000")],
+            ..TransferState::default()
+        };
+
+        assert!(targets.hosts(&state).iter().all(|h| !h.joined));
+        assert!(targets.host_at("10.0.0.1".parse().unwrap()).is_none());
     }
 
     #[test]
