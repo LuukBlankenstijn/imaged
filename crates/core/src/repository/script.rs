@@ -170,7 +170,7 @@ impl ScriptRepository for SqliteScriptRepository {
         for script in scripts {
             script.validate()?;
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let mut ids = Vec::with_capacity(scripts.len());
         for script in scripts {
             let existing = sqlx::query_scalar!(
@@ -201,7 +201,7 @@ impl ScriptRepository for SqliteScriptRepository {
     }
 
     async fn set_for_image(&self, image_id: i64, script_ids: &[i64]) -> Result {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         link_scripts(&mut tx, image_id, script_ids).await?;
         tx.commit().await?;
         Ok(())

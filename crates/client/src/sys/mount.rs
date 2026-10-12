@@ -1,4 +1,6 @@
+use std::ffi::OsString;
 use std::io;
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -105,12 +107,16 @@ impl MountedSystem {
             return Ok(());
         }
         stop_processes_inside(&self.root);
-        let mountinfo = std::fs::read_to_string("/proc/self/mountinfo")
-            .context("reading /proc/self/mountinfo")?;
-        self.mounted = mounts_under(&mountinfo, &self.root);
-        self.mounted.reverse();
+        let tracked = std::mem::take(&mut self.mounted);
+        let targets = match std::fs::read("/proc/self/mountinfo") {
+            Ok(mountinfo) => mounts_under(&mountinfo, &self.root),
+            Err(e) => {
+                tracing::error!(error=%e, "could not read /proc/self/mountinfo, unmounting only the tracked mounts");
+                tracked.into_iter().rev().collect()
+            }
+        };
         let mut failure = None;
-        while let Some(target) = self.mounted.pop() {
+        for target in targets {
             if let Err(e) = rustix::mount::unmount(&target, UnmountFlags::empty()) {
                 let detached = rustix::mount::unmount(&target, UnmountFlags::DETACH);
                 tracing::error!(target=%target.display(), error=%e, ?detached, "could not unmount");
@@ -133,16 +139,14 @@ impl Drop for MountedSystem {
     }
 }
 
-fn mounts_under(mountinfo: &str, root: &Path) -> Vec<PathBuf> {
-    let mut mounts: Vec<PathBuf> = mountinfo
-        .lines()
+fn mounts_under(mountinfo: &[u8], root: &Path) -> Vec<PathBuf> {
+    mountinfo
+        .split(|&byte| byte == b'\n')
         .rev()
-        .filter_map(|line| line.split(' ').nth(4))
-        .map(|field| PathBuf::from(unescape(field)))
+        .filter_map(|line| line.split(|&byte| byte == b' ').nth(4))
+        .map(|field| PathBuf::from(OsString::from_vec(unescape(field))))
         .filter(|target| target.starts_with(root))
-        .collect();
-    mounts.sort_by_key(|target| std::cmp::Reverse(target.components().count()));
-    mounts
+        .collect()
 }
 
 fn stop_processes_inside(root: &Path) {
@@ -183,10 +187,11 @@ fn processes_inside(root: &Path) -> Vec<rustix::process::Pid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStrExt as _;
 
     #[test]
-    fn everything_mounted_below_the_root_is_unmounted_deepest_and_newest_first() {
-        let mountinfo = "\
+    fn everything_mounted_below_the_root_is_unmounted_newest_first() {
+        let mountinfo = b"\
 22 1 0:20 / / rw - rootfs rootfs rw
 40 22 254:2 / /tmp/imaged-root rw - ext4 /dev/vda2 rw
 41 40 254:1 / /tmp/imaged-root/boot/efi rw - vfat /dev/vda1 rw
@@ -194,23 +199,22 @@ mod tests {
 43 42 0:30 / /tmp/imaged-root/sys/firmware/efi/efivars rw - efivarfs efivarfs rw
 44 40 0:31 / /tmp/imaged-root/mnt/my\\040data rw - tmpfs tmpfs rw
 45 40 0:32 / /tmp/imaged-root/mnt rw - tmpfs tmpfs rw
-46 22 0:33 / /tmp/imaged-rootless rw - tmpfs tmpfs rw
+46 40 0:33 / /tmp/imaged-root/caf\xe9 rw - tmpfs tmpfs rw
+47 22 0:34 / /tmp/imaged-rootless rw - tmpfs tmpfs rw
 ";
 
-        let order: Vec<String> = mounts_under(mountinfo, Path::new("/tmp/imaged-root"))
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect();
+        let order = mounts_under(mountinfo, Path::new("/tmp/imaged-root"));
 
         assert_eq!(
             order,
             [
-                "/tmp/imaged-root/sys/firmware/efi/efivars",
-                "/tmp/imaged-root/mnt/my data",
-                "/tmp/imaged-root/boot/efi",
-                "/tmp/imaged-root/mnt",
-                "/tmp/imaged-root/sys",
-                "/tmp/imaged-root",
+                Path::new(std::ffi::OsStr::from_bytes(b"/tmp/imaged-root/caf\xe9")),
+                Path::new("/tmp/imaged-root/mnt"),
+                Path::new("/tmp/imaged-root/mnt/my data"),
+                Path::new("/tmp/imaged-root/sys/firmware/efi/efivars"),
+                Path::new("/tmp/imaged-root/sys"),
+                Path::new("/tmp/imaged-root/boot/efi"),
+                Path::new("/tmp/imaged-root"),
             ]
         );
     }

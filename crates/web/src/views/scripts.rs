@@ -253,7 +253,7 @@ fn ScriptEditor(
     let count = drafts.len();
 
     rsx! {
-        Modal { open: true, wide: true, onclose: move |_| onclose.call(()), title,
+        Modal { open: true, wide: true, dismissible: false, onclose: move |_| onclose.call(()), title,
             div { class: "flex flex-col gap-4",
                 div {
                     label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",

@@ -358,10 +358,10 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
 #[component]
 fn RootPartitionPicker(image: Image, on_changed: EventHandler<()>) -> Element {
     let image_id = image.id;
-    let current = image
-        .root_partition
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+    let saved = image.root_partition;
+    let mut shown = use_signal(|| saved);
+    use_effect(use_reactive!(|saved| shown.set(saved)));
+    let current = shown().map(|n| n.to_string()).unwrap_or_default();
 
     rsx! {
         div {
@@ -376,19 +376,23 @@ fn RootPartitionPicker(image: Image, on_changed: EventHandler<()>) -> Element {
                     value: "{current}",
                     onchange: move |e| {
                         let partition_number = e.value().parse::<i64>().ok();
+                        shown.set(partition_number);
                         spawn(async move {
                             match set_root_partition(RootPartitionRequest { image_id, partition_number }).await {
                                 Ok(_) => on_changed.call(()),
-                                Err(err) => toast_error("Root partition not saved", err.to_string()),
+                                Err(err) => {
+                                    shown.set(saved);
+                                    toast_error("Root partition not saved", err.to_string());
+                                }
                             }
                         });
                     },
-                    option { value: "", selected: image.root_partition.is_none(), "none" }
+                    option { value: "", selected: shown().is_none(), "none" }
                     for p in image.partitions.iter() {
                         option {
                             key: "{p.partition_number}",
                             value: "{p.partition_number}",
-                            selected: image.root_partition == Some(p.partition_number),
+                            selected: shown() == Some(p.partition_number),
                             {format!("#{} · {} · {}", p.partition_number, p.fstype, format_bytes(p.size_bytes))}
                         }
                     }

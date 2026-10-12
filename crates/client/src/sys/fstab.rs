@@ -14,7 +14,9 @@ pub fn plan_mounts(fstab: &str, disk: &BlockDevice) -> Vec<PlannedMount> {
         .lines()
         .filter_map(|line| {
             let line = line.split('#').next().unwrap_or_default();
-            let mut fields = line.split_whitespace().map(unescape);
+            let mut fields = line
+                .split_whitespace()
+                .map(|field| String::from_utf8_lossy(&unescape(field.as_bytes())).into_owned());
             let (spec, mountpoint, fstype) = (fields.next()?, fields.next()?, fields.next()?);
             if fstype == "swap" {
                 return None;
@@ -82,9 +84,9 @@ fn same_id(id: &Option<String>, value: &str) -> bool {
         .is_some_and(|id| id.eq_ignore_ascii_case(value))
 }
 
-pub(crate) fn unescape(field: &str) -> String {
+pub(crate) fn unescape(field: &[u8]) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(field.len());
-    let mut rest = field.as_bytes();
+    let mut rest = field;
     while let Some((&first, tail)) = rest.split_first() {
         let escaped = match tail {
             [a @ b'0'..=b'3', b @ b'0'..=b'7', c @ b'0'..=b'7', ..] if first == b'\\' => {
@@ -103,7 +105,7 @@ pub(crate) fn unescape(field: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&decoded).into_owned()
+    decoded
 }
 
 #[cfg(test)]
