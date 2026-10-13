@@ -123,36 +123,14 @@ impl domain::host::HostRepository for SqliteHostRepository {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use crate::build_test_container;
-    use crate::di::DIContainer;
     use crate::domain::task::TaskType;
+    use crate::test_support::repos;
     use imaged_model::error::AppError;
     use imaged_model::task::TaskState;
 
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-repohost-{}-{}", std::process::id(), id));
-        let c = build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
-
     #[tokio::test]
     async fn upsert_host_inserts_then_updates_size_and_ip_preserving_id_and_user_assigned_name() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
 
         let inserted = c
             .host_repo
@@ -187,7 +165,7 @@ mod tests {
 
     #[tokio::test]
     async fn disk_size_round_trips_for_four_tebibytes() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let four_tib = 4u64 * 1024 * 1024 * 1024 * 1024;
 
         let host = c
@@ -203,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn disk_size_u64_max_round_trips_but_is_stored_as_a_negative_i64() {
-        let (c, guard) = container().await;
+        let (c, _guard) = repos().await;
 
         let host = c
             .host_repo
@@ -215,22 +193,17 @@ mod tests {
         let fetched = c.host_repo.get_by_mac("aa:bb:cc:dd:ee:ff").await.unwrap();
         assert_eq!(fetched.disk_size, u64::MAX);
 
-        let db_path = guard.0.join("test.db");
-        let ro = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=ro", db_path.display()))
-            .await
-            .unwrap();
         let raw: i64 = sqlx::query_scalar("SELECT disk_size_bytes FROM hosts WHERE mac = ?")
             .bind("aa:bb:cc:dd:ee:ff")
-            .fetch_one(&ro)
+            .fetch_one(&c.pool)
             .await
             .unwrap();
-        ro.close().await;
         assert_eq!(raw, -1);
     }
 
     #[tokio::test]
     async fn get_by_mac_returns_the_host() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let host = c
             .host_repo
             .upsert_host("aa:bb:cc:dd:ee:03".into(), 1_000, None)
@@ -244,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_by_mac_unknown_mac_is_not_found() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let err = c
             .host_repo
             .get_by_mac("ff:ff:ff:ff:ff:ff")
@@ -255,7 +228,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_by_mac_is_case_sensitive_so_a_lowercase_query_misses_an_uppercase_stored_mac() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         c.host_repo
             .upsert_host("AA:BB:CC:DD:EE:04".into(), 1_000, None)
             .await
@@ -270,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_returns_hosts_ordered_by_name() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let charlie = c
             .host_repo
             .upsert_host("cc:bb:cc:dd:ee:05".into(), 1, None)
@@ -300,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_with_group_id_returns_only_that_groups_members() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = c
             .host_repo
             .upsert_host("aa:bb:cc:dd:ee:08".into(), 1, None)
@@ -336,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_name_renames_without_touching_mac_disk_or_ip() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let host = c
             .host_repo
             .upsert_host("aa:bb:cc:dd:ee:0b".into(), 4_096, Some("10.0.0.9".into()))
@@ -357,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_name_unknown_id_is_not_found() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let err = c
             .host_repo
             .update_name(999_999, "nope".into())
@@ -369,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_the_host_and_cascades_task_hosts_leaving_a_defunct_task_row_aggregating_to_cancelled()
      {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = c
             .host_repo
             .upsert_host("aa:bb:cc:dd:ee:0c".into(), 1_000, None)

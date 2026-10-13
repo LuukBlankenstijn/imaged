@@ -196,6 +196,7 @@ where
 mod tests {
     use super::*;
     use crate::di::DIContainer;
+    use crate::test_support::container;
     use imaged_model::{ServerEvent, get_multicast_port, multicast_group};
     use scuttlecast::{error::ProtoError, receiver::Receiver};
     use std::{
@@ -209,7 +210,7 @@ mod tests {
     use tokio::{task::JoinHandle, time::Instant};
 
     static SESSIONS: Mutex<()> = Mutex::new(());
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
+    static IMAGE_ID: AtomicU64 = AtomicU64::new(0);
     const SETTLE: Duration = Duration::from_secs(20);
 
     fn one_session_at_a_time(test: impl Future<Output = ()>) {
@@ -223,20 +224,6 @@ mod tests {
         drop(runtime);
     }
 
-    struct TestDir(PathBuf);
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("imaged-mcmgr-{}-{}", std::process::id(), id));
-        let c = crate::build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
-
     async fn db_host(c: &DIContainer, mac: &str, ip: Option<&str>) -> i64 {
         c.host_repo
             .upsert_host(mac.to_string(), 1_000_000, ip.map(Into::into))
@@ -248,7 +235,7 @@ mod tests {
     async fn image(c: &DIContainer, parttable: &[u8], partition: &[u8]) -> i64 {
         let image = c
             .image_repo
-            .create_image(format!("cast-{}", DB_ID.fetch_add(1, Ordering::Relaxed)))
+            .create_image(format!("cast-{}", IMAGE_ID.fetch_add(1, Ordering::Relaxed)))
             .await
             .unwrap();
         c.image_repo

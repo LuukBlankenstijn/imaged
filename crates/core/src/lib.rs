@@ -5,6 +5,8 @@ pub mod multicast;
 pub mod registry;
 pub mod repository;
 pub mod service;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 use std::{
     collections::BTreeMap, future::Future, net::SocketAddr, path::Path, sync::Arc, time::Duration,
@@ -107,27 +109,6 @@ pub async fn build_di_container(
         script_proxy.map(Arc::from),
         Arc::new(script_variables),
     ))
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub async fn build_test_container(dir: &Path) -> DIContainer {
-    let _ = std::fs::remove_dir_all(dir);
-    std::fs::create_dir_all(dir).unwrap();
-    let pool = setup_database(&dir.join("test.db")).await.unwrap();
-    let mut container = build_di_container(
-        pool,
-        dir.join("images").to_string_lossy().to_string(),
-        "lo".to_string(),
-        None,
-        BTreeMap::new(),
-    )
-    .await
-    .unwrap();
-    container.agent_liveness = AgentLiveness {
-        ping_interval: Duration::from_millis(200),
-        timeout: Duration::from_millis(600),
-    };
-    container
 }
 
 pub async fn serve(

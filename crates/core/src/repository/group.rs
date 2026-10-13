@@ -98,32 +98,10 @@ impl GroupRepository for SqliteGroupRepository {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use crate::build_test_container;
-    use crate::di::DIContainer;
+    use crate::test_support::{Repos, repos};
     use imaged_model::error::AppError;
 
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-repogroup-{}-{}", std::process::id(), id));
-        let c = build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
-
-    async fn host(c: &DIContainer, mac: &str) -> i64 {
+    async fn host(c: &Repos, mac: &str) -> i64 {
         c.host_repo
             .upsert_host(mac.into(), 1_000, None)
             .await
@@ -131,7 +109,7 @@ mod tests {
             .id
     }
 
-    async fn member_ids(c: &DIContainer, group_id: i64) -> Vec<i64> {
+    async fn member_ids(c: &Repos, group_id: i64) -> Vec<i64> {
         let mut ids: Vec<i64> = c
             .host_repo
             .get_all(Some(group_id))
@@ -146,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_group_round_trips_through_get_all() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let created = c.group_repo.create_group("alpha", &[]).await.unwrap();
         assert_eq!(created.name, "alpha");
 
@@ -158,7 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_group_persists_its_initial_membership() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:00:01").await;
         let b = host(&c, "aa:bb:cc:00:00:02").await;
 
@@ -171,7 +149,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_returns_groups_ordered_by_name() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let gamma = c.group_repo.create_group("gamma", &[]).await.unwrap();
         let alpha = c.group_repo.create_group("alpha", &[]).await.unwrap();
         let beta = c.group_repo.create_group("beta", &[]).await.unwrap();
@@ -189,14 +167,14 @@ mod tests {
 
     #[tokio::test]
     async fn update_name_unknown_id_is_not_found() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let err = c.group_repo.update_name(999_999, "nope").await.unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
     }
 
     #[tokio::test]
     async fn update_group_members_replaces_the_membership_set() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:01:01").await;
         let b = host(&c, "aa:bb:cc:00:01:02").await;
         let d = host(&c, "aa:bb:cc:00:01:03").await;
@@ -215,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_group_members_with_an_empty_list_clears_membership() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:02:01").await;
         let group = c.group_repo.create_group("g", &[a]).await.unwrap();
         assert_eq!(member_ids(&c, group.id).await, vec![a]);
@@ -230,7 +208,7 @@ mod tests {
     #[tokio::test]
     async fn update_group_members_with_a_duplicate_host_id_fails_on_the_unique_constraint_and_rolls_back()
      {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:03:01").await;
         let b = host(&c, "aa:bb:cc:00:03:02").await;
         let group = c.group_repo.create_group("g", &[a]).await.unwrap();
@@ -248,7 +226,7 @@ mod tests {
     #[tokio::test]
     async fn update_group_members_with_a_nonexistent_host_id_fails_the_foreign_key_and_rolls_back_leaving_prior_membership_intact()
      {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:04:01").await;
         let b = host(&c, "aa:bb:cc:00:04:02").await;
         let group = c.group_repo.create_group("g", &[a]).await.unwrap();
@@ -268,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_group_members_unknown_group_id_is_not_found() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let err = c
             .group_repo
             .update_group_members(999_999, &[])
@@ -279,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_group_removes_the_group_and_its_membership_without_deleting_the_hosts() {
-        let (c, _guard) = container().await;
+        let (c, _guard) = repos().await;
         let a = host(&c, "aa:bb:cc:00:05:01").await;
         let b = host(&c, "aa:bb:cc:00:05:02").await;
         let group = c.group_repo.create_group("g", &[a, b]).await.unwrap();

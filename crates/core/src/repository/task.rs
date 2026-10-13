@@ -480,31 +480,11 @@ fn no_running_script(task_id: i64, host_id: i64, position: i64) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::di::DIContainer;
+    use crate::test_support::{Repos, repos};
     use imaged_model::error::AppError;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-repotask-{}-{}", std::process::id(), id));
-        let c = crate::build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
-
-    async fn host(c: &DIContainer, mac: &str) -> i64 {
+    async fn host(c: &Repos, mac: &str) -> i64 {
         c.host_repo
             .upsert_host(mac.into(), 1_000_000, None)
             .await
@@ -512,7 +492,7 @@ mod tests {
             .id
     }
 
-    async fn image(c: &DIContainer, name: &str) -> i64 {
+    async fn image(c: &Repos, name: &str) -> i64 {
         c.image_repo.create_image(name.into()).await.unwrap().id
     }
 
@@ -525,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_inserts_a_pending_row_for_each_host_and_returns_them_attached() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = image(&c, "img").await;
         let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
         let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
@@ -551,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_an_empty_host_list_yields_a_task_that_aggregates_to_cancelled() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let task = c
             .task_repo
             .create(TaskType::Reboot, vec![], None)
@@ -566,7 +546,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_a_nonexistent_host_id_returns_an_error() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let err = c
             .task_repo
             .create(TaskType::Reboot, vec![999_999], None)
@@ -580,7 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_a_nonexistent_host_id_leaves_no_orphaned_task_row_behind() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let _ = c
             .task_repo
             .create(TaskType::Reboot, vec![999_999], None)
@@ -594,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_returns_the_task_with_its_host_rows() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let created = c
             .task_repo
@@ -610,14 +590,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_maps_a_missing_task_id_to_not_found() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let err = c.task_repo.get(999_999).await.unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
     }
 
     #[tokio::test]
     async fn get_all_returns_tasks_newest_first_with_host_rows_grouped_per_task() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
         let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
 
@@ -655,7 +635,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_next_prefers_running_over_pending_then_oldest_created_first() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
 
         let t1 = c
@@ -690,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_next_returns_none_when_the_host_has_only_terminal_tasks() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -703,14 +683,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_next_returns_none_for_a_host_with_no_tasks() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:09").await;
         assert!(c.task_repo.get_next(h).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn start_transitions_a_pending_host_row_to_running_and_stamps_started_at() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -726,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_leaves_an_already_running_host_row_running() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -741,7 +721,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_does_not_resurrect_a_done_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -756,7 +736,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_does_not_resurrect_a_failed_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -771,7 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_does_not_resurrect_a_cancelled_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -786,7 +766,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_sets_the_host_row_done_and_stamps_finished_at() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -803,7 +783,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_failed_sets_the_host_row_failed_with_error_text_and_finished_at() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -824,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_does_not_resurrect_a_failed_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -841,7 +821,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_does_not_resurrect_a_cancelled_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -856,7 +836,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_failed_does_not_resurrect_a_done_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -876,7 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_failed_does_not_resurrect_a_cancelled_host_row() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -896,7 +876,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_flips_pending_and_running_hosts_to_cancelled() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let pending_h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let running_h = host(&c, "aa:bb:cc:dd:ee:02").await;
         let t = c
@@ -914,7 +894,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_leaves_done_hosts_untouched_and_yields_partial_aggregate() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let done_h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let pending_h = host(&c, "aa:bb:cc:dd:ee:02").await;
         let t = c
@@ -932,7 +912,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_leaves_failed_hosts_untouched_and_yields_failed_aggregate() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let failed_h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let pending_h = host(&c, "aa:bb:cc:dd:ee:02").await;
         let t = c
@@ -953,7 +933,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_does_not_touch_pending_or_running_host_rows() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let pending_h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let running_h = host(&c, "aa:bb:cc:dd:ee:02").await;
         let t = c
@@ -970,7 +950,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_resets_failed_and_cancelled_hosts_to_pending_leaving_done_alone() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let done_h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let failed_h = host(&c, "aa:bb:cc:dd:ee:02").await;
         let cancelled_h = host(&c, "aa:bb:cc:dd:ee:03").await;
@@ -1005,7 +985,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_active_by_image_returns_only_active_tasks_for_that_image_newest_first() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img_a = image(&c, "a").await;
         let img_b = image(&c, "b").await;
         let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
@@ -1047,7 +1027,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_next_multicast_returns_a_multicast_task_with_a_pending_host_only() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
 
         c.task_repo
@@ -1071,7 +1051,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_next_multicast_includes_a_task_while_any_host_is_still_pending() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
         let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
         let m = c
@@ -1093,7 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_a_host_cascades_away_its_task_host_rows() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
         let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
         let t = c
@@ -1110,7 +1090,7 @@ mod tests {
 
     #[tokio::test]
     async fn deleting_the_last_host_leaves_a_defunct_task_that_aggregates_to_cancelled() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let h = host(&c, "aa:bb:cc:dd:ee:01").await;
         let t = c
             .task_repo
@@ -1125,7 +1105,7 @@ mod tests {
 
     #[tokio::test]
     async fn retrying_forgets_the_script_runs_of_the_hosts_it_resets() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = image(&c, "img").await;
         let failed = host(&c, "aa:bb:cc:dd:ee:01").await;
         let done = host(&c, "aa:bb:cc:dd:ee:02").await;

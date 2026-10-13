@@ -193,25 +193,13 @@ async fn remove_dir(dir: impl AsRef<Path>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestDir;
     use futures::StreamExt;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn service() -> (ImageService, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("imaged-imgsvc-{}-{}", std::process::id(), id));
-        std::fs::create_dir_all(&dir).unwrap();
-        let svc = ImageService::new(dir.to_str().unwrap().to_string());
-        (svc, TestDir(dir))
+        let dir = TestDir::new();
+        let svc = ImageService::new(dir.path().to_str().unwrap().to_string());
+        (svc, dir)
     }
 
     #[test]

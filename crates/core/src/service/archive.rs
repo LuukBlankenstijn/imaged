@@ -184,35 +184,15 @@ fn store_failed(error: io::Error) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use imaged_model::script::{InputKind, ScriptInput};
 
     use super::*;
     use crate::di::DIContainer;
+    use crate::test_support::{TestDir, container};
     use imaged_model::image::ImageStatus;
-
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
 
     const TABLE: &[u8] = b"partition table";
     const SMALL: &[u8] = b"second-partition-contents";
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-archive-{}-{}", std::process::id(), id));
-        let c = crate::build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
 
     fn large() -> Vec<u8> {
         (0..600_000u32).map(|i| (i % 251) as u8).collect()
@@ -252,7 +232,7 @@ mod tests {
     }
 
     async fn scripts_archive(guard: &TestDir, scripts: &[(&str, &str)]) -> Vec<u8> {
-        let table = guard.0.join("table");
+        let table = guard.path().join("table");
         std::fs::write(&table, TABLE).unwrap();
         let contents = Contents {
             name: "imported".into(),
@@ -301,7 +281,7 @@ mod tests {
     }
 
     fn image_dirs(guard: &TestDir) -> Vec<String> {
-        let Ok(dirs) = std::fs::read_dir(guard.0.join("images")) else {
+        let Ok(dirs) = std::fs::read_dir(guard.path().join("images")) else {
             return Vec::new();
         };
         let mut names: Vec<String> = dirs

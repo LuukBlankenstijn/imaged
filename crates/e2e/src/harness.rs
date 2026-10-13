@@ -12,9 +12,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use imaged_core::di::DIContainer;
+use imaged_core::test_support::{self, TestDir};
 use imaged_model::agent::{MAC_HEADER, route};
-
-use imaged_api_ui as _;
 
 pub mod seed;
 
@@ -23,6 +22,7 @@ pub struct TestServer {
     pub container: DIContainer,
     pub images_dir: PathBuf,
     pub http: reqwest::Client,
+    _dir: TestDir,
 }
 
 static SERVER: LazyLock<TestServer> = LazyLock::new(|| {
@@ -51,30 +51,24 @@ pub async fn server() -> &'static TestServer {
 }
 
 async fn build_server() -> TestServer {
-    let dir = std::env::temp_dir().join(format!("imaged-e2e-{}", std::process::id()));
-    let container = imaged_core::build_test_container(&dir).await;
+    let (container, dir) = test_support::container().await;
     imaged_core::di::init_container(container.clone());
-
-    let dashboard = dioxus_server::ServerFunction::collect()
-        .into_iter()
-        .fold(axum::Router::new(), |router, f| {
-            router.route(f.path(), f.method_router())
-        })
-        .with_state(dioxus_server::FullstackState::headless());
-    let router = imaged_api_agent::router().merge(dashboard);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind harness listener");
     let addr = listener.local_addr().expect("harness local addr");
+    let base_url = format!("http://{addr}");
+    let router = imaged_server::machine_router(&base_url)
+        .merge(imaged_api_ui::router().with_state(dioxus_server::FullstackState::headless()));
     tokio::spawn(async move {
         let _ = axum::serve(listener, router.into_make_service()).await;
     });
 
     TestServer {
-        base_url: format!("http://{addr}"),
+        base_url,
         container,
-        images_dir: dir.join("images"),
+        images_dir: dir.path().join("images"),
         // No idle pool: the client is a `&'static` shared across every per-test
         // `#[tokio::test]` runtime. A pooled idle connection outlives the test
         // that created it; when that runtime is dropped the connection's
@@ -85,6 +79,7 @@ async fn build_server() -> TestServer {
             .pool_max_idle_per_host(0)
             .build()
             .expect("build harness http client"),
+        _dir: dir,
     }
 }
 

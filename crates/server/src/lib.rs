@@ -14,7 +14,7 @@ use std::{
 };
 
 use axum::{Router, routing::get};
-use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig, ServerFunction};
+use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
 use imaged_core::{
     self as core,
     di::{DIContainer, MachineIp},
@@ -23,8 +23,6 @@ use imaged_core::{
 use imaged_web::App;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
-
-use imaged_api_ui as _;
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(3);
 
@@ -104,8 +102,7 @@ impl Imaged {
     pub async fn serve(&self, listeners: Listeners) -> io::Result<Server> {
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
-        let machine_router =
-            imaged_boot::pxe::router(&listeners.public_url).merge(imaged_api_agent::router());
+        let machine_router = machine_router(&listeners.public_url);
         let (machine_router, separate_dashboard) = match listeners.dashboard {
             Dashboard::Off => (machine_router, None),
             Dashboard::OnMachineListener => (machine_router.merge(dashboard_router()?), None),
@@ -228,12 +225,8 @@ impl Drop for ServingClaim {
     }
 }
 
-fn server_fns() -> Router<FullstackState> {
-    ServerFunction::collect()
-        .into_iter()
-        .fold(Router::new(), |router, f| {
-            router.route(f.path(), f.method_router())
-        })
+pub fn machine_router(public_url: &str) -> Router {
+    imaged_boot::pxe::router(public_url).merge(imaged_api_agent::router())
 }
 
 fn dashboard_router() -> io::Result<Router> {
@@ -247,7 +240,7 @@ fn dashboard_router() -> io::Result<Router> {
             format!("dashboard assets in {}: {e}", assets.display()),
         )
     })?;
-    Ok(server_fns()
+    Ok(imaged_api_ui::router()
         .serve_static_assets()
         .fallback(get(FullstackState::render_handler))
         .with_state(FullstackState::new(ServeConfig::new(), App)))

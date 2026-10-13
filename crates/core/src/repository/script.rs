@@ -292,31 +292,10 @@ async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use crate::di::DIContainer;
     use crate::domain::script::NewScript;
+    use crate::test_support::repos;
     use imaged_model::error::AppError;
     use imaged_model::script::{InputKind, ScriptInput};
-
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-reposcript-{}-{}", std::process::id(), id));
-        let c = crate::build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
 
     fn input(name: &str, kind: InputKind, choices: &[&str]) -> ScriptInput {
         ScriptInput {
@@ -340,7 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_created_script_reads_back_with_its_inputs_in_declared_order() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let inputs = vec![
             input("zone", InputKind::Choice, &["eu", "us"]),
             input("hostname", InputKind::Text, &[]),
@@ -360,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn scripts_are_listed_by_name_each_with_only_its_own_inputs() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         c.script_repo
             .create(&new_script(
                 "b",
@@ -393,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn updating_replaces_name_body_and_inputs() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let created = c
             .script_repo
             .create(&new_script(
@@ -421,7 +400,7 @@ mod tests {
 
     #[tokio::test]
     async fn names_are_unique_and_invalid_definitions_are_not_stored() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         c.script_repo
             .create(&new_script("setup", "x", vec![]))
             .await
@@ -455,7 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_scripts_are_not_found() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let script = new_script("s", "x", vec![]);
         assert!(matches!(
             c.script_repo.get(42).await.unwrap_err(),
@@ -473,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_image_runs_its_scripts_in_the_order_they_were_set() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let image = c.image_repo.create_image("img".into()).await.unwrap();
         let first = c
             .script_repo
@@ -508,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rejected_script_list_leaves_the_previous_one_in_place() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let image = c.image_repo.create_image("img".into()).await.unwrap();
         let script = c
             .script_repo
@@ -547,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_script_used_by_an_image_cannot_be_deleted_until_the_image_is_gone() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let image = c.image_repo.create_image("golden".into()).await.unwrap();
         let script = c
             .script_repo
@@ -571,7 +550,7 @@ mod tests {
 
     #[tokio::test]
     async fn importing_replaces_scripts_by_name_and_attaches_them_in_order() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let other = c.image_repo.create_image("other".into()).await.unwrap();
         let imported = c.image_repo.create_image("imported".into()).await.unwrap();
         let original = c
@@ -609,7 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_import_with_one_invalid_script_changes_nothing() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let image = c.image_repo.create_image("imported".into()).await.unwrap();
         c.script_repo
             .create(&new_script("setup", "old", vec![]))

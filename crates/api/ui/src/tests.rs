@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -11,6 +9,7 @@ use tower::ServiceExt as _;
 use core::di::DIContainer;
 use core::domain::script::NewScript;
 use core::domain::task::TaskType;
+use core::test_support::container;
 use imaged_model::ServerEvent;
 use imaged_model::error::AppError;
 use imaged_model::image::ImageStatus;
@@ -19,30 +18,6 @@ use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
 
 use crate::model;
-
-static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-struct TestDir(PathBuf);
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-async fn install_container() -> (DIContainer, TestDir) {
-    let dir = std::env::temp_dir().join(format!("imaged-ui-router-test-{}", std::process::id()));
-    let c = core::build_test_container(&dir).await;
-    core::di::init_container(c.clone());
-    (c, TestDir(dir))
-}
-
-async fn container() -> (DIContainer, TestDir) {
-    let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("imaged-test-{}-{}", std::process::id(), id));
-    let c = core::build_test_container(&dir).await;
-    (c, TestDir(dir))
-}
 
 // ----------------------------------------------------------------------------
 // hosts
@@ -325,7 +300,7 @@ async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
             .save_partition_table(img.id, &[1u8, 2, 3, 4])
             .await
             .unwrap();
-        let dir = guard.0.join("images").join(format!("img-{}", img.id));
+        let dir = guard.path().join("images").join(format!("img-{}", img.id));
         assert!(dir.exists());
         let mut conn = c.host_registry.register(host.id);
 
@@ -457,13 +432,7 @@ async fn groups_full_roundtrip() {
 // ---------------------------------------------------------------------------
 
 fn ui_router() -> axum::Router {
-    dioxus::server::ServerFunction::collect()
-        .into_iter()
-        .filter(|f| f.path().starts_with("/api/ui"))
-        .fold(axum::Router::new(), |router, f| {
-            router.route(f.path(), f.method_router())
-        })
-        .with_state(dioxus::server::FullstackState::headless())
+    crate::router().with_state(dioxus::server::FullstackState::headless())
 }
 
 async fn request(method: Method, uri: &str, body: Option<serde_json::Value>) -> Response {
@@ -504,7 +473,8 @@ async fn json<T: serde::de::DeserializeOwned>(response: Response) -> T {
 
 #[tokio::test]
 async fn ui_api_contracts() {
-    let (c, _guard) = install_container().await;
+    let (c, _guard) = container().await;
+    core::di::init_container(c.clone());
 
     reads_are_get_only(&c).await;
     group_members_are_served_from_the_group_path(&c).await;
@@ -1139,7 +1109,7 @@ async fn deleting_an_image_soft_deletes_the_row_and_clears_its_on_disk_directory
         .save_partition_table(img.id, &[1u8, 2, 3, 4])
         .await
         .unwrap();
-    let dir = guard.0.join("images").join(format!("img-{}", img.id));
+    let dir = guard.path().join("images").join(format!("img-{}", img.id));
     assert!(dir.exists());
 
     core::di::scope(c.clone(), crate::images::delete_image(img.id))

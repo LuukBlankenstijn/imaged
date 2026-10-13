@@ -408,40 +408,14 @@ fn image_status(value: &str) -> Result<ImageStatus> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use sqlx::Row;
 
-    use crate::di::DIContainer;
     use crate::domain::image::NewImagePartition;
+    use crate::test_support::{Repos, repos};
     use imaged_model::error::AppError;
     use imaged_model::image::ImageStatus;
 
-    static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-    struct TestDir(PathBuf);
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    async fn container() -> (DIContainer, TestDir) {
-        let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("imaged-repoimage-{}-{}", std::process::id(), id));
-        let c = crate::build_test_container(&dir).await;
-        (c, TestDir(dir))
-    }
-
-    async fn raw_pool(guard: &TestDir) -> sqlx::SqlitePool {
-        let url = format!("sqlite://{}", guard.0.join("test.db").display());
-        sqlx::SqlitePool::connect(&url).await.unwrap()
-    }
-
-    async fn find_in_get_all(c: &DIContainer, id: i64) -> Option<crate::domain::image::Image> {
+    async fn find_in_get_all(c: &Repos, id: i64) -> Option<crate::domain::image::Image> {
         c.image_repo
             .get_all()
             .await
@@ -452,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_image_starts_empty_with_name_and_no_capture_time() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("golden".into()).await.unwrap();
         assert_eq!(img.name, "golden");
         assert_eq!(img.status, ImageStatus::Empty);
@@ -463,7 +437,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_status_of_freshly_created_image_is_empty() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("golden".into()).await.unwrap();
         let status = c.image_repo.get_status(img.id).await.unwrap();
         assert_eq!(status, ImageStatus::Empty);
@@ -471,14 +445,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_status_of_unknown_id_maps_to_not_found() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let err = c.image_repo.get_status(999_999).await.unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
     }
 
     #[tokio::test]
     async fn get_all_orders_images_by_id_ascending() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let a = c.image_repo.create_image("a".into()).await.unwrap();
         let b = c.image_repo.create_image("b".into()).await.unwrap();
         let cc = c.image_repo.create_image("c".into()).await.unwrap();
@@ -495,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_groups_partitions_onto_their_image_ordered_by_partition_number() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img1 = c.image_repo.create_image("one".into()).await.unwrap();
         let img2 = c.image_repo.create_image("two".into()).await.unwrap();
         c.image_repo
@@ -527,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_excludes_soft_deleted_images() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let keep = c.image_repo.create_image("keep".into()).await.unwrap();
         let gone = c.image_repo.create_image("gone".into()).await.unwrap();
         c.image_repo.delete_image(gone.id).await.unwrap();
@@ -546,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_partition_round_trips_fstype_and_size_through_get_partitions() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", 4096)
@@ -562,7 +536,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_partitions_orders_by_partition_number() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 5, "ext4", 1)
@@ -590,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_partition_return_value_reports_the_partition_number_it_was_given() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         let returned = c
             .image_repo
@@ -604,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn re_saving_the_same_partition_number_errors_on_the_unique_constraint() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", 10)
@@ -624,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn size_bytes_near_i64_max_round_trips_as_u64() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", i64::MAX)
@@ -636,7 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_negative_size_bytes_is_reachable_and_wraps_to_a_huge_u64() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", -1)
@@ -648,7 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_freshly_inserted_partition_always_has_a_non_null_id() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         let returned = c
             .image_repo
@@ -662,13 +636,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_all_returns_an_internal_error_when_an_image_row_has_an_unexpected_status_string() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        let pool = raw_pool(&_g).await;
         sqlx::query("UPDATE images SET status = ? WHERE id = ?")
             .bind("bogus")
             .bind(img.id)
-            .execute(&pool)
+            .execute(&c.pool)
             .await
             .unwrap();
         let err = c.image_repo.get_all().await.unwrap_err();
@@ -677,13 +650,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_status_of_an_unexpected_status_string_is_an_internal_error_not_a_panic() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        let pool = raw_pool(&_g).await;
         sqlx::query("UPDATE images SET status = ? WHERE id = ?")
             .bind("bogus")
             .bind(img.id)
-            .execute(&pool)
+            .execute(&c.pool)
             .await
             .unwrap();
         let err = c.image_repo.get_status(img.id).await.unwrap_err();
@@ -692,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_capture_moves_an_empty_image_to_capturing() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
         assert_eq!(
@@ -703,7 +675,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_finished_moves_capturing_to_ready_and_records_a_capture_time() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
@@ -717,7 +689,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_faulted_moves_capturing_to_faulted_and_records_the_error() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.start_capture(img.id).await.unwrap();
         c.image_repo
@@ -734,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn transitions_are_unconditional_so_mark_finished_promotes_an_empty_image_to_ready() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         assert_eq!(
@@ -745,7 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn mark_faulted_overwrites_a_ready_image_from_its_unexpected_source_state() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         c.image_repo
@@ -760,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_capture_atomically_clears_partitions_and_flips_status_to_capturing() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", 10)
@@ -792,14 +764,13 @@ mod tests {
 
     #[tokio::test]
     async fn delete_image_is_a_soft_delete_that_keeps_the_row_name_and_sets_deleted_at() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("survivor".into()).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
 
-        let pool = raw_pool(&_g).await;
         let row = sqlx::query("SELECT name, deleted_at FROM images WHERE id = ?")
             .bind(img.id)
-            .fetch_one(&pool)
+            .fetch_one(&c.pool)
             .await
             .unwrap();
         let name: String = row.get("name");
@@ -810,7 +781,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_status_still_resolves_a_soft_deleted_image_because_it_has_no_deleted_at_filter() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
@@ -822,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_does_not_resolve_a_soft_deleted_image() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
         let err = c.image_repo.get(img.id).await.unwrap_err();
@@ -831,7 +802,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_import_makes_an_importing_image_ready_with_its_partitions_and_capture_time() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.start_import("imported".into()).await.unwrap();
         assert_eq!(img.status, ImageStatus::Importing);
         let captured_at = "2026-01-02T03:04:05.678Z".parse().unwrap();
@@ -860,7 +831,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_import_of_an_image_deleted_mid_import_is_not_found_and_adds_no_partitions() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.start_import("imported".into()).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
 
@@ -895,7 +866,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_root_partition_must_be_one_of_the_image_partitions() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 2, "ext4", 20)
@@ -926,7 +897,7 @@ mod tests {
 
     #[tokio::test]
     async fn recapturing_forgets_the_root_partition() {
-        let (c, _g) = container().await;
+        let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
         c.image_repo
             .save_partition(img.id, 1, "ext4", 20)
@@ -947,6 +918,16 @@ mod tests {
         match super::image_status("bogus").unwrap_err() {
             AppError::Internal(msg) => assert_eq!(msg, "conversion error"),
             other => panic!("expected AppError::Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_status_the_repository_writes_parses_back() {
+        for stored in ["empty", "capturing", "importing", "ready", "faulted"] {
+            assert!(
+                super::image_status(stored).is_ok(),
+                "status {stored:?} written by repository must parse"
+            );
         }
     }
 }

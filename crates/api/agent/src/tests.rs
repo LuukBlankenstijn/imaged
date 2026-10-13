@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::body::Body;
@@ -12,6 +12,7 @@ use tower::ServiceExt as _;
 use core::di::DIContainer;
 use core::domain::script::NewScript;
 use core::domain::task::TaskType;
+use core::test_support::container;
 use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, path, route};
 use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, ScriptInput};
@@ -20,27 +21,6 @@ use imaged_model::task::TaskState;
 const MAC: &str = "aa:bb:cc:dd:ee:01";
 const IDLE_MAC: &str = "aa:bb:cc:dd:ee:02";
 const OTHER_MAC: &str = "aa:bb:cc:dd:ee:03";
-
-struct TestDir(PathBuf);
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-static DB_ID: AtomicU64 = AtomicU64::new(0);
-
-async fn container() -> (DIContainer, TestDir) {
-    let id = DB_ID.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "imaged-api-agent-test-{}-{}",
-        std::process::id(),
-        id
-    ));
-    let c = core::build_test_container(&dir).await;
-    (c, TestDir(dir))
-}
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 

@@ -11,8 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 imaged-core = { path = "../core", features = ["test-support"] }
 imaged-model.workspace = true
-imaged-api-agent.workspace = true
 imaged-api-ui = { path = "../api/ui", features = ["server"] }
+imaged-server = { path = "../server", features = ["server"] }
 
 dioxus-server = "0.7"
 axum = "0.8"
