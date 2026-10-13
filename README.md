@@ -114,7 +114,8 @@ DHCP hands bare PXE ROMs an iPXE binary over TFTP by client architecture
 (option 93): `undionly.kpxe` for BIOS (0), `ipxe.efi` for x86 UEFI (6, 7, 9)
 and `ipxe-arm64.efi` for arm64 UEFI (11). iPXE then chains
 `/boot/boot.ipxe`, which reports its build architecture so the server answers
-with the matching kernel and initramfs. See `dnsmasq.conf` for a working setup.
+with the matching kernel and initramfs. See `dev/dnsmasq.conf` (run with
+`docker compose -f dev/compose.yaml up`) for a working setup.
 
 `imaged-server --tftp-bind-address 0.0.0.0:69` also serves the iPXE binaries,
 kernels and initramfs over TFTP, so no separate TFTP server is needed.

@@ -1,1 +1,0 @@
-- removing image does not cancel tasks that reference it

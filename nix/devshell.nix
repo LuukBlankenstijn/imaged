@@ -40,6 +40,7 @@ mkShell {
   };
 
   shellHook = ''
+    mkdir -p assets
     cp -rfL --no-preserve=mode ${ipxeAssets}/. ${kernels}/. ./assets/
   '';
 }

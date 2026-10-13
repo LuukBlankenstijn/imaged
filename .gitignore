@@ -1,5 +1,4 @@
 .direnv
-http-root
 result*
 target
 imaged.db*
@@ -7,10 +6,6 @@ node_modules
 *.qcow2
 images
 .claude
-assets/x86_64
-assets/arm64
-assets/ipxe-arm64.efi
-docs
-.direnv
+/assets
 
 crates/web/assets/tailwind.css
