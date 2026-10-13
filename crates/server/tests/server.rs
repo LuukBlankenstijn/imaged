@@ -57,10 +57,6 @@ fn listeners(machine: SocketAddr, tftp: Option<SocketAddr>, dashboard: Dashboard
     }
 }
 
-fn connected_hosts() -> Vec<i64> {
-    imaged_core::di::current().host_registry.connected_hosts()
-}
-
 async fn connect_agent(address: SocketAddr) -> AgentStream {
     let mut request = format!("ws://{address}{}?disk_size_bytes=1", route::STREAM)
         .into_client_request()
@@ -231,12 +227,12 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
     imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.unwrap();
 
     let mut agent = connect_agent(headless).await;
-    assert_eq!(connected_hosts().len(), 1);
+    assert_eq!(imaged.connected_hosts().len(), 1);
     let stopping = Instant::now();
     server.stop().await.unwrap();
     assert!(stopping.elapsed() < Duration::from_secs(1));
     assert!(closes_within_a_second(&mut agent).await);
-    assert!(connected_hosts().is_empty());
+    assert!(imaged.connected_hosts().is_empty());
     assert!(probe.refuses_connections(headless).await);
     assert!(imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.is_err());
 

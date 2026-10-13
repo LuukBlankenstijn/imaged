@@ -15,12 +15,15 @@ use std::{
 
 use axum::{Router, routing::get};
 use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
+use imaged_api_ui::model::Image;
 use imaged_core::{
     self as core,
     di::{DIContainer, MachineIp},
     registry::HostRegistry,
 };
+use imaged_model::{error::Result, script::ScriptInput};
 use imaged_web::App;
+use tokio::io::AsyncRead;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
@@ -145,6 +148,25 @@ impl Imaged {
             "imaged serving"
         );
         Ok(server)
+    }
+
+    pub async fn import_archive(&self, archive: impl AsyncRead + Unpin + Send) -> Result<Image> {
+        Ok(self.container.archive_service.import(archive).await?.into())
+    }
+
+    pub async fn script_inputs(&self, image_id: i64) -> Result<Vec<ScriptInput>> {
+        Ok(self
+            .container
+            .script_repo
+            .get_for_image(image_id)
+            .await?
+            .into_iter()
+            .flat_map(|script| script.inputs)
+            .collect())
+    }
+
+    pub fn connected_hosts(&self) -> Vec<i64> {
+        self.container.host_registry.connected_hosts()
     }
 }
 

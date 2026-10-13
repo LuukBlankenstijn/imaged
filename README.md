@@ -106,7 +106,12 @@ returns a `Server`. `stop()` disconnects every agent, gives open requests a
 short grace period and then cuts off whatever connection is left, after which
 `serve` can be called again with new addresses; one `Server` runs at a time. The
 machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
-`Dashboard::Off`, `OnMachineListener` or `Separate(address)`.
+`Dashboard::Off`, `OnMachineListener` or `Separate(address)`. The embedding
+program reads and feeds imaged through the same handle:
+`imaged.import_archive(reader)` imports an image archive and returns the image,
+`imaged.script_inputs(image_id)` lists the inputs declared by the image's
+scripts in script order and `imaged.connected_hosts()` lists the ids of the
+machines whose agent is connected.
 
 The server side (core, boot, both API crates and the `server` library) also builds
 for Windows (`x86_64-pc-windows-gnu`). Multicast is Linux-only: on other

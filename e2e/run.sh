@@ -58,6 +58,7 @@ check_boot_assets() {
 
 build_binaries() {
     if [[ ! -f $TAILWIND_CSS ]]; then
+        mkdir -p "$(dirname "$TAILWIND_CSS")"
         : >"$TAILWIND_CSS"
         log "created an empty $(relative "$TAILWIND_CSS") so the dashboard compiles"
     fi
