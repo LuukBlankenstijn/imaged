@@ -17,6 +17,7 @@ jobs:
       matrix:
         target:
           - .#imaged-server
+          - .#imaged-pack
           - .#devShells.x86_64-linux.default.inputDerivation
     steps:
       - uses: actions/checkout@v7
