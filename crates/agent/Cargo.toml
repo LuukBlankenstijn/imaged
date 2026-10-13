@@ -1,0 +1,40 @@
+[package]
+name = "imaged-agent"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "imaged_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "imaged-agent"
+path = "src/main.rs"
+
+[dependencies]
+tracing.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "fs", "time", "sync"] }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+imaged-model = { workspace = true, features = ["logging"] }
+imaged-disk.workspace = true
+tokio-util = { workspace = true, features = ["io", "rt"] }
+derive_more = { workspace = true, features = ["display"] }
+clap.workspace = true
+reqwest.workspace = true
+tokio-tungstenite = { workspace = true, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+bytes = "1"
+
+mac_address = "1.1.8"
+anyhow = "1.0.102"
+rustix = { version = "1.1.4", features = ["termios", "stdio", "system", "mount", "fs", "process"] }
+enum_dispatch = "0.3.13"
+local-ip-address = "0.6.13"
+scuttlecast.workspace = true
+
+[dev-dependencies]
+async-compression.workspace = true
+axum = { workspace = true, features = ["ws"] }
+tokio = { workspace = true, features = ["net", "io-util", "fs", "time"] }

@@ -45,7 +45,7 @@
           }:
           let
             partclone = targetPkgs.callPackage ./nix/packages/partclone.nix { };
-            imaged-client = muslPkgs.callPackage ./nix/packages/imaged-client.nix {
+            imaged-agent = muslPkgs.callPackage ./nix/packages/imaged-agent.nix {
               craneLib = (crane.mkLib muslPkgs).overrideToolchain (
                 pkgs.rust-bin.stable.latest.minimal.override {
                   targets = [ muslPkgs.stdenv.hostPlatform.rust.rustcTarget ];
@@ -61,14 +61,14 @@
           {
             inherit
               partclone
-              imaged-client
+              imaged-agent
               initramfsStaging
               muslPkgs
               vmlinuz
               ;
             inherit (targetPkgs) ipxe;
             initramfs = pkgs.callPackage ./nix/packages/initramfs.nix {
-              inherit imaged-client initramfsStaging;
+              inherit imaged-agent initramfsStaging;
             };
           };
 
@@ -191,18 +191,17 @@
       in
       {
         checks = {
-          agent-tests = imaged-tests.agent;
-          native-tests = imaged-tests.native;
+          tests = imaged-tests;
         };
 
         packages = {
           inherit (targets.x86_64)
             partclone
-            imaged-client
+            imaged-agent
             initramfs
             ;
           partclone-arm64 = targets.arm64.partclone;
-          imaged-client-arm64 = targets.arm64.imaged-client;
+          imaged-agent-arm64 = targets.arm64.imaged-agent;
           initramfs-arm64 = targets.arm64.initramfs;
           inherit
             build-initramfs

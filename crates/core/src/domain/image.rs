@@ -44,6 +44,17 @@ pub struct ImagePartition {
     pub size_bytes: u64,
 }
 
+impl From<ImagePartition> for imaged_model::agent::ImagePartition {
+    fn from(partition: ImagePartition) -> Self {
+        Self {
+            id: partition.id,
+            partition_number: partition.partition_number,
+            fstype: partition.fstype,
+            size_bytes: partition.size_bytes,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct NewImagePartition {
     pub partition_number: i64,

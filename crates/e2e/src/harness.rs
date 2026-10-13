@@ -12,10 +12,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use imaged_core::di::DIContainer;
+use imaged_model::agent::{MAC_HEADER, route};
 
-// Server functions self-register via `inventory` at load time, which only
-// happens for crates actually linked into the binary.
-use imaged_api_client as _;
 use imaged_api_ui as _;
 
 pub mod seed;
@@ -57,9 +55,13 @@ async fn build_server() -> TestServer {
     let container = imaged_core::build_test_container(&dir).await;
     imaged_core::di::init_container(container.clone());
 
-    let router = collect_routes(|path| path.starts_with("/api/client"))
-        .merge(collect_routes(|path| !path.starts_with("/api/client")))
+    let dashboard = dioxus_server::ServerFunction::collect()
+        .into_iter()
+        .fold(axum::Router::new(), |router, f| {
+            router.route(f.path(), f.method_router())
+        })
         .with_state(dioxus_server::FullstackState::headless());
+    let router = imaged_api_agent::router().merge(dashboard);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -84,15 +86,6 @@ async fn build_server() -> TestServer {
             .build()
             .expect("build harness http client"),
     }
-}
-
-fn collect_routes(keep: impl Fn(&str) -> bool) -> axum::Router<dioxus_server::FullstackState> {
-    dioxus_server::ServerFunction::collect()
-        .into_iter()
-        .filter(|f| keep(f.path()))
-        .fold(axum::Router::new(), |router, f| {
-            router.route(f.path(), f.method_router())
-        })
 }
 
 static MAC_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -124,49 +117,44 @@ impl TestServer {
     pub async fn agent_get(&self, path: &str, mac: &str) -> reqwest::Response {
         self.http
             .get(self.url(path))
-            .header("X-Agent-Mac", mac)
+            .header(MAC_HEADER, mac)
             .send()
             .await
             .expect("agent_get send")
     }
 
-    pub async fn agent_post(&self, path: &str, mac: &str, body: Bytes) -> reqwest::Response {
+    pub async fn agent_post_json<T: serde::Serialize>(
+        &self,
+        path: &str,
+        mac: &str,
+        body: &T,
+    ) -> reqwest::Response {
         self.http
             .post(self.url(path))
-            .header("X-Agent-Mac", mac)
-            .body(body)
+            .header(MAC_HEADER, mac)
+            .json(body)
             .send()
             .await
-            .expect("agent_post send")
+            .expect("agent_post_json send")
     }
 
     pub async fn agent_post_empty(&self, path: &str, mac: &str) -> reqwest::Response {
         self.http
             .post(self.url(path))
-            .header("X-Agent-Mac", mac)
+            .header(MAC_HEADER, mac)
             .send()
             .await
             .expect("agent_post_empty send")
     }
 
-    /// PUT a `Bytes` server-fn argument. Such an argument is `Serialize`, so it
-    /// does not travel as a raw octet-stream body the way a `ByteStream`
-    /// argument does: it is JSON, in the same argument-name envelope every other
-    /// non-path argument uses.
-    pub async fn agent_put_bytes_arg(
-        &self,
-        path: &str,
-        mac: &str,
-        arg: &str,
-        body: &[u8],
-    ) -> reqwest::Response {
+    pub async fn agent_put_bytes(&self, path: &str, mac: &str, body: &[u8]) -> reqwest::Response {
         self.http
             .put(self.url(path))
-            .header("X-Agent-Mac", mac)
-            .json(&serde_json::json!({ arg: body }))
+            .header(MAC_HEADER, mac)
+            .body(body.to_vec())
             .send()
             .await
-            .expect("agent_put_bytes_arg send")
+            .expect("agent_put_bytes send")
     }
 
     /// PUT an `application/octet-stream` request whose body is streamed chunk by
@@ -177,7 +165,7 @@ impl TestServer {
     {
         self.http
             .put(self.url(path))
-            .header("X-Agent-Mac", mac)
+            .header(MAC_HEADER, mac)
             .header("Content-Type", "application/octet-stream")
             .body(reqwest::Body::wrap_stream(body))
             .send()
@@ -224,7 +212,6 @@ async fn pump(mut ws: WsStream, events: tokio::sync::mpsc::UnboundedSender<serde
     while let Some(Ok(message)) = ws.next().await {
         let event = match message {
             Message::Text(text) => serde_json::from_str(text.as_str()).ok(),
-            Message::Binary(bytes) => serde_json::from_slice(&bytes).ok(),
             Message::Close(_) => return,
             _ => None,
         };
@@ -255,9 +242,12 @@ impl Drop for EventStream {
 
 async fn connect_ws(s: &TestServer, mac: &str, disk_size_bytes: u64) -> anyhow::Result<WsStream> {
     let ws_base = s.base_url.replacen("http://", "ws://", 1);
-    let url = format!("{ws_base}/api/client/stream?disk_size_bytes={disk_size_bytes}");
+    let url = format!(
+        "{ws_base}{}?disk_size_bytes={disk_size_bytes}",
+        route::STREAM
+    );
     let mut request = url.into_client_request()?;
-    request.headers_mut().insert("X-Agent-Mac", mac.parse()?);
+    request.headers_mut().insert(MAC_HEADER, mac.parse()?);
     let (ws, _resp) = connect_async(request).await?;
     Ok(ws)
 }
@@ -309,10 +299,8 @@ pub async fn connect_connection_state(s: &TestServer) -> anyhow::Result<EventStr
 
 impl EventStream {
     /// Return the next event's JSON payload, or `None` on timeout or end of
-    /// stream. For the WebSocket that is the next data frame's JSON — dioxus's
-    /// default `JsonEncoding` frames typed messages as Binary, so both Binary
-    /// and Text are decoded; for SSE it is the next event's `data` payload,
-    /// buffered across chunk boundaries.
+    /// stream. For the WebSocket that is the next Text frame's JSON; for SSE it
+    /// is the next event's `data` payload, buffered across chunk boundaries.
     pub async fn next_event(&mut self, timeout: Duration) -> Option<serde_json::Value> {
         let deadline = Instant::now() + timeout;
         loop {

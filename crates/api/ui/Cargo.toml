@@ -21,6 +21,7 @@ server = ["dioxus/server", "dep:imaged-core", "dep:imaged-archive", "dep:tracing
 
 [dev-dependencies]
 imaged-core = { path = "../../core", features = ["test-support"] }
+imaged-api-ui = { path = ".", features = ["server"] }
 tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 serde_json = { workspace = true }

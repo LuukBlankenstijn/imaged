@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use imaged_e2e::harness::{self, seed};
+use imaged_model::agent::{MAC_HEADER, route};
 use reqwest::StatusCode;
 
 const DISK: u64 = 6 * 1024 * 1024 * 1024;
@@ -226,15 +227,11 @@ async fn disconnect_deregisters_and_repeats_are_idempotent() {
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
     assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
 
-    let resp = s
-        .agent_post_empty("/api/client/stream/disconnect", &mac)
-        .await;
+    let resp = s.agent_post_empty(route::DISCONNECT, &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(poll_until(|| !connected(s, host.id), Duration::from_secs(1)).await);
 
-    let resp = s
-        .agent_post_empty("/api/client/stream/disconnect", &mac)
-        .await;
+    let resp = s.agent_post_empty(route::DISCONNECT, &mac).await;
     assert_eq!(
         resp.status(),
         StatusCode::OK,
@@ -242,9 +239,7 @@ async fn disconnect_deregisters_and_repeats_are_idempotent() {
     );
 
     let unknown = harness::unique_mac();
-    let resp = s
-        .agent_post_empty("/api/client/stream/disconnect", &unknown)
-        .await;
+    let resp = s.agent_post_empty(route::DISCONNECT, &unknown).await;
     assert_eq!(
         resp.status(),
         StatusCode::NOT_FOUND,
@@ -264,9 +259,7 @@ async fn a_host_can_reconnect_after_disconnecting() {
         .expect("connect");
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
 
-    let resp = s
-        .agent_post_empty("/api/client/stream/disconnect", &mac)
-        .await;
+    let resp = s.agent_post_empty(route::DISCONNECT, &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(poll_until(|| !connected(s, host.id), Duration::from_secs(1)).await);
     drop(first);
@@ -293,7 +286,7 @@ async fn a_host_can_reconnect_after_disconnecting() {
 #[tokio::test]
 async fn a_missing_mac_header_is_rejected() {
     let s = harness::server().await;
-    let url = format!("{}/api/client/stream?disk_size_bytes={DISK}", s.base_url);
+    let url = format!("{}{}?disk_size_bytes={DISK}", s.base_url, route::STREAM);
     let resp = s.http.get(url).send().await.expect("request");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
@@ -301,12 +294,12 @@ async fn a_missing_mac_header_is_rejected() {
 #[tokio::test]
 async fn a_non_ascii_mac_header_is_rejected() {
     let s = harness::server().await;
-    let url = format!("{}/api/client/stream?disk_size_bytes={DISK}", s.base_url);
+    let url = format!("{}{}?disk_size_bytes={DISK}", s.base_url, route::STREAM);
     let value = reqwest::header::HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap();
     let resp = s
         .http
         .get(url)
-        .header("X-Agent-Mac", value)
+        .header(MAC_HEADER, value)
         .send()
         .await
         .expect("request");

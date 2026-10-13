@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use imaged_e2e::harness::{self, seed};
+use imaged_model::agent::path;
 
 #[tokio::test]
 async fn harness_round_trips_a_deploy_over_http() {
@@ -21,9 +22,7 @@ async fn harness_round_trips_a_deploy_over_http() {
 
     let task_id = seed::deploy_task(s, host.id, image_id).await;
 
-    let resp = s
-        .agent_get(&format!("/api/client/tasks/{task_id}/partitions"), &mac)
-        .await;
+    let resp = s.agent_get(&path::partitions(task_id), &mac).await;
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let partitions: Vec<serde_json::Value> = resp.json().await.expect("partitions json");
     assert_eq!(partitions.len(), 1);
@@ -31,19 +30,12 @@ async fn harness_round_trips_a_deploy_over_http() {
     assert_eq!(partitions[0]["fstype"], "ext4");
     assert_eq!(partitions[0]["size_bytes"], 4096);
 
-    let resp = s
-        .agent_get(&format!("/api/client/tasks/{task_id}/parttable"), &mac)
-        .await;
+    let resp = s.agent_get(&path::partition_table(task_id), &mac).await;
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
-    let table: Vec<u8> = resp.json().await.expect("parttable json");
-    assert_eq!(table, parttable);
+    let table = resp.bytes().await.expect("parttable bytes");
+    assert_eq!(table.as_ref(), parttable.as_slice());
 
-    let resp = s
-        .agent_get(
-            &format!("/api/client/tasks/{task_id}/partitions/1/data"),
-            &mac,
-        )
-        .await;
+    let resp = s.agent_get(&path::partition_data(task_id, 1), &mac).await;
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let compressed = resp.bytes().await.expect("partition data bytes");
     let decompressed = seed::unzstd(&compressed).await;

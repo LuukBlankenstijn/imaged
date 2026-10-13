@@ -24,12 +24,7 @@ jobs:
           name: luukblankenstijn
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      # Both passes are crane derivations, so their dependency builds come from
-      # cachix instead of being recompiled on every run. nix builds them in
-      # parallel. See nix/packages/imaged-tests.nix for why the agent needs a
-      # pass of its own.
+      # The test suite is a crane derivation, so its dependency build comes from
+      # cachix instead of being recompiled on every run.
       - name: Tests
-        run: |
-          nix build --print-build-logs \
-            .#checks.x86_64-linux.native-tests \
-            .#checks.x86_64-linux.agent-tests
+        run: nix build --print-build-logs .#checks.x86_64-linux.tests

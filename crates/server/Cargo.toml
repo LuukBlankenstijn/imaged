@@ -12,7 +12,7 @@ dioxus = { version = "0.7", features = ["fullstack", "router"] }
 imaged-web = { path = "../web" }
 
 imaged-api-ui = { path = "../api/ui", optional = true }
-imaged-api-client = { path = "../api/client", optional = true }
+imaged-api-agent = { workspace = true, optional = true }
 imaged-core = { path = "../core", optional = true }
 imaged-model = { workspace = true, features = ["logging"], optional = true }
 axum = { version = "0.8", optional = true }
@@ -28,8 +28,7 @@ server = [
     "imaged-web/server",
     "dep:imaged-api-ui",
     "imaged-api-ui/server",
-    "dep:imaged-api-client",
-    "imaged-api-client/server",
+    "dep:imaged-api-agent",
     "dep:imaged-core",
     "dep:imaged-model",
     "dep:axum",
@@ -41,6 +40,7 @@ server = [
 web = ["dioxus/web", "imaged-web/web"]
 
 [dev-dependencies]
+imaged-server = { path = ".", features = ["server"] }
 futures.workspace = true
 reqwest = { version = "0.12", default-features = false }
 tokio-tungstenite = "0.29"

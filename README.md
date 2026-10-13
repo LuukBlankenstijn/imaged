@@ -2,7 +2,7 @@
 
 A self-hosted disk imaging tool: capture an image from a machine over the
 network, then re-deploy it to other machines. Hosts boot over PXE into a small
-client that talks to a central server. Inspired by the capture/deploy part of [The Fog Project](https://github.com/FOGProject/fogproject); multicast support is planned.
+agent that talks to a central server. Inspired by the capture/deploy part of [The Fog Project](https://github.com/FOGProject/fogproject); multicast support is planned.
 
 ## Components
 
@@ -10,9 +10,11 @@ client that talks to a central server. Inspired by the capture/deploy part of [T
 
 Types and rules shared by the server, the agent, the dashboard and the packer:
 `AppError` with optional axum (`axum-error`), sqlx (`sqlx-error`) and dioxus
-server function (`serverfn`) integrations, the agent wire types, the multicast
-group and port math, the script input and script name rules, and the rules for
-the variables an embedding program hands to scripts. Builds for wasm; the
+server function (`serverfn`) integrations, the agent protocol
+(`imaged_model::agent`: route templates, path builders, request and response
+types, headers; the websocket events are `ServerEvent`), the multicast group
+and port math, the script input and script name rules, and the rules for the
+variables an embedding program hands to scripts. Builds for wasm; the
 `logging` feature adds the tracing setup the binaries share.
 
 ### `crates/archive` — `imaged-archive`
@@ -68,9 +70,12 @@ host); and the Tasks page shows each host's script output.
 
 Dashboard server functions served under `/api/ui/*`.
 
-### `crates/api/client` — `imaged-api-client`
+### `crates/api/agent` — `imaged-api-agent`
 
-Agent-facing server functions served under `/api/client/*`.
+Plain axum routes served under `/api/client/*` for the agent. The protocol
+both sides speak (route templates, path builders, request and response types,
+headers and the JSON events sent over the websocket) lives in
+`imaged_model::agent`.
 
 ### `crates/server` — `imaged-server`
 
@@ -111,15 +116,17 @@ scripts point machines at `--public-base` (`PUBLIC_BASE`, default
 `localhost:8080`), over HTTPS when `--use-https` is passed or `USE_HTTPS` is
 truthy (anything but empty, `0`, `f`, `false`, `n`, `no` or `off`).
 
-### `crates/client` — `imaged-client`
+### `crates/agent` — `imaged-agent`
 
-Rust binary that runs on a PXE-booted machine. On start it sends its state to
-the server (mac address, disk size) and processes capture / deploy tasks issued
-back over SSE. Uses `imaged-disk` (`partclone` for filesystem-aware imaging,
-`sgdisk` for the partition table, `debugfs` for the root partition).
+Rust binary that runs on a PXE-booted machine. On start it connects to
+`/api/client/stream` over a websocket with its state (mac address, disk size),
+receives capture / deploy tasks over it as JSON events, and uploads and
+downloads partition tables, partitions and script output over HTTP. Uses
+`imaged-disk` (`partclone` for filesystem-aware imaging, `sgdisk` for the
+partition table, `debugfs` for the root partition).
 
 ```sh
-cargo run -p imaged-client -- http://<server>:8080
+cargo run -p imaged-agent -- http://<server>:8080
 ```
 
 ### `crates/pack` — `imaged-pack`
@@ -196,6 +203,14 @@ kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
 `build-initramfs` builds the initramfs for every arch, or only the ones passed
 as arguments (`build-initramfs arm64`).
 
+Tests run in one pass:
+
+```sh
+cargo test --workspace
+```
+
+CI runs the same suite as `nix build .#checks.x86_64-linux.tests`.
+
 ## Network boot
 
 DHCP hands bare PXE ROMs an iPXE binary over TFTP by client architecture
@@ -235,7 +250,7 @@ scripts but no root partition is refused with a 412. The resolved values are
 stored with each task host, so a retried or reconnecting host gets the same
 ones.
 
-After a deploy or multicast has restored every partition, the client fetches
+After a deploy or multicast has restored every partition, the agent fetches
 the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
 any, mounts the root partition under `/tmp/imaged-root`, then every entry of
 the image's `/etc/fstab` that names a partition of the restored disk (by
@@ -246,18 +261,18 @@ variables:
 
 - `IMAGED_INPUT_<NAME>` for each of its inputs that has a value (the name
   uppercased),
-- `IMAGED_MAC`, `IMAGED_IP` and `IMAGED_SERVER` of the client,
+- `IMAGED_MAC`, `IMAGED_IP` and `IMAGED_SERVER` of the agent,
 - `http_proxy`, `https_proxy`, `HTTP_PROXY` and `HTTPS_PROXY` when the server
   runs with `--script-proxy <url>` (`SCRIPT_PROXY`, `Config::script_proxy`).
 - every entry of `Config::script_variables`, which an embedding program uses to
   hand scripts values such as credentials; names must be shell identifiers and
   cannot be one of the variables above.
 
-Stdout and stderr go to the client log and, as the script runs, to the server,
+Stdout and stderr go to the agent log and, as the script runs, to the server,
 which keeps the full output and exit code of every run per task host
 (`GET /api/ui/tasks/{task_id}/hosts/{host_id}/scripts`). A script that exits
 non-zero stops the deploy and fails that host with the script's name; the
-mounts are always undone in reverse order before the client reports back and
+mounts are always undone in reverse order before the agent reports back and
 reboots.
 
 ## End-to-end VM test

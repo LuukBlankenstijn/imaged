@@ -11,7 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 imaged-core = { path = "../core", features = ["test-support"] }
 imaged-model.workspace = true
-imaged-api-client = { path = "../api/client", features = ["server"] }
+imaged-api-agent.workspace = true
 imaged-api-ui = { path = "../api/ui", features = ["server"] }
 
 dioxus-server = "0.7"
@@ -28,3 +28,7 @@ http-body-util = "0.1"
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
 anyhow = "1"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "json"] }
+
+[dev-dependencies]
+imaged-agent.workspace = true
+mac_address = "1.1.8"

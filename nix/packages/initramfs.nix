@@ -4,11 +4,11 @@
   findutils,
   cpio,
   xz,
-  imaged-client,
+  imaged-agent,
   initramfsStaging,
 }:
 
-# Pure-Nix initramfs: embeds the Nix-built imaged-client so the image can be
+# Pure-Nix initramfs: embeds the Nix-built imaged-agent so the image can be
 # produced by `nix build` alone, with no filesystem/dev-shell steps. $out is
 # the xz-compressed cpio archive itself (a file, not a directory).
 runCommand "imaged-initramfs.cpio.xz"
@@ -22,7 +22,7 @@ runCommand "imaged-initramfs.cpio.xz"
   }
   ''
     STAGING=$(mktemp -d)
-    ${initramfsStaging "${imaged-client}/bin/imaged-client"}
+    ${initramfsStaging "${imaged-agent}/bin/imaged-agent"}
     cd "$STAGING"
     find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e > "$out"
   ''

@@ -52,11 +52,11 @@ check_boot_assets() {
     command -v cpio >/dev/null || cpio=("$E2E_BUSYBOX" cpio -t)
     local listing binary
     listing=$(xz -dc "$initramfs" | "${cpio[@]}" 2>/dev/null) || fail "cannot list $initramfs; run build-initramfs x86_64"
-    for binary in bin/debugfs bin/imaged-client; do
+    for binary in bin/debugfs bin/imaged-agent; do
         grep -qxE "(\./)?$binary" <<<"$listing" ||
             fail "$initramfs has no $binary; it was built from an older tree, run build-initramfs x86_64"
     done
-    log "initramfs carries bin/debugfs and bin/imaged-client"
+    log "initramfs carries bin/debugfs and bin/imaged-agent"
 }
 
 build_binaries() {
@@ -64,8 +64,8 @@ build_binaries() {
         : >"$TAILWIND_CSS"
         log "created an empty $(relative "$TAILWIND_CSS") so the dashboard compiles"
     fi
-    (cd "$REPO_DIR" && SQLX_OFFLINE=true cargo build --locked --target "$LINUX_TARGET" \
-        -p imaged-server --features imaged-server/server -p imaged-pack)
+    (cd "$REPO_DIR" && SQLX_OFFLINE=true cargo build --locked --target "$LINUX_TARGET" -p imaged-server --features server)
+    (cd "$REPO_DIR" && SQLX_OFFLINE=true cargo build --locked --target "$LINUX_TARGET" -p imaged-pack)
     mkdir -p "$(dirname "$IMAGED_SERVER")/public"
     log "built $IMAGED_SERVER and $IMAGED_PACK from $(describe_checkout)"
 }

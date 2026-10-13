@@ -1,7 +1,6 @@
 {
   "rust-analyzer.cargo.features": [
     "imaged-api-ui/server",
-    "imaged-api-client/server",
     "imaged-web/server",
     "imaged-server/server"
   ],

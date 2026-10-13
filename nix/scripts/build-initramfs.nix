@@ -9,7 +9,7 @@
   targets,
 }:
 
-# Dev flow: cargo-builds the client from the current working tree and packs it
+# Dev flow: cargo-builds the agent from the current working tree and packs it
 # into ./assets/<arch>/initramfs.cpio.xz, mirroring the pure `initramfs`
 # derivations via the shared staging helper. Use `nix build .#initramfs` for a
 # fully pure build.
@@ -22,7 +22,7 @@ let
       cargoEnv = hostPlatform.rust.cargoEnvVarTarget;
       ccEnv = builtins.replaceStrings [ "-" ] [ "_" ] rustTarget;
       toolPrefix = "${cc}/bin/${cc.targetPrefix}";
-      client = "$(pwd)/target/${rustTarget}/release/imaged-client";
+      agent = "$(pwd)/target/${rustTarget}/release/imaged-agent";
     in
     ''
       ${arch})
@@ -30,10 +30,10 @@ let
         CARGO_TARGET_${cargoEnv}_RUSTFLAGS="-C target-feature=+crt-static -L native=${target.muslPkgs.musl.out}/lib" \
         CC_${ccEnv}="${toolPrefix}cc" \
         AR_${ccEnv}="${toolPrefix}ar" \
-          cargo build --release --package imaged-client --target ${rustTarget}
+          cargo build --release --package imaged-agent --target ${rustTarget}
         STAGING=$(mktemp -d)
-        ${target.initramfsStaging client}
-        pack ${arch} "${client}"
+        ${target.initramfsStaging agent}
+        pack ${arch} "${agent}"
         ;;
     '';
 in

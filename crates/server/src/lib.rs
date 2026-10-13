@@ -24,10 +24,8 @@ use imaged_web::App;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
-use imaged_api_client as _;
 use imaged_api_ui as _;
 
-const CLIENT_API_PREFIX: &str = "/api/client";
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(3);
 
 static OPENED: AtomicBool = AtomicBool::new(false);
@@ -106,8 +104,8 @@ impl Imaged {
     pub async fn serve(&self, listeners: Listeners) -> io::Result<Server> {
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
-        let machine_router = core::pxe::router(&listeners.public_url)
-            .merge(server_fns(is_client_api).with_state(FullstackState::headless()));
+        let machine_router =
+            core::pxe::router(&listeners.public_url).merge(imaged_api_agent::router());
         let (machine_router, separate_dashboard) = match listeners.dashboard {
             Dashboard::Off => (machine_router, None),
             Dashboard::OnMachineListener => (machine_router.merge(dashboard_router()?), None),
@@ -230,14 +228,9 @@ impl Drop for ServingClaim {
     }
 }
 
-fn is_client_api(path: &str) -> bool {
-    path.starts_with(CLIENT_API_PREFIX)
-}
-
-fn server_fns(keep: impl Fn(&str) -> bool) -> Router<FullstackState> {
+fn server_fns() -> Router<FullstackState> {
     ServerFunction::collect()
         .into_iter()
-        .filter(|f| keep(f.path()))
         .fold(Router::new(), |router, f| {
             router.route(f.path(), f.method_router())
         })
@@ -254,7 +247,7 @@ fn dashboard_router() -> io::Result<Router> {
             format!("dashboard assets in {}: {e}", assets.display()),
         )
     })?;
-    Ok(server_fns(|path| !is_client_api(path))
+    Ok(server_fns()
         .serve_static_assets()
         .fallback(get(FullstackState::render_handler))
         .with_state(FullstackState::new(ServeConfig::new(), App)))

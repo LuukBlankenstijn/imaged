@@ -62,8 +62,8 @@ if [ -z "${SERVER_ADDR:-}" ]; then
     exec /bin/sh
 fi
 
-echo "Starting imaged-client at $SERVER_ADDR"
-/bin/imaged-client "$SERVER_ADDR"
+echo "Starting imaged-agent at $SERVER_ADDR"
+/bin/imaged-agent "$SERVER_ADDR"
 
-echo "imaged-client exited. Dropping to recovery shell."
+echo "imaged-agent exited. Dropping to recovery shell."
 exec /bin/sh

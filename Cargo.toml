@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/api/client",
+    "crates/agent",
+    "crates/api/agent",
     "crates/api/ui",
     "crates/archive",
-    "crates/client",
     "crates/core",
     "crates/disk",
     "crates/e2e",
@@ -23,6 +23,9 @@ tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"
 imaged-model = { path = "crates/model", default-features = false }
 imaged-archive = { path = "crates/archive" }
 imaged-disk = { path = "crates/disk" }
+imaged-core = { path = "crates/core" }
+imaged-api-agent = { path = "crates/api/agent" }
+imaged-agent = { path = "crates/agent" }
 imaged-pack = { path = "crates/pack" }
 injectable = "0.1.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
@@ -40,3 +43,6 @@ chrono = { version = "0.4.44", features = ["serde"] }
 sha2 = "0.10.9"
 astral-tokio-tar = { version = "0.7.0", default-features = false }
 async-compression = { version = "0.4", features = ["tokio", "zstd"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+tokio-tungstenite = "0.29"

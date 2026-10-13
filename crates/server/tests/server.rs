@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use imaged_model::agent::{MAC_HEADER, route};
 use imaged_server::{Config, Dashboard, Imaged, Listeners};
 use reqwest::StatusCode;
 use tokio::net::TcpStream;
@@ -61,12 +62,12 @@ fn connected_hosts() -> Vec<i64> {
 }
 
 async fn connect_agent(address: SocketAddr) -> AgentStream {
-    let mut request = format!("ws://{address}/api/client/stream?disk_size_bytes=1")
+    let mut request = format!("ws://{address}{}?disk_size_bytes=1", route::STREAM)
         .into_client_request()
         .unwrap();
     request
         .headers_mut()
-        .insert("X-Agent-Mac", "02:00:00:00:00:01".parse().unwrap());
+        .insert(MAC_HEADER, "02:00:00:00:00:01".parse().unwrap());
     connect_async(request).await.unwrap().0
 }
 
@@ -120,7 +121,7 @@ impl Probe {
     async fn serves_agent_api(&self, address: SocketAddr) -> bool {
         let response = self
             .0
-            .post(format!("http://{address}/api/client/stream/disconnect"))
+            .post(format!("http://{address}{}", route::DISCONNECT))
             .send()
             .await
             .unwrap();

@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod error;
 
 #[cfg(feature = "logging")]

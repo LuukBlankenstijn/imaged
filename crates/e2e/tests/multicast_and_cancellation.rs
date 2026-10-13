@@ -5,6 +5,7 @@ use serde_json::json;
 
 use imaged_core::domain::task::TaskType;
 use imaged_e2e::harness::{self, seed};
+use imaged_model::agent::path;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 
@@ -56,9 +57,7 @@ async fn reboot_streams_a_reboot_event_and_completes() {
     assert!(event["Task"]["image_id"].is_null());
     let task_id = event["Task"]["id"].as_i64().expect("task id");
 
-    let resp = s
-        .agent_post_empty(&format!("/api/client/tasks/{task_id}/finished"), &mac)
-        .await;
+    let resp = s.agent_post_empty(&path::finished(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(get_task(s, task_id).await.aggregate_state().is_done());
 }
