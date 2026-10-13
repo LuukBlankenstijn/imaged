@@ -1,23 +1,19 @@
 [package]
-name = "imaged-shared"
+name = "imaged-model"
 version.workspace = true
 edition.workspace = true
 
 [features]
-all = ["logging", "types", "multicast", "error"]
 logging = ["dep:tracing-subscriber"]
-types = ["dep:derive_more", "dep:serde"]
-multicast = []
-error = ["dep:serde", "dep:thiserror"]
-serverfn = ["error", "dep:dioxus-fullstack"]
-axum-error = ["error", "dep:axum", "dep:serde_json", "dep:tracing"]
-sqlx-error = ["error", "dep:sqlx"]
+serverfn = ["dep:dioxus-fullstack"]
+axum-error = ["dep:axum", "dep:serde_json", "dep:tracing"]
+sqlx-error = ["dep:sqlx"]
 
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
-derive_more = { workspace = true, features = ["is_variant", "constructor", "from", "display"], optional = true }
-serde = { workspace = true, optional = true }
-thiserror = { workspace = true, optional = true }
+derive_more = { workspace = true, features = ["is_variant", "constructor", "from", "display", "from_str"] }
+serde.workspace = true
+thiserror.workspace = true
 dioxus-fullstack = { version = "0.7", optional = true }
 axum = { version = "0.8", optional = true }
 serde_json = { workspace = true, optional = true }
@@ -27,5 +23,5 @@ tracing = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
-imaged-shared = { path = ".", features = ["all", "serverfn", "axum-error", "sqlx-error"] }
+imaged-model = { path = ".", features = ["logging", "serverfn", "axum-error", "sqlx-error"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio"] }

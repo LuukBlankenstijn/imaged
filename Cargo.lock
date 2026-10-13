@@ -2494,7 +2494,7 @@ dependencies = [
  "dioxus-server",
  "futures",
  "imaged-core",
- "imaged-shared",
+ "imaged-model",
  "injectable",
  "serde",
  "serde_json",
@@ -2511,7 +2511,7 @@ dependencies = [
  "dioxus",
  "futures",
  "imaged-core",
- "imaged-shared",
+ "imaged-model",
  "injectable",
  "serde",
  "serde_json",
@@ -2536,7 +2536,7 @@ dependencies = [
  "enum_dispatch",
  "futures",
  "imaged-api-client",
- "imaged-shared",
+ "imaged-model",
  "local-ip-address",
  "mac_address",
  "rustix",
@@ -2561,7 +2561,7 @@ dependencies = [
  "derive_more",
  "futures",
  "futures-lite",
- "imaged-shared",
+ "imaged-model",
  "injectable",
  "local-ip-address",
  "parking_lot",
@@ -2593,7 +2593,7 @@ dependencies = [
  "imaged-api-client",
  "imaged-api-ui",
  "imaged-core",
- "imaged-shared",
+ "imaged-model",
  "reqwest",
  "serde",
  "serde_json",
@@ -2601,6 +2601,23 @@ dependencies = [
  "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tower",
+]
+
+[[package]]
+name = "imaged-model"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "derive_more",
+ "dioxus-fullstack",
+ "imaged-model",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2614,30 +2631,13 @@ dependencies = [
  "imaged-api-client",
  "imaged-api-ui",
  "imaged-core",
- "imaged-shared",
+ "imaged-model",
  "imaged-web",
  "reqwest",
  "tokio",
  "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "imaged-shared"
-version = "0.1.0"
-dependencies = [
- "axum",
- "derive_more",
- "dioxus-fullstack",
- "imaged-shared",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -2648,7 +2648,7 @@ dependencies = [
  "dioxus-ssr",
  "gloo-timers",
  "imaged-api-ui",
- "imaged-shared",
+ "imaged-model",
  "js-sys",
  "serde",
 ]

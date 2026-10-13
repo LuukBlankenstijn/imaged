@@ -61,7 +61,7 @@ pub async fn build_di_container(
     script_variables: BTreeMap<String, String>,
 ) -> Result<DIContainer, BoxError> {
     for (name, value) in &script_variables {
-        imaged_shared::script_env::check_variable(name, value)?;
+        imaged_model::script_env::check_variable(name, value)?;
     }
     let host_repo = repository::host_repo(pool.clone());
     let image_repo = repository::image_repo(pool.clone());

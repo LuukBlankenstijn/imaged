@@ -9,7 +9,7 @@ use api::model::{PostInstall, PostInstallScript};
 use bytes::Bytes;
 use dioxus_fullstack::ByteStream;
 use futures::{Stream, StreamExt};
-use imaged_shared::script_env::{AGENT_VARIABLES, INPUT_PREFIX, PROXY_VARIABLES};
+use imaged_model::script_env::{AGENT_VARIABLES, INPUT_PREFIX, PROXY_VARIABLES};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn};

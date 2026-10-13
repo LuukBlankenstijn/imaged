@@ -7,7 +7,7 @@ use std::time::Duration;
 use common::{StreamBehavior, StubConfig, StubServer, fake_bins, init_transport, stub_server};
 use imaged_client::connection::{self, Backoff};
 use imaged_client::task::ClientState;
-use imaged_shared::{ServerEvent, Task, TaskType};
+use imaged_model::{ServerEvent, Task, TaskType};
 use tokio_util::sync::CancellationToken;
 
 const MAC: &str = "aa:bb:cc:dd:ee:ff";

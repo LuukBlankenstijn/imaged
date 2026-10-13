@@ -1,7 +1,7 @@
 use crate::model;
 use bytes::Bytes;
 use dioxus_fullstack::*;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[cfg(feature = "server")]
 use crate::{AgentInfo, get_next_task};
@@ -14,7 +14,7 @@ use imaged_core::{
     },
 };
 #[cfg(feature = "server")]
-use imaged_shared::error::AppError;
+use imaged_model::error::AppError;
 
 #[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo)]
 #[get(

@@ -7,7 +7,7 @@ use imaged_client::task::types::RunningTask;
 use imaged_client::task::{
     ClientState, ClientTaskExt, DeployTask, RunnableClientTask, handle_message,
 };
-use imaged_shared::{ServerEvent, Task as SharedTask, TaskType};
+use imaged_model::{ServerEvent, Task as SharedTask, TaskType};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]

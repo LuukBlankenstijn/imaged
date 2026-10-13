@@ -16,7 +16,7 @@ use imaged_core::di::{ArchiveSvc, ImageRepo, ImageSvc, MulticastMgr, Registry, T
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_core::service::archive::archive_file_name;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 #[cfg(feature = "server")]
 use tokio_util::io::StreamReader;
 

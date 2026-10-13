@@ -14,7 +14,7 @@ use core::domain::script::{InputKind, NewScript, ScriptInput};
 use core::domain::task::TaskState;
 use core::domain::task::TaskType;
 use core::error::AppError;
-use imaged_shared::ServerEvent;
+use imaged_model::ServerEvent;
 use std::collections::BTreeMap;
 
 use crate::model;
@@ -1253,7 +1253,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
     match conn.receiver.try_recv() {
         Ok(ServerEvent::Task(t)) => {
             assert_eq!(t.id, task.id);
-            assert_eq!(t.task_type, imaged_shared::TaskType::Deploy);
+            assert_eq!(t.task_type, imaged_model::TaskType::Deploy);
         }
         other => panic!("registered host expected Task event, got {other:?}"),
     }

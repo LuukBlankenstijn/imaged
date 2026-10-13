@@ -84,15 +84,15 @@ pub enum Task {
     Reboot(reboot::RebootTask),
 }
 
-impl From<imaged_shared::Task> for Task {
-    fn from(value: imaged_shared::Task) -> Self {
+impl From<imaged_model::Task> for Task {
+    fn from(value: imaged_model::Task) -> Self {
         match value.task_type {
-            imaged_shared::TaskType::Capture => Self::Capture(capture::CaptureTask::new(value.id)),
-            imaged_shared::TaskType::Deploy => Self::Deploy(deploy::DeployTask::new(value.id)),
-            imaged_shared::TaskType::Multicast => {
+            imaged_model::TaskType::Capture => Self::Capture(capture::CaptureTask::new(value.id)),
+            imaged_model::TaskType::Deploy => Self::Deploy(deploy::DeployTask::new(value.id)),
+            imaged_model::TaskType::Multicast => {
                 Self::Multicast(multicast::MulticastTask::new(value.id))
             }
-            imaged_shared::TaskType::Reboot => Self::Reboot(reboot::RebootTask::new(value.id)),
+            imaged_model::TaskType::Reboot => Self::Reboot(reboot::RebootTask::new(value.id)),
         }
     }
 }

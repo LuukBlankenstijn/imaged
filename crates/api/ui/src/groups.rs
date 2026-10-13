@@ -9,7 +9,7 @@ use injectable::inject;
 use imaged_core::di::{GroupRepo, MulticastMgr, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[post("/api/ui/groups/create")]
 #[inject(group_repo: GroupRepo)]

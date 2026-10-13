@@ -13,7 +13,7 @@ use imaged_core::domain::script::{DeployInputs, InputValues, resolve_inputs};
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 #[cfg(feature = "server")]
 use std::collections::BTreeMap;
 

@@ -8,7 +8,7 @@ dioxus-fullstack = "0.7"
 dioxus-server = { version = "0.7", optional = true }
 serde = { workspace = true, features = ["derive"] }
 injectable = { workspace = true }
-imaged-shared = { workspace = true, features = ["serverfn"] }
+imaged-model = { workspace = true, features = ["serverfn"] }
 imaged-core = { path = "../../core", optional = true }
 tracing = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }

@@ -20,7 +20,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 use api::model::{ImagePartition, PostInstall};
-use imaged_shared::ServerEvent;
+use imaged_model::ServerEvent;
 
 const CHUNK: usize = 512;
 

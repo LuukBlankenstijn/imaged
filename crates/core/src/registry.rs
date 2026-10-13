@@ -4,7 +4,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use derive_more::Constructor;
-use imaged_shared::{ServerEvent, Task};
+use imaged_model::{ServerEvent, Task};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::domain::task::Task as DomainTask;
@@ -180,7 +180,7 @@ mod tests {
     use super::{ConnectionChange, ConnectionFeed, HostConnectionEvent, HostRegistry};
     use crate::domain::task::{Task as DomainTask, TaskType};
     use chrono::Utc;
-    use imaged_shared::ServerEvent;
+    use imaged_model::ServerEvent;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -237,7 +237,7 @@ mod tests {
         match reg.receiver.recv().await.unwrap() {
             ServerEvent::Task(t) => {
                 assert_eq!(t.id, 7);
-                assert_eq!(t.task_type, imaged_shared::TaskType::Deploy);
+                assert_eq!(t.task_type, imaged_model::TaskType::Deploy);
                 assert_eq!(t.image_id, Some(3));
             }
             other => panic!("expected a task event, got {other:?}"),
@@ -355,7 +355,7 @@ mod tests {
         match reg.receiver.recv().await.unwrap() {
             ServerEvent::Task(t) => {
                 assert_eq!(t.id, 9);
-                assert_eq!(t.task_type, imaged_shared::TaskType::Capture);
+                assert_eq!(t.task_type, imaged_model::TaskType::Capture);
                 assert_eq!(t.image_id, Some(11));
             }
             other => panic!("expected a task event, got {other:?}"),

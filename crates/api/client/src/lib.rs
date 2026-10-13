@@ -20,7 +20,7 @@ use imaged_core::{
     domain::task::Task,
 };
 #[cfg(feature = "server")]
-use imaged_shared::error::AppError;
+use imaged_model::error::AppError;
 
 #[cfg(feature = "server")]
 #[injectable::inject(host_repo: HostRepo, task_repo: TaskRepo)]

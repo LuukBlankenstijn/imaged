@@ -1,6 +1,6 @@
 use crate::model;
 use dioxus_fullstack::*;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[cfg(feature = "server")]
 use crate::{AgentInfo, deploy::get_restore_task_and_verify};
@@ -13,7 +13,7 @@ use imaged_core::{
     service::script_output::{ScriptRunKey, record_output},
 };
 #[cfg(feature = "server")]
-use imaged_shared::error::AppError;
+use imaged_model::error::AppError;
 #[cfg(feature = "server")]
 use std::collections::BTreeMap;
 

@@ -40,7 +40,7 @@ pub async fn run(state: Arc<ClientState>, disk_size_bytes: u64, backoff: Backoff
 
 async fn drain(
     state: &Arc<ClientState>,
-    socket: dioxus_fullstack::Websocket<(), imaged_shared::ServerEvent>,
+    socket: dioxus_fullstack::Websocket<(), imaged_model::ServerEvent>,
 ) {
     loop {
         match socket.recv().await {

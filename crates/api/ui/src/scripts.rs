@@ -9,7 +9,7 @@ use injectable::inject;
 
 #[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, ScriptRepo};
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[get("/api/ui/scripts")]
 #[inject(script_repo: ScriptRepo)]

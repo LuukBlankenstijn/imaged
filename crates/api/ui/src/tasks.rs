@@ -11,7 +11,7 @@ use imaged_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
 use imaged_core::domain::task::{TaskState, TaskType};
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[get("/api/ui/tasks")]
 #[inject(task_repo: TaskRepo)]

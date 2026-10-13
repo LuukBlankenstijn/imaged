@@ -7,7 +7,7 @@ members = [
     "crates/core",
     "crates/e2e",
     "crates/server",
-    "crates/shared",
+    "crates/model",
     "crates/web",
 ]
 
@@ -17,7 +17,7 @@ edition = "2024"
 
 [workspace.dependencies]
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"] }
-imaged-shared = { path = "crates/shared", default-features = false }
+imaged-model = { path = "crates/model", default-features = false }
 injectable = "0.1.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }

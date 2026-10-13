@@ -404,7 +404,7 @@ fn GroupRow(
     }
 }
 
-async fn group_host_ids(group_id: i64) -> imaged_shared::error::Result<Vec<i64>> {
+async fn group_host_ids(group_id: i64) -> imaged_model::error::Result<Vec<i64>> {
     let hosts = get_hosts_by_group(group_id).await?;
     Ok(hosts.iter().map(|h| h.id).collect())
 }

@@ -14,14 +14,14 @@ use tokio_util::sync::CancellationToken;
 
 const PARTTABLE_TMP: &str = "/parttable.bin";
 
-pub async fn handle_message(state: Arc<ClientState>, msg: imaged_shared::ServerEvent) {
+pub async fn handle_message(state: Arc<ClientState>, msg: imaged_model::ServerEvent) {
     match msg {
-        imaged_shared::ServerEvent::Task(task) => start_task(state, task).await,
-        imaged_shared::ServerEvent::Cancel(task_id) => cancel_task(state.deref(), task_id).await,
+        imaged_model::ServerEvent::Task(task) => start_task(state, task).await,
+        imaged_model::ServerEvent::Cancel(task_id) => cancel_task(state.deref(), task_id).await,
     }
 }
 
-async fn start_task(state: Arc<ClientState>, task: imaged_shared::Task) {
+async fn start_task(state: Arc<ClientState>, task: imaged_model::Task) {
     let mut current = state.current_task.lock().await;
     if current.is_some() {
         tracing::warn!("task already running, ignoring new task");

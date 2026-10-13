@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use dioxus_fullstack::reqwest::Url;
-use imaged_shared::setup_logging;
+use imaged_model::setup_logging;
 
 #[derive(Parser)]
 #[command(version, about)]

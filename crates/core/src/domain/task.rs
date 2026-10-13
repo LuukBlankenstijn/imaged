@@ -15,13 +15,13 @@ pub enum TaskType {
     Reboot,
 }
 
-impl From<TaskType> for imaged_shared::TaskType {
+impl From<TaskType> for imaged_model::TaskType {
     fn from(value: TaskType) -> Self {
         match value {
-            TaskType::Capture => imaged_shared::TaskType::Capture,
-            TaskType::Deploy => imaged_shared::TaskType::Deploy,
-            TaskType::Multicast => imaged_shared::TaskType::Multicast,
-            TaskType::Reboot => imaged_shared::TaskType::Reboot,
+            TaskType::Capture => imaged_model::TaskType::Capture,
+            TaskType::Deploy => imaged_model::TaskType::Deploy,
+            TaskType::Multicast => imaged_model::TaskType::Multicast,
+            TaskType::Reboot => imaged_model::TaskType::Reboot,
         }
     }
 }
@@ -473,20 +473,20 @@ mod tests {
     #[test]
     fn task_type_converts_exhaustively_into_shared_task_type() {
         assert_eq!(
-            imaged_shared::TaskType::from(TaskType::Capture),
-            imaged_shared::TaskType::Capture
+            imaged_model::TaskType::from(TaskType::Capture),
+            imaged_model::TaskType::Capture
         );
         assert_eq!(
-            imaged_shared::TaskType::from(TaskType::Deploy),
-            imaged_shared::TaskType::Deploy
+            imaged_model::TaskType::from(TaskType::Deploy),
+            imaged_model::TaskType::Deploy
         );
         assert_eq!(
-            imaged_shared::TaskType::from(TaskType::Multicast),
-            imaged_shared::TaskType::Multicast
+            imaged_model::TaskType::from(TaskType::Multicast),
+            imaged_model::TaskType::Multicast
         );
         assert_eq!(
-            imaged_shared::TaskType::from(TaskType::Reboot),
-            imaged_shared::TaskType::Reboot
+            imaged_model::TaskType::from(TaskType::Reboot),
+            imaged_model::TaskType::Reboot
         );
     }
 }

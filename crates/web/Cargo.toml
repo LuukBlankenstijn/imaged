@@ -11,7 +11,7 @@ path = "src/lib.rs"
 dioxus = { version = "0.7", features = ["fullstack", "router"] }
 serde = { workspace = true, features = ["derive"] }
 imaged-api-ui = { path = "../api/ui" }
-imaged-shared = { workspace = true, features = ["error"] }
+imaged-model.workspace = true
 
 gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 js-sys = { version = "0.3", optional = true }

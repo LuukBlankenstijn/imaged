@@ -211,7 +211,7 @@ where
 mod tests {
     use super::*;
     use crate::di::DIContainer;
-    use imaged_shared::{ServerEvent, get_multicast_port, multicast_group};
+    use imaged_model::{ServerEvent, get_multicast_port, multicast_group};
     use scuttlecast::{error::ProtoError, receiver::Receiver};
     use std::{
         net::Ipv4Addr,

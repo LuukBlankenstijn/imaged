@@ -1,5 +1,5 @@
 use dioxus_fullstack::*;
-use imaged_shared::{ServerEvent, error::Result};
+use imaged_model::{ServerEvent, error::Result};
 
 #[cfg(feature = "server")]
 use crate::AgentInfo;
@@ -8,7 +8,7 @@ use bytes::Bytes;
 #[cfg(feature = "server")]
 use imaged_core::di::{HostRepo, Liveness, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_shared::Task;
+use imaged_model::Task;
 
 #[injectable::inject(host_repo: HostRepo, task_repo: TaskRepo, registry: Registry, liveness: Liveness)]
 #[get("/api/client/stream?disk_size_bytes", agent: AgentInfo)]

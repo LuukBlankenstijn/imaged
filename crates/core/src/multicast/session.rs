@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use imaged_shared::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
+use imaged_model::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
 use scuttlecast::{
     error::ProtoError,
     sender::{Sender, Sending},

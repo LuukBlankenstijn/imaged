@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 imaged-core = { path = "../core", features = ["test-support"] }
-imaged-shared = { workspace = true, features = ["all"] }
+imaged-model.workspace = true
 imaged-api-client = { path = "../api/client", features = ["server"] }
 imaged-api-ui = { path = "../api/ui", features = ["server"] }
 

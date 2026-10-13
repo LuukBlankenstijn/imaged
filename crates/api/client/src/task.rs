@@ -1,8 +1,8 @@
 use dioxus_fullstack::*;
-use imaged_shared::error::Result;
+use imaged_model::error::Result;
 
 #[cfg(feature = "server")]
-use imaged_shared::error::AppError;
+use imaged_model::error::AppError;
 
 #[cfg(feature = "server")]
 use imaged_core::{
