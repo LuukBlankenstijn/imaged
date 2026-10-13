@@ -6,6 +6,39 @@ client that talks to a central server. Inspired by the capture/deploy part of [T
 
 ## Components
 
+### `crates/model` — `imaged-model`
+
+Types and rules shared by the server, the agent, the dashboard and the packer:
+`AppError` with optional axum (`axum-error`), sqlx (`sqlx-error`) and dioxus
+server function (`serverfn`) integrations, the agent wire types, the multicast
+group and port math, the script input and script name rules, and the rules for
+the variables an embedding program hands to scripts. Builds for wasm; the
+`logging` feature adds the tracing setup the binaries share.
+
+### `crates/archive` — `imaged-archive`
+
+The `.imaged` archive format: an uncompressed tar holding `manifest.json` first
+(format version, name, capture date, partitions, the optional root partition
+and post-install scripts with their inputs, and a sha256 per file), then
+`parttable.bin` (an `sgdisk --backup` of the GPT), one `p-<n>.pcl` per
+partition in manifest order (partclone output compressed with zstd) and one
+`scripts/<name>.sh` per script. The manifest, the partition table and every
+script are limited to 1 MiB. The `manifest` module is IO-free and validates
+file names, partition numbers, the root partition and the scripts; an async
+writer refuses an invalid manifest before writing a byte, and an async reader
+checks the manifest first and every checksum while it unpacks. The server's
+image storage uses the same file names.
+
+### `crates/disk` — `imaged-disk`
+
+Disk imaging shared by the agent and `imaged-pack`, so both encode partitions
+identically: partition table backup and restore with `sgdisk`, `partclone`
+clones piped through zstd and restores piped back through it, and the root
+partition probe. The probe runs `debugfs -R 'stat /etc/os-release'` against
+each ext partition without mounting it, so it needs no root; a symlinked
+`os-release` counts. `partclone` always gets `--logfile`: without it partclone
+writes `/var/log/partclone.log` and, when not root, outputs nothing.
+
 ### `crates/core` — `imaged-core`
 
 Rust library. Domain model, SQLite (sqlx) repositories for hosts, images and
@@ -13,11 +46,8 @@ tasks, the in-memory host connection registry, the multicast manager, image
 storage, DI wiring, and the PXE routes. Image partitions are stored on disk
 under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
-Images can be exported and imported as `.imaged` archives: an uncompressed tar
-holding `manifest.json` (name, capture date, partitions, the optional root
-partition and post-install scripts with their inputs, and a sha256 per file),
-`parttable.bin`, one `p-<n>.pcl` per partition and one `scripts/<name>.sh` per
-script (`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An
+Images can be exported and imported as `imaged-archive` archives
+(`GET /api/ui/images/{id}/export`, `POST /api/ui/images/import`). An
 import stays `importing` until every checksum matches and the upload has been
 read to its end, and then turns `ready`; a
 rejected import turns `faulted`, and one cut short by a crash is marked faulted
@@ -85,11 +115,67 @@ truthy (anything but empty, `0`, `f`, `false`, `n`, `no` or `off`).
 
 Rust binary that runs on a PXE-booted machine. On start it sends its state to
 the server (mac address, disk size) and processes capture / deploy tasks issued
-back over SSE. Uses `partclone` for filesystem-aware imaging.
+back over SSE. Uses `imaged-disk` (`partclone` for filesystem-aware imaging,
+`sgdisk` for the partition table, `debugfs` for the root partition).
 
 ```sh
 cargo run -p imaged-client -- http://<server>:8080
 ```
+
+### `crates/pack` — `imaged-pack`
+
+Rust binary that turns a raw GPT disk image file into a `.imaged` archive
+without root, KVM or a PXE boot. The archive matches what a capture produces,
+so it imports through `POST /api/ui/images/import` and deploys like a captured
+image.
+
+```
+imaged-pack <DISK> --name <NAME> [--root-partition <N>] [--script <PATH>]... (-o|--output) <OUT>
+```
+
+It reads the layout with `sfdisk --json` (only GPT disks; anything else fails
+with `only GPT disks are supported, found <label>`) and backs up the partition
+table with `sgdisk` into `parttable.bin`. Each partition is copied into a sparse
+temp file, its filesystem read with `blkid -p`, and cloned with `imaged-disk`
+into `p-<n>.pcl`; its size is its sector count times the sector size, as
+during a capture. Unformatted partitions are skipped like a capture skips
+them; ext2/3/4 and vfat are packed; any other filesystem fails the run.
+`--root-partition <N>` sets the root partition (it must be one of the packed
+partitions); without it the root partition is found by the same rule as a
+capture and left unset when no single partition qualifies. The capture date is
+the time of packing.
+
+`--script <PATH>` attaches a post-install script and can be repeated. The file
+is `<name>.sh`, the script name its stem; its inputs come from a sibling
+`<name>.inputs.json` when there is one, otherwise it has none:
+
+```json
+[
+  {
+    "name": "hostname",
+    "label": "Hostname",
+    "kind": "text",
+    "required": true,
+    "per_machine": true
+  }
+]
+```
+
+Scripts follow the server's library rules and names must be unique; they are
+archived and attached in command-line order. The archive is written to
+`<OUT>.partial` and renamed to `<OUT>` once complete; on failure nothing is
+left behind. Temp files go to `TMPDIR`.
+
+```sh
+nix run github:LuukBlankenstijn/imaged#imaged-pack -- disk.img --name my-image --script setup.sh -o my-image.imaged
+```
+
+The nix package brings its runtime tools (`sgdisk`, `sfdisk`, `blkid`,
+`debugfs`, `partclone`).
+
+### `crates/e2e` — `imaged-e2e`
+
+Rust HTTP, WebSocket and SSE tests against a real server.
 
 ## Dev environment
 
@@ -101,8 +187,10 @@ With direnv:
 direnv allow
 ```
 
-It also provides everything else the project needs: partclone, udp-cast, the
-initramfs packages and scripts, and the test-VM scripts. The x86_64 and arm64
+It also provides everything else the project needs: partclone, udp-cast,
+sgdisk, sfdisk and blkid (util-linux), e2fsprogs, dosfstools, mtools, the
+initramfs packages and scripts, and the test-VM scripts; the imaging tests in
+`imaged-disk` and `imaged-pack` run these tools. The x86_64 and arm64
 kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
 (minus GPU, media, sound and wireless) and loads them by modalias at boot.
 `build-initramfs` builds the initramfs for every arch, or only the ones passed
@@ -130,10 +218,11 @@ given per machine or shared by every machine of a deployment. An image keeps an
 ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
 current version; a script that an image still uses cannot be deleted. Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the
-partition the scripts run in. A capture finds it by mounting every ext
-partition read-only after cloning it: when exactly one holds `/etc/os-release`
-it becomes the image's root partition, otherwise it is left unset for the
-dashboard to choose.
+partition the scripts run in. A capture finds it after cloning every partition
+by reading each ext partition with `debugfs`, without mounting it: when exactly
+one holds `/etc/os-release` (a symlink counts) it becomes the image's root
+partition, otherwise it is left unset for the dashboard to choose.
+`imaged-pack` applies the same rule.
 
 A deploy (`POST /api/ui/hosts/deploy`) or multicast
 (`POST /api/ui/groups/multicast`) of an image with scripts takes the input
@@ -170,3 +259,30 @@ which keeps the full output and exit code of every run per task host
 non-zero stops the deploy and fails that host with the script's name; the
 mounts are always undone in reverse order before the client reports back and
 reboots.
+
+## End-to-end VM test
+
+```sh
+nix develop .#e2e -c e2e/run.sh
+```
+
+Runs as your user inside user, network and pid namespaces; it needs `/dev/kvm`
+and `/dev/net/tun`, and real boot assets in `assets/` with an initramfs built
+from this tree (`build-initramfs x86_64`). The script:
+
+1. builds the binaries it runs,
+2. creates the test disks,
+3. packs one with `imaged-pack` and a script that has a per-machine input,
+4. imports the archive and checks that it is `ready` with root partition 2 and
+   the script attached,
+5. captures the same disk in a VM and checks that the agent found root
+   partition 2,
+6. exports the captured image and compares its structure with the packed
+   archive,
+7. deploys both images with a hostname input and checks each deployed disk:
+   the same GPT, a clean fsck, the same files, and `/etc/hostname` set by the
+   script.
+
+`E2E_FIRMWARE` picks `bios` or `uefi`, `E2E_OUT` the directory for logs, disks
+and archives (default `e2e/out`); `CARGO_TARGET_DIR` is honoured, and
+`IMAGED_ASSETS`, when set, must point at the repository's `assets/`.

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use imaged_disk::{Filesystem, find_root_partition, has_os_release};
+use imaged_disk::{Filesystem, has_os_release, holds_system, root_partition};
 
 struct Scratch(PathBuf);
 
@@ -119,51 +119,50 @@ async fn a_source_without_an_ext_filesystem_is_an_error() {
 }
 
 #[tokio::test]
-async fn the_only_ext_partition_with_os_release_is_the_root() {
+async fn an_ext_partition_with_os_release_holds_a_system() {
     let scratch = Scratch::new();
-    let data = scratch.ext4_image("data", OsRelease::Missing);
     let system = scratch.ext4_image("system", OsRelease::Regular);
 
-    let root = find_root_partition(&[
-        (1, Filesystem::Ext4, data.as_path()),
-        (2, Filesystem::Ext4, system.as_path()),
-    ])
-    .await;
-
-    assert_eq!(root, Some(2));
+    assert!(holds_system(2, Filesystem::Ext4, &system).await);
 }
 
 #[tokio::test]
-async fn two_partitions_with_os_release_have_no_root() {
+async fn an_ext_partition_without_os_release_holds_no_system() {
     let scratch = Scratch::new();
-    let first = scratch.ext4_image("first", OsRelease::Regular);
-    let second = scratch.ext4_image("second", OsRelease::Symlink);
+    let data = scratch.ext4_image("data", OsRelease::Missing);
 
-    let root = find_root_partition(&[
-        (1, Filesystem::Ext4, first.as_path()),
-        (2, Filesystem::Ext4, second.as_path()),
-    ])
-    .await;
-
-    assert_eq!(root, None);
+    assert!(!holds_system(1, Filesystem::Ext4, &data).await);
 }
 
 #[tokio::test]
 async fn vfat_partitions_are_never_probed() {
     let scratch = Scratch::new();
-    let system = scratch.ext4_image("system", OsRelease::Regular);
     let also_a_system = scratch.ext4_image("also-a-system", OsRelease::Regular);
 
-    let root = find_root_partition(&[
-        (
-            1,
-            Filesystem::Vfat,
-            Path::new("/nonexistent/imaged-disk-efi"),
-        ),
-        (2, Filesystem::Vfat, also_a_system.as_path()),
-        (3, Filesystem::Ext4, system.as_path()),
-    ])
-    .await;
+    let missing = Path::new("/nonexistent/imaged-disk-efi");
+    assert!(!holds_system(1, Filesystem::Vfat, missing).await);
+    assert!(!holds_system(2, Filesystem::Vfat, &also_a_system).await);
+}
 
-    assert_eq!(root, Some(3));
+#[tokio::test]
+async fn a_probe_error_on_ext_holds_no_system() {
+    let scratch = Scratch::new();
+    let zeroed = scratch.zeroed_file("zeroed.img");
+
+    assert!(!holds_system(1, Filesystem::Ext4, &zeroed).await);
+}
+
+#[test]
+fn the_only_system_is_the_root() {
+    assert_eq!(root_partition(&[2]), Some(2));
+}
+
+#[test]
+fn two_systems_have_no_root() {
+    assert_eq!(root_partition(&[1, 2]), None);
+}
+
+#[test]
+fn no_systems_have_no_root() {
+    assert_eq!(root_partition(&[]), None);
 }

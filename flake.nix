@@ -221,9 +221,24 @@
               craneLib
               ;
           };
+        }
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          imaged-pack = pkgs.callPackage ./nix/packages/imaged-pack.nix {
+            inherit craneLib imagingTools;
+          };
         };
 
         devShells.default = devShell;
+        devShells.e2e = devShell.overrideAttrs (shell: {
+          nativeBuildInputs = shell.nativeBuildInputs ++ [
+            pkgs.qemu_kvm
+            pkgs.dnsmasq
+            pkgs.iproute2
+            pkgs.curl
+            pkgs.jq
+          ];
+          E2E_BUSYBOX = "${pkgs.pkgsStatic.busybox}/bin/busybox";
+        });
       }
     )
     // {

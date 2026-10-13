@@ -9,3 +9,4 @@ images
 /assets
 
 crates/web/assets/tailwind.css
+/e2e/out

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use derive_more::{Constructor, Display};
-use imaged_disk::{backup_partition_table, clone_compressed, find_root_partition};
+use imaged_disk::{backup_partition_table, clone_compressed, holds_system, root_partition};
 use tokio_util::io::ReaderStream;
 use tracing::{info, warn};
 
@@ -50,11 +50,13 @@ impl ClientTaskExt for CaptureTask {
     }
 
     async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
-        let targets: Vec<(i64, _, &Path)> = partitions
-            .iter()
-            .map(|p| (p.number, p.filesystem, Path::new(&p.device)))
-            .collect();
-        let root = find_root_partition(&targets).await;
+        let mut systems = Vec::new();
+        for p in partitions {
+            if holds_system(p.number, p.filesystem, Path::new(&p.device)).await {
+                systems.push(p.number);
+            }
+        }
+        let root = root_partition(&systems);
         if let Some(root) = root {
             match api::capture::root_partition(self.task_id, root).await {
                 Ok(()) => info!(partition=%root, "reported the root partition"),

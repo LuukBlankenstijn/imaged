@@ -9,6 +9,7 @@ members = [
     "crates/disk",
     "crates/e2e",
     "crates/model",
+    "crates/pack",
     "crates/server",
     "crates/web",
 ]
@@ -22,6 +23,7 @@ tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"
 imaged-model = { path = "crates/model", default-features = false }
 imaged-archive = { path = "crates/archive" }
 imaged-disk = { path = "crates/disk" }
+imaged-pack = { path = "crates/pack" }
 injectable = "0.1.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail};
@@ -8,16 +8,37 @@ use tokio::process::{Child, Command};
 
 use crate::Filesystem;
 
-pub struct Partclone(Child);
+const LOG_TAIL_LINES: usize = 20;
+
+pub struct Partclone {
+    child: Child,
+    logfile: PathBuf,
+}
 
 impl Partclone {
     pub async fn wait(mut self) -> anyhow::Result<()> {
-        let status = self.0.wait().await?;
+        let status = self.child.wait().await?;
         if !status.success() {
-            bail!("partclone exited with {status}");
+            bail!(
+                "partclone exited with {status}{}",
+                log_tail(&self.logfile).await
+            );
         }
         Ok(())
     }
+}
+
+async fn log_tail(logfile: &Path) -> String {
+    let Ok(bytes) = tokio::fs::read(logfile).await else {
+        return String::new();
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = &lines[lines.len().saturating_sub(LOG_TAIL_LINES)..];
+    if tail.is_empty() {
+        return String::new();
+    }
+    format!("\n{}", tail.join("\n"))
 }
 
 pub fn clone_compressed(
@@ -37,7 +58,13 @@ pub fn clone_compressed(
         .kill_on_drop(true)
         .spawn()?;
     let stdout = child.stdout.take().expect("stdout piped");
-    Ok((Partclone(child), ZstdEncoder::new(BufReader::new(stdout))))
+    Ok((
+        Partclone {
+            child,
+            logfile: logfile.to_owned(),
+        },
+        ZstdEncoder::new(BufReader::new(stdout)),
+    ))
 }
 
 pub async fn restore_compressed(
@@ -58,16 +85,27 @@ pub async fn restore_compressed(
         .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()?;
-    {
+    let copied = {
         let mut stdin = child.stdin.take().expect("stdin piped");
-        tokio::io::copy(&mut decoder, &mut stdin)
-            .await
-            .map_err(|e| anyhow!("failed piping partition data into partclone: {e}"))?;
-    }
+        tokio::io::copy(&mut decoder, &mut stdin).await
+    };
 
     let status = child.wait().await?;
-    if !status.success() {
-        bail!("partclone exited with error: {status}");
+    match copied {
+        Err(e) => {
+            let piping = anyhow!("failed piping partition data into partclone: {e}");
+            if status.success() {
+                return Err(piping);
+            }
+            let tail = log_tail(logfile).await;
+            Err(piping.context(format!("partclone exited with error: {status}{tail}")))
+        }
+        Ok(_) if !status.success() => {
+            bail!(
+                "partclone exited with error: {status}{}",
+                log_tail(logfile).await
+            )
+        }
+        Ok(_) => Ok(()),
     }
-    Ok(())
 }
