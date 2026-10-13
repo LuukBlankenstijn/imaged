@@ -9,23 +9,9 @@ use rustix::mount::{MountFlags, UnmountFlags};
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 use crate::sys::fstab::{plan_mounts, unescape};
 
-const PROBE_DIR: &str = "/tmp/imaged-probe";
 const ROOT_DIR: &str = "/tmp/imaged-root";
 const STOP_ATTEMPTS: usize = 50;
 const STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
-
-pub fn has_os_release(device: &str, fstype: &str) -> Result<bool> {
-    std::fs::create_dir_all(PROBE_DIR).with_context(|| format!("creating {PROBE_DIR}"))?;
-    rustix::mount::mount(device, PROBE_DIR, fstype, MountFlags::RDONLY, None)
-        .with_context(|| format!("mounting {device} read-only"))?;
-    let found = Path::new(PROBE_DIR)
-        .join("etc/os-release")
-        .symlink_metadata()
-        .is_ok();
-    rustix::mount::unmount(PROBE_DIR, UnmountFlags::empty())
-        .with_context(|| format!("unmounting {device}"))?;
-    Ok(found)
-}
 
 pub struct MountedSystem {
     root: PathBuf,
@@ -42,7 +28,7 @@ impl MountedSystem {
             rustix::mount::mount(
                 &root.device,
                 target,
-                &root.fstype,
+                root.filesystem.as_str(),
                 MountFlags::empty(),
                 None,
             )

@@ -41,7 +41,7 @@ clientBin: ''
   cp ${pkgsStatic.libuuid}/bin/lsblk "$STAGING/bin/"
   cp ${pkgsStatic.gptfdisk}/bin/sgdisk "$STAGING/bin/"
   cp ${pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
-  cp ${pkgsStatic.e2fsprogs.bin}/bin/e2fsck "$STAGING/bin/"
+  cp ${pkgsStatic.e2fsprogs.bin}/bin/{e2fsck,debugfs} "$STAGING/bin/"
   cp ${pkgsStatic.dosfstools}/bin/fsck.fat "$STAGING/bin/"
   cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"
   cp ${partclone}/bin/partclone.vfat "$STAGING/bin/"

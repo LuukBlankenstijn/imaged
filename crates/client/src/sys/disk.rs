@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result, bail};
+use imaged_disk::Filesystem;
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -36,22 +37,8 @@ pub struct BlockDevice {
 pub struct PartitionTarget {
     pub device: String,
     pub number: i64,
-    pub fstype: String,
+    pub filesystem: Filesystem,
     pub size: u64,
-}
-
-impl PartitionTarget {
-    pub fn is_ext(&self) -> bool {
-        matches!(self.fstype.as_str(), "ext2" | "ext3" | "ext4")
-    }
-
-    pub fn partclone_binary(&self) -> Result<&'static str> {
-        match self.fstype.as_str() {
-            _ if self.is_ext() => Ok("partclone.extfs"),
-            "vfat" | "fat32" | "fat16" => Ok("partclone.vfat"),
-            other => bail!("filetype not supported: {other}"),
-        }
-    }
 }
 
 impl BlockDevice {
@@ -69,14 +56,14 @@ impl BlockDevice {
     pub fn formatted_partitions(&self) -> Result<Vec<PartitionTarget>> {
         let mut targets = Vec::new();
         for child in &self.children {
-            let Some(fstype) = &child.fstype else {
+            let Some(filesystem) = Filesystem::detect(child.fstype.as_deref())? else {
                 tracing::info!(name=%child.name, "skipping partition with no fstype");
                 continue;
             };
             targets.push(PartitionTarget {
                 device: child.get_device(),
                 number: child.find_partition_number()?,
-                fstype: fstype.clone(),
+                filesystem,
                 size: child.size,
             });
         }
@@ -92,7 +79,7 @@ impl BlockDevice {
         Ok(PartitionTarget {
             device: child.get_device(),
             number,
-            fstype,
+            filesystem: fstype.parse()?,
             size: child.size,
         })
     }
@@ -189,7 +176,7 @@ mod tests {
 
         assert_eq!(target.device, "/dev/nvme0n1p2");
         assert_eq!(target.number, 2);
-        assert_eq!(target.partclone_binary().unwrap(), "partclone.extfs");
+        assert_eq!(target.filesystem, Filesystem::Ext4);
     }
 
     #[test]
@@ -434,56 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn partclone_binary_maps_supported_filesystems() {
-        for fs in ["ext2", "ext3", "ext4"] {
-            let t = PartitionTarget {
-                device: "/dev/x".into(),
-                number: 1,
-                fstype: fs.into(),
-                size: 0,
-            };
-            assert_eq!(t.partclone_binary().unwrap(), "partclone.extfs");
-        }
-        for fs in ["vfat", "fat32", "fat16"] {
-            let t = PartitionTarget {
-                device: "/dev/x".into(),
-                number: 1,
-                fstype: fs.into(),
-                size: 0,
-            };
-            assert_eq!(t.partclone_binary().unwrap(), "partclone.vfat");
-        }
-    }
-
-    #[test]
-    fn partclone_binary_rejects_unmapped_filesystems() {
-        for fs in ["ntfs", "xfs", "btrfs", "swap", ""] {
-            let t = PartitionTarget {
-                device: "/dev/x".into(),
-                number: 1,
-                fstype: fs.into(),
-                size: 0,
-            };
-            let e = t.partclone_binary().unwrap_err();
-            assert_eq!(e.to_string(), format!("filetype not supported: {fs}"));
-        }
-    }
-
-    #[test]
-    fn partclone_binary_is_case_sensitive() {
-        for fs in ["EXT4", "Ext4", "VFAT"] {
-            let t = PartitionTarget {
-                device: "/dev/x".into(),
-                number: 1,
-                fstype: fs.into(),
-                size: 0,
-            };
-            let e = t.partclone_binary().unwrap_err();
-            assert_eq!(e.to_string(), format!("filetype not supported: {fs}"));
-        }
-    }
-
-    #[test]
     fn formatted_partitions_follow_lsblk_order() {
         let disk = dev(r#"{ "name": "sdb", "size": 100, "children": [
                 { "name": "sdb2", "size": 20, "fstype": "ext4" },
@@ -493,9 +430,10 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].device, "/dev/sdb2");
         assert_eq!(targets[0].number, 2);
-        assert_eq!(targets[0].fstype, "ext4");
+        assert_eq!(targets[0].filesystem, Filesystem::Ext4);
         assert_eq!(targets[1].device, "/dev/sdb1");
         assert_eq!(targets[1].number, 1);
+        assert_eq!(targets[1].filesystem, Filesystem::Vfat);
     }
 
     #[test]
@@ -509,14 +447,32 @@ mod tests {
     #[test]
     fn formatted_partitions_ignore_nested_children() {
         let disk = dev(r#"{ "name": "sda", "size": 100, "children": [
-                { "name": "sda1", "size": 90, "fstype": "crypto_LUKS", "children": [
+                { "name": "sda1", "size": 90, "children": [
                     { "name": "crypted", "size": 89, "fstype": "ext4" }
-                ] }
+                ] },
+                { "name": "sda2", "size": 10, "fstype": "vfat" }
             ] }"#);
         let targets = disk.formatted_partitions().unwrap();
         assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].device, "/dev/sda1");
-        assert_eq!(targets[0].fstype, "crypto_LUKS");
+        assert_eq!(targets[0].device, "/dev/sda2");
+    }
+
+    #[test]
+    fn formatted_partitions_reject_unsupported_filesystems() {
+        let disk = dev(r#"{ "name": "sda", "size": 100, "children": [
+                { "name": "sda1", "size": 10, "fstype": "vfat" },
+                { "name": "sda2", "size": 90, "fstype": "crypto_LUKS" }
+            ] }"#);
+        let e = disk.formatted_partitions().unwrap_err();
+        assert_eq!(e.to_string(), "filesystem not supported: crypto_LUKS");
+    }
+
+    #[test]
+    fn partition_target_rejects_an_unsupported_filesystem() {
+        let disk = freshly_partitioned_disk();
+
+        let e = disk.partition_target(2, "ntfs".to_string()).unwrap_err();
+        assert_eq!(e.to_string(), "filesystem not supported: ntfs");
     }
 
     #[test]
@@ -527,7 +483,7 @@ mod tests {
         let target = disk.partition_target(1, "ext4".to_string()).unwrap();
         assert_eq!(target.device, "/dev/sda1");
         assert_eq!(target.number, 1);
-        assert_eq!(target.fstype, "ext4");
+        assert_eq!(target.filesystem, Filesystem::Ext4);
         assert_eq!(target.size, 123456789);
     }
 

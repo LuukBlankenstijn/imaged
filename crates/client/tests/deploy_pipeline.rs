@@ -45,7 +45,7 @@ async fn deploy_pipeline_pipes_decompressed_bytes_into_partclone() {
             .to_string_lossy()
             .into_owned(),
         number: 1,
-        fstype: "ext4".to_string(),
+        filesystem: imaged_disk::Filesystem::Ext4,
         size: plaintext.len() as u64,
     };
 

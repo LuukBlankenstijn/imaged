@@ -1,10 +1,10 @@
-use crate::domain::script::InputValues;
 use crate::domain::task::{ScriptRun, Task, TaskHost, TaskRepository, TaskState, TaskType};
 use crate::error::{AppError, Result};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
+use imaged_model::script::InputValues;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Constructor)]

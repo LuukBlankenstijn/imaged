@@ -13,6 +13,8 @@ use enum_dispatch::enum_dispatch;
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
+const PARTCLONE_LOG: &str = "/tmp/partclone-log";
+
 #[allow(
     async_fn_in_trait,
     reason = "trait is internal to client, only driven on a single-threaded executor"

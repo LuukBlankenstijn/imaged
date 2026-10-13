@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
+use imaged_model::script::{InputKind, ScriptInput};
 use sqlx::{SqliteConnection, SqlitePool, types::Json};
 
-use crate::domain::script::{InputKind, NewScript, Script, ScriptInput, ScriptRepository};
+use crate::domain::script::{NewScript, Script, ScriptRepository};
 use crate::error::{AppError, Result};
 
 #[derive(Debug, Constructor)]
@@ -56,7 +57,7 @@ impl SqliteScriptRepository {
             inputs.entry(row.script_id).or_default().push(ScriptInput {
                 name: row.name,
                 label: row.label,
-                kind: InputKind::from_string(row.kind)?,
+                kind: input_kind(&row.kind)?,
                 required: row.required,
                 default_value: row.default_value,
                 per_machine: row.per_machine,
@@ -74,6 +75,13 @@ impl SqliteScriptRepository {
             })
             .collect())
     }
+}
+
+fn input_kind(value: &str) -> Result<InputKind> {
+    value.parse::<InputKind>().map_err(|e| {
+        tracing::info!(err=%e, "failed to convert string to InputKind");
+        AppError::Internal("conversion error".to_string())
+    })
 }
 
 async fn insert_inputs(conn: &mut SqliteConnection, script_id: i64, script: &NewScript) -> Result {
@@ -288,8 +296,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::di::DIContainer;
-    use crate::domain::script::{InputKind, NewScript, ScriptInput};
+    use crate::domain::script::NewScript;
     use crate::error::AppError;
+    use imaged_model::script::{InputKind, ScriptInput};
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 

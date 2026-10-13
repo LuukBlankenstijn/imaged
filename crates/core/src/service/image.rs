@@ -4,6 +4,7 @@ use crate::error::{AppError, Result};
 use bytes::Bytes;
 use derive_more::Constructor;
 use futures::Stream;
+use imaged_archive::manifest::{PARTITION_TABLE_FILE, partition_file};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
@@ -51,7 +52,7 @@ impl ImageService {
     pub async fn save_partition_table(&self, image_id: i64, data: &[u8]) -> Result<String> {
         let relative_dir = format!("img-{image_id}");
         let dir = format!("{}/{}", self.images_path, relative_dir);
-        let relative_filepath = format!("{relative_dir}/parttable.bin");
+        let relative_filepath = format!("{relative_dir}/{PARTITION_TABLE_FILE}");
         let path = format!("{}/{}", self.images_path, relative_filepath);
 
         tokio::fs::create_dir_all(&dir).await.map_err(|e| {
@@ -76,13 +77,18 @@ impl ImageService {
     }
 
     pub fn get_partition_table_path(&self, image_id: i64) -> String {
-        format!("{}/img-{}/parttable.bin", self.images_path, image_id)
+        format!(
+            "{}/img-{}/{PARTITION_TABLE_FILE}",
+            self.images_path, image_id
+        )
     }
 
     pub fn get_partition_path(&self, image_id: i64, partition_number: i64) -> String {
         format!(
-            "{}/img-{}/p-{}.pcl",
-            self.images_path, image_id, partition_number
+            "{}/img-{}/{}",
+            self.images_path,
+            image_id,
+            partition_file(partition_number)
         )
     }
 
@@ -113,9 +119,9 @@ impl ImageService {
         let file_path = self.get_partition_path(image_id, partition_number);
         let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp_path = format!(
-            "{}/.p-{}.pcl.tmp.{}.{}",
+            "{}/.{}.tmp.{}.{}",
             dir,
-            partition_number,
+            partition_file(partition_number),
             std::process::id(),
             seq
         );
@@ -164,8 +170,7 @@ impl ImageService {
         image_id: i64,
         partition_number: i64,
     ) -> Result<impl Stream<Item = std::result::Result<Bytes, std::io::Error>> + Send + use<>> {
-        let relative_filepath = format!("img-{}/p-{}.pcl", image_id, partition_number);
-        let file_path = format!("{}/{}", self.images_path, relative_filepath);
+        let file_path = self.get_partition_path(image_id, partition_number);
         let file = tokio::fs::File::open(&file_path).await.map_err(|e| {
             tracing::error!("failed to open partition file {file_path}: {e}");
             AppError::Internal(e.to_string())

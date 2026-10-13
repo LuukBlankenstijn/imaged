@@ -9,8 +9,9 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::image::ImageStatus;
-use core::domain::script::{InputKind, NewScript, ScriptInput};
+use core::domain::script::NewScript;
 use core::domain::task::{TaskState, TaskType};
+use imaged_model::script::{InputKind, ScriptInput};
 
 use crate::model;
 

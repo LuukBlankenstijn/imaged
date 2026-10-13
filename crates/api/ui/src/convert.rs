@@ -2,10 +2,7 @@ use imaged_core::domain::{
     group::Group as DGroup,
     host::Host as DHost,
     image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
-    script::{
-        DeployInputs as DDeployInputs, InputKind as DInputKind, NewScript as DNewScript,
-        Script as DScript, ScriptInput as DScriptInput,
-    },
+    script::{DeployInputs as DDeployInputs, NewScript as DNewScript, Script as DScript},
     task::{
         ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskState as DState,
         TaskType as DType,
@@ -15,6 +12,7 @@ use imaged_core::multicast::{
     MulticastProgress as DProgress, ReceiverProgress as DReceiver, TransferPhase as DPhase,
 };
 use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
+use imaged_model::script::{InputKind as DInputKind, ScriptInput as DScriptInput};
 
 use crate::model;
 

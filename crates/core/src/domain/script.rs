@@ -1,47 +1,9 @@
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use derive_more::{Display, FromStr, IsVariant};
-use serde::{Deserialize, Serialize};
+use imaged_model::script::{InputValues, ScriptInput, validate_script};
 
 use crate::error::{AppError, Result};
-
-#[derive(
-    Debug, Clone, Copy, Display, FromStr, IsVariant, PartialEq, Eq, Serialize, Deserialize,
-)]
-#[display(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum InputKind {
-    Text,
-    Number,
-    Choice,
-}
-
-impl InputKind {
-    pub fn from_string(value: String) -> Result<Self> {
-        InputKind::from_str(&value).map_err(|e| {
-            tracing::info!(err=%e, "failed to convert string to InputKind");
-            AppError::Internal("conversion error".to_string())
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScriptInput {
-    pub name: String,
-    #[serde(default)]
-    pub label: String,
-    pub kind: InputKind,
-    #[serde(default)]
-    pub required: bool,
-    #[serde(default)]
-    pub default_value: Option<String>,
-    #[serde(default)]
-    pub per_machine: bool,
-    #[serde(default)]
-    pub choices: Vec<String>,
-}
 
 #[derive(Debug, Clone)]
 pub struct Script {
@@ -59,108 +21,15 @@ pub struct NewScript {
     pub inputs: Vec<ScriptInput>,
 }
 
-pub type InputValues = BTreeMap<String, String>;
-
-pub const MAX_SCRIPT_NAME_LEN: usize = 64;
-
 #[derive(Debug, Clone, Default)]
 pub struct DeployInputs {
     pub shared: InputValues,
     pub per_machine: BTreeMap<i64, InputValues>,
 }
 
-impl ScriptInput {
-    pub fn check(&self, value: &str) -> std::result::Result<(), String> {
-        if value.contains('\0') {
-            return Err(format!("input `{}` cannot contain NUL bytes", self.name));
-        }
-        match self.kind {
-            InputKind::Text => Ok(()),
-            InputKind::Number => match value.trim().parse::<f64>() {
-                Ok(number) if number.is_finite() => Ok(()),
-                _ => Err(format!("input `{}` must be a number", self.name)),
-            },
-            InputKind::Choice if self.choices.iter().any(|choice| choice == value) => Ok(()),
-            InputKind::Choice => Err(format!(
-                "input `{}` must be one of {}",
-                self.name,
-                self.choices.join(", ")
-            )),
-        }
-    }
-
-    pub fn value_from<'a>(&'a self, values: &'a InputValues) -> Option<&'a str> {
-        values
-            .get(&self.name)
-            .map(String::as_str)
-            .filter(|value| !value.is_empty())
-            .or(self.default_value.as_deref())
-    }
-
-    pub fn validate(&self) -> Result {
-        if !is_input_name(&self.name) {
-            return Err(AppError::InvalidArgument(format!(
-                "input name `{}` may only contain a-z, 0-9 and _",
-                self.name
-            )));
-        }
-        match self.kind {
-            InputKind::Choice if self.choices.is_empty() => {
-                return Err(AppError::InvalidArgument(format!(
-                    "choice input `{}` needs at least one choice",
-                    self.name
-                )));
-            }
-            InputKind::Text | InputKind::Number if !self.choices.is_empty() => {
-                return Err(AppError::InvalidArgument(format!(
-                    "{} input `{}` cannot have choices",
-                    self.kind, self.name
-                )));
-            }
-            _ => {}
-        }
-        if let Some(duplicate) = first_duplicate(self.choices.iter().map(String::as_str)) {
-            return Err(AppError::InvalidArgument(format!(
-                "input `{}` lists choice `{duplicate}` twice",
-                self.name
-            )));
-        }
-        if let Some(default) = &self.default_value {
-            self.check(default)
-                .map_err(|e| AppError::InvalidArgument(format!("default value is invalid: {e}")))?;
-        }
-        Ok(())
-    }
-}
-
-pub fn validate_script_name(name: &str) -> Result {
-    if !is_script_name(name) {
-        return Err(AppError::InvalidArgument(format!(
-            "script name `{name}` must be 1 to {MAX_SCRIPT_NAME_LEN} letters, digits, -, _ or . and cannot start with ."
-        )));
-    }
-    Ok(())
-}
-
 impl NewScript {
     pub fn validate(&self) -> Result {
-        validate_script_name(&self.name)?;
-        if self.body.trim().is_empty() {
-            return Err(AppError::InvalidArgument(format!(
-                "script `{}` has an empty body",
-                self.name
-            )));
-        }
-        for input in &self.inputs {
-            input.validate()?;
-        }
-        if let Some(duplicate) = first_duplicate(self.inputs.iter().map(|i| i.name.as_str())) {
-            return Err(AppError::InvalidArgument(format!(
-                "script `{}` declares input `{duplicate}` twice",
-                self.name
-            )));
-        }
-        Ok(())
+        validate_script(&self.name, &self.body, &self.inputs)
     }
 }
 
@@ -245,27 +114,6 @@ fn unknown_input(name: &str) -> AppError {
     AppError::InvalidArgument(format!("no script declares input `{name}`"))
 }
 
-fn is_input_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-}
-
-fn is_script_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_SCRIPT_NAME_LEN
-        && !name.starts_with('.')
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-}
-
-fn first_duplicate<'a>(items: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let mut seen = std::collections::HashSet::new();
-    items.into_iter().find(|item| !seen.insert(*item))
-}
-
 #[async_trait::async_trait]
 pub trait ScriptRepository: Send + Sync {
     async fn get_all(&self) -> Result<Vec<Script>>;
@@ -287,6 +135,8 @@ pub trait ScriptRepository: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use imaged_model::script::InputKind;
+
     use super::*;
 
     fn input(name: &str, kind: InputKind) -> ScriptInput {
@@ -311,14 +161,6 @@ mod tests {
         }
     }
 
-    fn new_script(name: &str, inputs: Vec<ScriptInput>) -> NewScript {
-        NewScript {
-            name: name.to_string(),
-            body: "echo hi".to_string(),
-            inputs,
-        }
-    }
-
     fn values(pairs: &[(&str, &str)]) -> InputValues {
         pairs
             .iter()
@@ -331,68 +173,6 @@ mod tests {
             Err(AppError::InvalidArgument(message)) => message,
             other => panic!("expected an invalid argument, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn script_names_must_be_usable_as_archive_file_names() {
-        for name in ["setup", "set-hostname_2.v1", "A1"] {
-            new_script(name, vec![]).validate().unwrap();
-        }
-        new_script(&"a".repeat(MAX_SCRIPT_NAME_LEN), vec![])
-            .validate()
-            .unwrap();
-        let too_long = "a".repeat(MAX_SCRIPT_NAME_LEN + 1);
-        for name in ["", ".hidden", "with space", "a/b", "..", "naïve", &too_long] {
-            rejected(new_script(name, vec![]).validate());
-        }
-    }
-
-    #[test]
-    fn a_script_needs_a_body() {
-        let mut script = new_script("setup", vec![]);
-        script.body = " \n".to_string();
-        assert!(rejected(script.validate()).contains("empty body"));
-    }
-
-    #[test]
-    fn input_names_are_lowercase_identifiers_declared_once() {
-        rejected(new_script("s", vec![input("Hostname", InputKind::Text)]).validate());
-        rejected(new_script("s", vec![input("host-name", InputKind::Text)]).validate());
-        let twice = vec![
-            input("site", InputKind::Text),
-            input("site", InputKind::Number),
-        ];
-        assert!(rejected(new_script("s", twice).validate()).contains("twice"));
-        new_script("s", vec![input("site_2", InputKind::Text)])
-            .validate()
-            .unwrap();
-    }
-
-    #[test]
-    fn only_choice_inputs_have_choices_and_they_are_distinct() {
-        rejected(new_script("s", vec![input("mode", InputKind::Choice)]).validate());
-
-        let mut text = input("mode", InputKind::Text);
-        text.choices = vec!["a".into()];
-        rejected(new_script("s", vec![text]).validate());
-
-        let mut repeated = input("mode", InputKind::Choice);
-        repeated.choices = vec!["a".into(), "a".into()];
-        rejected(new_script("s", vec![repeated]).validate());
-    }
-
-    #[test]
-    fn a_default_value_must_be_valid_for_its_kind() {
-        let mut number = input("count", InputKind::Number);
-        number.default_value = Some("many".into());
-        rejected(new_script("s", vec![number.clone()]).validate());
-        number.default_value = Some("2.5".into());
-        new_script("s", vec![number]).validate().unwrap();
-
-        let mut choice = input("mode", InputKind::Choice);
-        choice.choices = vec!["fast".into(), "safe".into()];
-        choice.default_value = Some("slow".into());
-        rejected(new_script("s", vec![choice]).validate());
     }
 
     #[test]

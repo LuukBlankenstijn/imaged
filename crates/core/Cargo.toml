@@ -16,6 +16,7 @@ futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 imaged-model = { workspace = true, features = ["axum-error", "sqlx-error"] }
+imaged-archive.workspace = true
 tokio-util = { workspace = true, features = ["io", "rt"] }
 injectable.workspace = true
 
@@ -31,8 +32,6 @@ socket2 = { version = "0.6", features = ["all"] }
 parking_lot = "0.12.5"
 async-tftp = "0.4.2"
 futures-lite = "2.6.1"
-astral-tokio-tar = { version = "0.7.0", default-features = false }
-sha2 = "0.10.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 scuttlecast.workspace = true

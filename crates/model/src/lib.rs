@@ -3,6 +3,7 @@ pub mod error;
 #[cfg(feature = "logging")]
 mod logging;
 mod multicast;
+pub mod script;
 pub mod script_env;
 mod types;
 

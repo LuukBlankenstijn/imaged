@@ -14,6 +14,7 @@
   tailwindcss_4,
   wasm-bindgen-cli,
   binaryen,
+  imagingTools,
 }:
 
 mkShell {
@@ -29,6 +30,7 @@ mkShell {
     tailwindcss_4
     wasm-bindgen-cli
     binaryen
+    imagingTools
   ];
 
   env = {

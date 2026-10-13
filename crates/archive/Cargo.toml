@@ -1,0 +1,21 @@
+[package]
+name = "imaged-archive"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "imaged_archive"
+path = "src/lib.rs"
+
+[dependencies]
+imaged-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+astral-tokio-tar.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+futures.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

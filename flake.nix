@@ -129,6 +129,27 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain buildRustToolchain;
 
+        hostPartclone = pkgs.callPackage ./nix/packages/partclone.nix { };
+        imagingTools = pkgs.buildEnv {
+          name = "imaged-imaging-tools";
+          paths = [
+            hostPartclone
+            pkgs.gptfdisk
+            pkgs.util-linux
+            pkgs.e2fsprogs
+          ];
+          pathsToLink = [ "/bin" ];
+        };
+        diskBuildTools = pkgs.buildEnv {
+          name = "imaged-disk-build-tools";
+          paths = [
+            imagingTools
+            pkgs.dosfstools
+            pkgs.mtools
+          ];
+          pathsToLink = [ "/bin" ];
+        };
+
         wasm-bindgen-cli =
           let
             lock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
@@ -150,6 +171,22 @@
 
         imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
           inherit craneLib bootAssets ipxeAssets;
+          testTools = diskBuildTools;
+        };
+
+        devShell = pkgs.callPackage ./nix/devshell.nix {
+          inherit
+            kernels
+            ipxeAssets
+            build-initramfs
+            run-vm
+            run-vm-pxe
+            setup-net
+            teardown-net
+            wasm-bindgen-cli
+            ;
+          rustToolchain = devRustToolchain;
+          imagingTools = diskBuildTools;
         };
       in
       {
@@ -186,19 +223,7 @@
           };
         };
 
-        devShells.default = pkgs.callPackage ./nix/devshell.nix {
-          inherit
-            kernels
-            ipxeAssets
-            build-initramfs
-            run-vm
-            run-vm-pxe
-            setup-net
-            teardown-net
-            wasm-bindgen-cli
-            ;
-          rustToolchain = devRustToolchain;
-        };
+        devShells.default = devShell;
       }
     )
     // {

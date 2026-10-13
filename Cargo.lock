@@ -2510,6 +2510,7 @@ dependencies = [
  "axum",
  "dioxus",
  "futures",
+ "imaged-archive",
  "imaged-core",
  "imaged-model",
  "injectable",
@@ -2520,6 +2521,20 @@ dependencies = [
  "tower",
  "tracing",
  "wakey",
+]
+
+[[package]]
+name = "imaged-archive"
+version = "0.1.0"
+dependencies = [
+ "astral-tokio-tar",
+ "chrono",
+ "futures",
+ "imaged-model",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -2536,6 +2551,7 @@ dependencies = [
  "enum_dispatch",
  "futures",
  "imaged-api-client",
+ "imaged-disk",
  "imaged-model",
  "local-ip-address",
  "mac_address",
@@ -2552,7 +2568,6 @@ dependencies = [
 name = "imaged-core"
 version = "0.1.0"
 dependencies = [
- "astral-tokio-tar",
  "async-tftp",
  "async-trait",
  "axum",
@@ -2561,6 +2576,7 @@ dependencies = [
  "derive_more",
  "futures",
  "futures-lite",
+ "imaged-archive",
  "imaged-model",
  "injectable",
  "local-ip-address",
@@ -2568,7 +2584,6 @@ dependencies = [
  "scuttlecast",
  "serde",
  "serde_json",
- "sha2",
  "socket2",
  "sqlx",
  "tokio",
@@ -2576,6 +2591,16 @@ dependencies = [
  "tokio-util",
  "tower",
  "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "imaged-disk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "tokio",
  "tracing",
 ]
 

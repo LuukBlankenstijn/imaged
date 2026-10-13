@@ -10,11 +10,12 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::image::ImageStatus;
-use core::domain::script::{InputKind, NewScript, ScriptInput};
+use core::domain::script::NewScript;
 use core::domain::task::TaskState;
 use core::domain::task::TaskType;
 use core::error::AppError;
 use imaged_model::ServerEvent;
+use imaged_model::script::{InputKind, ScriptInput};
 use std::collections::BTreeMap;
 
 use crate::model;

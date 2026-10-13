@@ -99,7 +99,7 @@ fn pt(number: i64) -> PartitionTarget {
     PartitionTarget {
         device: format!("/dev/fake{number}"),
         number,
-        fstype: "ext4".to_string(),
+        filesystem: imaged_disk::Filesystem::Ext4,
         size: 0,
     }
 }

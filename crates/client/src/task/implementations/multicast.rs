@@ -1,9 +1,12 @@
-use async_compression::tokio::bufread::ZstdDecoder;
+use std::path::Path;
+
 use derive_more::{Constructor, Display};
-use tokio::{io::AsyncReadExt, process::Command};
+use imaged_disk::{restore_compressed, restore_partition_table};
+use tokio::io::AsyncReadExt;
 use tracing::{debug, info};
 
-use super::ClientTaskExt;
+use super::{ClientTaskExt, PARTCLONE_LOG};
+use crate::sys::disk::{BlockDevice, PartitionTarget};
 use crate::{task::PARTTABLE_TMP, transport::multicast::multicast_stream};
 
 #[derive(Clone, Display, Constructor)]
@@ -24,92 +27,31 @@ impl ClientTaskExt for MulticastTask {
             .await
             .map_err(|e| anyhow::anyhow!("failed to receive the partition table: {e}"))?;
         tokio::fs::write(PARTTABLE_TMP, buffer).await?;
-
-        let status = Command::new("sgdisk")
-            .args(["--zap-all", device])
-            .kill_on_drop(true)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("sgdisk --zap-all failed");
-        }
-
-        let status = Command::new("sgdisk")
-            .args([&format!("--load-backup={PARTTABLE_TMP}"), device])
-            .kill_on_drop(true)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("sgdisk --load-backup failed");
-        }
-
-        let status = Command::new("partprobe")
-            .kill_on_drop(true)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("partprobe failed");
-        }
+        restore_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
 
         let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
         Ok(())
     }
 
-    async fn plan_partitions(
-        &self,
-        disk: &crate::sys::disk::BlockDevice,
-    ) -> anyhow::Result<Vec<crate::sys::disk::PartitionTarget>> {
+    async fn plan_partitions(&self, disk: &BlockDevice) -> anyhow::Result<Vec<PartitionTarget>> {
         super::image_partitions(self.task_id, disk).await
     }
 
-    async fn handle_partition(
-        &self,
-        partition: crate::sys::disk::PartitionTarget,
-    ) -> anyhow::Result<()> {
+    async fn handle_partition(&self, partition: PartitionTarget) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download over multicast");
         let stream = multicast_stream(self.task_id, partition.number)?;
-        let mut decoder = ZstdDecoder::new(stream);
 
-        info!(partition_number=%partition.number, fstype=%partition.fstype, "restoring partition");
-        let partclone_bin = partition.partclone_binary()?;
-        let mut child = tokio::process::Command::new(partclone_bin)
-            .args([
-                "--restore",
-                "--logfile",
-                "/tmp/partclone-log",
-                "--source",
-                "-",
-                "--output",
-                &partition.device,
-            ])
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .stdin(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-
-        let mut child_stdin = child.stdin.take().expect("stdin piped");
-
-        tokio::io::copy(&mut decoder, &mut child_stdin)
-            .await
-            .map_err(|e| anyhow::anyhow!("failed piping multicast stream into partclone: {e}"))?;
-
-        // Close partclone's stdin so it observes EOF and can finish; otherwise
-        // the still-open pipe and child.wait() deadlock each other.
-        drop(child_stdin);
-
-        let status = child.wait().await?;
-        if !status.success() {
-            anyhow::bail!("partclone exited with error: {}", status);
-        }
-
-        Ok(())
+        info!(partition_number=%partition.number, filesystem=%partition.filesystem, "restoring partition");
+        restore_compressed(
+            partition.filesystem,
+            stream,
+            Path::new(&partition.device),
+            Path::new(PARTCLONE_LOG),
+        )
+        .await
     }
 
-    async fn after_partitions(
-        &self,
-        partitions: &[crate::sys::disk::PartitionTarget],
-    ) -> anyhow::Result<()> {
+    async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
         crate::task::post_install::run(self.task_id, partitions).await
     }
 

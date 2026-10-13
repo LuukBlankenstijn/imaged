@@ -11,11 +11,11 @@ use dioxus::fullstack::body::Body;
 #[cfg(feature = "server")]
 use futures::TryStreamExt;
 #[cfg(feature = "server")]
+use imaged_archive::archive_file_name;
+#[cfg(feature = "server")]
 use imaged_core::di::{ArchiveSvc, ImageRepo, ImageSvc, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
-#[cfg(feature = "server")]
-use imaged_core::service::archive::archive_file_name;
 use imaged_model::error::Result;
 #[cfg(feature = "server")]
 use tokio_util::io::StreamReader;

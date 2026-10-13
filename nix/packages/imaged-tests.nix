@@ -7,6 +7,7 @@
   util-linux,
   bootAssets,
   ipxeAssets,
+  testTools,
 }:
 
 let
@@ -50,6 +51,7 @@ let
     nativeBuildInputs = [
       pkg-config
       tailwindcss_4
+      testTools
     ];
     buildInputs = [ sqlite ];
     SQLX_OFFLINE = "true";

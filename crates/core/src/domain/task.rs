@@ -1,7 +1,7 @@
-use crate::domain::script::InputValues;
 use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
+use imaged_model::script::InputValues;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::str::FromStr as _;

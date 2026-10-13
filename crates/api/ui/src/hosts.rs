@@ -8,12 +8,14 @@ use injectable::inject;
 #[cfg(feature = "server")]
 use imaged_core::di::{HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::script::{DeployInputs, InputValues, resolve_inputs};
+use imaged_core::domain::script::{DeployInputs, resolve_inputs};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
 use imaged_core::error::AppError;
 use imaged_model::error::Result;
+#[cfg(feature = "server")]
+use imaged_model::script::InputValues;
 #[cfg(feature = "server")]
 use std::collections::BTreeMap;
 
