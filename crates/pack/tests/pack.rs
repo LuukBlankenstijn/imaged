@@ -251,7 +251,7 @@ async fn a_disk_image_packs_like_a_capture() {
     std::fs::write(&zeta, "#!/bin/sh\nhostnamectl hostname \"$hostname\"\n").unwrap();
     std::fs::write(
         dir.join("zeta.inputs.json"),
-        r#"[{"name": "hostname", "label": "Hostname", "kind": "text", "required": true, "per_machine": true}]"#,
+        r#"[{"name": "hostname", "label": "Hostname", "description": "Name the machine announces", "kind": "text", "required": true, "per_machine": true}]"#,
     )
     .unwrap();
     let alpha = dir.join("alpha.sh");
@@ -306,6 +306,7 @@ async fn a_disk_image_packs_like_a_capture() {
         [ScriptInput {
             name: "hostname".to_string(),
             label: "Hostname".to_string(),
+            description: Some("Name the machine announces".to_string()),
             kind: InputKind::Text,
             required: true,
             default_value: None,

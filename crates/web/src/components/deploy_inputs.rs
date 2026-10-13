@@ -207,6 +207,11 @@ fn FieldLabel(input: ScriptInput) -> Element {
                 span { class: "ml-0.5 text-amber-500", "*" }
             }
         }
+        if let Some(description) = &input.description {
+            p { class: "mb-1 whitespace-pre-line text-xs font-normal text-fog-600",
+                "{description}"
+            }
+        }
     }
 }
 

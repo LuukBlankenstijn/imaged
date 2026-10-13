@@ -152,6 +152,7 @@ fn ScriptRow(
 pub(crate) struct InputDraft {
     pub name: String,
     pub label: String,
+    pub description: String,
     pub kind: InputKind,
     pub required: bool,
     pub default_value: String,
@@ -164,6 +165,7 @@ impl InputDraft {
         Self {
             name: String::new(),
             label: String::new(),
+            description: String::new(),
             kind: InputKind::Text,
             required: false,
             default_value: String::new(),
@@ -178,6 +180,7 @@ impl From<&ScriptInput> for InputDraft {
         Self {
             name: input.name.clone(),
             label: input.label.clone(),
+            description: input.description.clone().unwrap_or_default(),
             kind: input.kind,
             required: input.required,
             default_value: input.default_value.clone().unwrap_or_default(),
@@ -203,6 +206,7 @@ impl From<&InputDraft> for ScriptInput {
         Self {
             name: draft.name.trim().to_string(),
             label: draft.label.trim().to_string(),
+            description: Some(draft.description.clone()),
             kind: draft.kind,
             required: draft.required,
             default_value: (!default_value.is_empty()).then(|| default_value.to_string()),
@@ -305,7 +309,7 @@ fn ScriptEditor(
                                 thead {
                                     tr { class: "text-fog-500",
                                         th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Name" }
-                                        th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Label" }
+                                        th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Label & description" }
                                         th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Kind" }
                                         th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Default" }
                                         th { class: "px-2 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Choices" }
@@ -374,7 +378,7 @@ fn InputRow(
     let is_choice = draft.kind == InputKind::Choice;
 
     rsx! {
-        tr { class: "border-t border-line/60 align-middle",
+        tr { class: "border-t border-line/60 align-top",
             td { class: "px-2 py-1.5",
                 input {
                     class: "{FIELD_CLASSES} w-32 font-mono text-xs",
@@ -384,11 +388,21 @@ fn InputRow(
                 }
             }
             td { class: "px-2 py-1.5",
-                input {
-                    class: "{FIELD_CLASSES} w-28 text-xs",
-                    placeholder: "{draft.name}",
-                    value: "{draft.label}",
-                    oninput: move |e| inputs.write()[index].label = e.value(),
+                div { class: "flex flex-col gap-1",
+                    input {
+                        class: "{FIELD_CLASSES} w-48 text-xs",
+                        placeholder: "{draft.name}",
+                        value: "{draft.label}",
+                        oninput: move |e| inputs.write()[index].label = e.value(),
+                    }
+                    textarea {
+                        class: "{FIELD_CLASSES} block w-48 text-xs leading-snug",
+                        rows: 2,
+                        maxlength: 1000,
+                        placeholder: "Description (optional)",
+                        value: "{draft.description}",
+                        oninput: move |e| inputs.write()[index].description = e.value(),
+                    }
                 }
             }
             td { class: "px-2 py-1.5",

@@ -94,6 +94,7 @@ impl From<DScriptInput> for model::ScriptInput {
         Self {
             name: i.name,
             label: i.label,
+            description: i.description,
             kind: i.kind,
             required: i.required,
             default_value: i.default_value,
@@ -108,6 +109,7 @@ impl From<model::ScriptInput> for DScriptInput {
         Self {
             name: i.name,
             label: i.label,
+            description: i.description,
             kind: i.kind,
             required: i.required,
             default_value: i.default_value,

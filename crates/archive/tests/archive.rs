@@ -136,6 +136,7 @@ fn hostname_input() -> ScriptInput {
     ScriptInput {
         name: "hostname".into(),
         label: "Hostname".into(),
+        description: Some("Name the machine announces on the network".into()),
         kind: InputKind::Text,
         required: true,
         default_value: None,
@@ -241,7 +242,9 @@ async fn written_archives_hold_the_manifest_first_followed_by_the_checksummed_fi
                     "file": "scripts/set-hostname.sh",
                     "sha256": sha256(&files[4].1),
                     "inputs": [{
-                        "name": "hostname", "label": "Hostname", "kind": "text", "required": true,
+                        "name": "hostname", "label": "Hostname",
+                        "description": "Name the machine announces on the network",
+                        "kind": "text", "required": true,
                         "default_value": null, "per_machine": true, "choices": []
                     }],
                 },

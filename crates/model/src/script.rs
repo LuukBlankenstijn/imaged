@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use derive_more::{Display, FromStr, IsVariant};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{AppError, Result};
 
@@ -21,6 +21,12 @@ pub struct ScriptInput {
     pub name: String,
     #[serde(default)]
     pub label: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_description",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<String>,
     pub kind: InputKind,
     #[serde(default)]
     pub required: bool,
@@ -43,6 +49,7 @@ pub struct DeployInputs {
 }
 
 pub const MAX_SCRIPT_NAME_LEN: usize = 64;
+pub const MAX_INPUT_DESCRIPTION_LEN: usize = 1000;
 
 impl ScriptInput {
     pub fn check(&self, value: &str) -> std::result::Result<(), String> {
@@ -100,12 +107,50 @@ impl ScriptInput {
                 self.name
             )));
         }
+        if let Some(description) = &self.description
+            && description.chars().count() > MAX_INPUT_DESCRIPTION_LEN
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "input `{}` description is longer than {MAX_INPUT_DESCRIPTION_LEN} characters",
+                self.name
+            )));
+        }
+        if self
+            .description
+            .as_deref()
+            .is_some_and(|description| description.contains('\0'))
+        {
+            return Err(AppError::InvalidArgument(format!(
+                "input `{}` description cannot contain NUL bytes",
+                self.name
+            )));
+        }
         if let Some(default) = &self.default_value {
             self.check(default)
                 .map_err(|e| AppError::InvalidArgument(format!("default value is invalid: {e}")))?;
         }
         Ok(())
     }
+}
+
+pub fn deserialize_description<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(
+        Option::<String>::deserialize(deserializer)?.and_then(|text| {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.len() == text.len() {
+                Some(text)
+            } else {
+                Some(trimmed.to_string())
+            }
+        }),
+    )
 }
 
 pub fn validate_script_name(name: &str) -> Result {
@@ -164,6 +209,7 @@ mod tests {
         ScriptInput {
             name: name.to_string(),
             label: name.to_string(),
+            description: None,
             kind,
             required: false,
             default_value: None,
@@ -237,5 +283,56 @@ mod tests {
         choice.choices = vec!["fast".into(), "safe".into()];
         choice.default_value = Some("slow".into());
         rejected(validate("s", &[choice]));
+    }
+
+    #[test]
+    fn a_description_is_limited_to_1000_characters() {
+        let mut text = input("site", InputKind::Text);
+        text.description = Some("é".repeat(MAX_INPUT_DESCRIPTION_LEN));
+        validate("s", &[text.clone()]).unwrap();
+        text.description = Some("é".repeat(MAX_INPUT_DESCRIPTION_LEN + 1));
+        assert!(rejected(validate("s", &[text])).contains("description"));
+    }
+
+    #[test]
+    fn a_description_cannot_contain_nul_bytes() {
+        let mut text = input("site", InputKind::Text);
+        text.description = Some("before\0after".into());
+        assert!(rejected(validate("s", &[text])).contains("description cannot contain NUL"));
+    }
+
+    fn deserialized_description(description: &str) -> Option<String> {
+        let mut json = serde_json::to_value(input("site", InputKind::Text)).unwrap();
+        json["description"] = description.into();
+        serde_json::from_value::<ScriptInput>(json)
+            .unwrap()
+            .description
+    }
+
+    #[test]
+    fn a_blank_description_deserializes_as_none() {
+        assert_eq!(deserialized_description(""), None);
+        assert_eq!(deserialized_description(" \n\t "), None);
+    }
+
+    #[test]
+    fn a_description_is_trimmed_when_deserialized() {
+        assert_eq!(
+            deserialized_description("  Name the machine\n").as_deref(),
+            Some("Name the machine")
+        );
+        assert_eq!(
+            deserialized_description("Name the  machine").as_deref(),
+            Some("Name the  machine")
+        );
+    }
+
+    #[test]
+    fn a_missing_description_is_omitted_from_json() {
+        let text = input("site", InputKind::Text);
+        let json = serde_json::to_value(&text).unwrap();
+        assert!(json.get("description").is_none());
+        let back: ScriptInput = serde_json::from_value(json).unwrap();
+        assert_eq!(back, text);
     }
 }

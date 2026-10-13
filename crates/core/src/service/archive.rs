@@ -343,6 +343,7 @@ mod tests {
         ScriptInput {
             name: "hostname".into(),
             label: "Hostname".into(),
+            description: Some("Name the machine announces on the network".into()),
             kind: InputKind::Text,
             required: true,
             default_value: None,
@@ -424,6 +425,7 @@ mod tests {
             ]
         );
         assert_eq!(scripts[0].id, hostname.id);
+        assert_eq!(scripts[0].inputs, [hostname_input()]);
         assert_ne!(scripts[1].id, cleanup.id);
         assert_eq!(c.script_repo.get(cleanup.id).await.unwrap().name, "tidy");
     }

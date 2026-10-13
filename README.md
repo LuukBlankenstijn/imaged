@@ -181,6 +181,7 @@ is `<name>.sh`, the script name its stem; its inputs come from a sibling
   {
     "name": "hostname",
     "label": "Hostname",
+    "description": "Name the machine announces on the network",
     "kind": "text",
     "required": true,
     "per_machine": true
@@ -257,9 +258,12 @@ kernels and initramfs over TFTP, so no separate TFTP server is needed.
 
 Scripts are a library on the server (`/api/ui/scripts`): a unique name (letters,
 digits, `-`, `_`, `.`), a body and a list of declared inputs. An input has a
-name (`[a-z0-9_]+`), a label, a kind (`text`, `number` or `choice` with its
-choices), whether it is required, an optional default and whether its value is
-given per machine or shared by every machine of a deployment. An image keeps an
+name (`[a-z0-9_]+`), a label, an optional description (at most 1000
+characters, shown under the field wherever its value is entered: the
+dashboard's deploy and multicast dialogs and the provisioner), a kind (`text`,
+`number` or `choice` with its choices), whether it is required, an optional
+default and whether its value is given per machine or shared by every machine
+of a deployment. An image keeps an
 ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
 current version; a script that an image still uses cannot be deleted. Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the

@@ -201,6 +201,7 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
             inputs: vec![ScriptInput {
                 name: "hostname".to_string(),
                 label: "Hostname".to_string(),
+                description: None,
                 kind: InputKind::Text,
                 required: true,
                 default_value: None,

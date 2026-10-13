@@ -229,6 +229,7 @@ fn input(name: &str, per_machine: bool, default_value: Option<&str>) -> ScriptIn
     ScriptInput {
         name: name.to_string(),
         label: String::new(),
+        description: None,
         kind: InputKind::Text,
         required: false,
         default_value: default_value.map(str::to_string),
@@ -321,6 +322,7 @@ fn a_choice_input_draft_saves_its_trimmed_comma_separated_choices() {
     let draft = InputDraft {
         name: " edition ".to_string(),
         label: " Edition ".to_string(),
+        description: String::new(),
         kind: InputKind::Choice,
         required: true,
         default_value: " pro ".to_string(),
@@ -341,6 +343,7 @@ fn a_draft_switched_away_from_choice_drops_its_choices_and_an_empty_default() {
     let draft = InputDraft {
         name: "count".to_string(),
         label: String::new(),
+        description: String::new(),
         kind: InputKind::Number,
         required: false,
         default_value: "  ".to_string(),

@@ -1380,6 +1380,7 @@ fn text_input(name: &str, per_machine: bool) -> ScriptInput {
     ScriptInput {
         name: name.into(),
         label: name.into(),
+        description: None,
         kind: InputKind::Text,
         required: true,
         default_value: None,

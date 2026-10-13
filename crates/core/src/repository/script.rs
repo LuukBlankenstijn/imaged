@@ -24,6 +24,7 @@ struct InputRow {
     script_id: i64,
     name: String,
     label: String,
+    description: Option<String>,
     kind: String,
     required: bool,
     default_value: Option<String>,
@@ -41,6 +42,7 @@ impl SqliteScriptRepository {
                  script_id,
                  name,
                  label,
+                 description,
                  kind,
                  required as "required: bool",
                  default_value,
@@ -57,6 +59,7 @@ impl SqliteScriptRepository {
             inputs.entry(row.script_id).or_default().push(ScriptInput {
                 name: row.name,
                 label: row.label,
+                description: row.description,
                 kind: input_kind(&row.kind)?,
                 required: row.required,
                 default_value: row.default_value,
@@ -91,12 +94,13 @@ async fn insert_inputs(conn: &mut SqliteConnection, script_id: i64, script: &New
         let choices = Json(&input.choices);
         sqlx::query!(
             "INSERT INTO script_inputs \
-             (script_id, position, name, label, kind, required, default_value, per_machine, choices) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (script_id, position, name, label, description, kind, required, default_value, per_machine, choices) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             script_id,
             position,
             input.name,
             input.label,
+            input.description,
             kind,
             input.required,
             input.default_value,
@@ -301,6 +305,7 @@ mod tests {
         ScriptInput {
             name: name.to_string(),
             label: format!("The {name}"),
+            description: (kind == InputKind::Text).then(|| format!("What {name} to use")),
             kind,
             required: true,
             default_value: choices.first().map(|c| c.to_string()),

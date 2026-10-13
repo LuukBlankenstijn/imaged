@@ -919,6 +919,7 @@ fn script_input(name: &str, default_value: Option<&str>) -> ScriptInput {
     ScriptInput {
         name: name.to_string(),
         label: name.to_string(),
+        description: None,
         kind: InputKind::Text,
         required: false,
         default_value: default_value.map(str::to_string),

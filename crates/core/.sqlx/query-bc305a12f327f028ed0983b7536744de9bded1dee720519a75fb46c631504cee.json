@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO script_inputs (script_id, position, name, label, description, kind, required, default_value, per_machine, choices) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "bc305a12f327f028ed0983b7536744de9bded1dee720519a75fb46c631504cee"
+}

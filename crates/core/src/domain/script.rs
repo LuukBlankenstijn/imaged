@@ -138,6 +138,7 @@ mod tests {
         ScriptInput {
             name: name.to_string(),
             label: name.to_string(),
+            description: None,
             kind,
             required: false,
             default_value: None,

@@ -119,6 +119,11 @@ pub struct UpdateGroupRequest {
 pub struct ScriptInput {
     pub name: String,
     pub label: String,
+    #[serde(
+        default,
+        deserialize_with = "imaged_model::script::deserialize_description"
+    )]
+    pub description: Option<String>,
     pub kind: InputKind,
     pub required: bool,
     pub default_value: Option<String>,
