@@ -55,7 +55,7 @@ impl<R: AsyncRead + Unpin> ArchiveReader<'_, R> {
             manifest,
         } = self;
         tokio::fs::create_dir_all(dir).await.map_err(store_failed)?;
-        let mut bodies = receive(&mut entries, dir, manifest.checksums()?).await?;
+        let mut bodies = receive(&mut entries, Some(dir), manifest.checksums()?).await?;
         drop(entries);
         read_to_end(archive).await?;
         let scripts = manifest
@@ -72,6 +72,18 @@ impl<R: AsyncRead + Unpin> ArchiveReader<'_, R> {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Unpacked { manifest, scripts })
+    }
+
+    pub async fn verify(self) -> Result<Manifest> {
+        let Self {
+            archive,
+            mut entries,
+            manifest,
+        } = self;
+        receive(&mut entries, None, manifest.checksums()?).await?;
+        drop(entries);
+        read_to_end(archive).await?;
+        Ok(manifest)
     }
 }
 
@@ -117,7 +129,7 @@ where
 
 async fn receive<R>(
     entries: &mut Entries<'_, R>,
-    dir: &Path,
+    dir: Option<&Path>,
     checksums: BTreeMap<&str, &str>,
 ) -> Result<BTreeMap<String, String>>
 where
@@ -159,7 +171,7 @@ where
             scripts.insert(name.clone(), body);
             sha256
         } else {
-            write_hashed(&mut entry, &dir.join(&name)).await?
+            write_hashed(&mut entry, dir.map(|dir| dir.join(&name)).as_deref()).await?
         };
         if !actual.eq_ignore_ascii_case(expected) {
             return Err(AppError::InvalidArgument(format!(
@@ -199,11 +211,14 @@ where
     })
 }
 
-async fn write_hashed<R>(data: &mut R, path: &Path) -> Result<String>
+async fn write_hashed<R>(data: &mut R, path: Option<&Path>) -> Result<String>
 where
     R: AsyncRead + Unpin,
 {
-    let mut file = File::create(path).await.map_err(store_failed)?;
+    let mut file = match path {
+        Some(path) => Some(File::create(path).await.map_err(store_failed)?),
+        None => None,
+    };
     let mut hasher = Sha256::new();
     let mut chunk = vec![0; CHUNK_BYTES];
     loop {
@@ -212,9 +227,13 @@ where
             break;
         }
         hasher.update(&chunk[..read]);
-        file.write_all(&chunk[..read]).await.map_err(store_failed)?;
+        if let Some(file) = &mut file {
+            file.write_all(&chunk[..read]).await.map_err(store_failed)?;
+        }
     }
-    file.flush().await.map_err(store_failed)?;
+    if let Some(file) = &mut file {
+        file.flush().await.map_err(store_failed)?;
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 

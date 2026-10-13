@@ -292,6 +292,32 @@ async fn unpacking_a_written_archive_reproduces_its_files_and_scripts() {
 }
 
 #[tokio::test]
+async fn verifying_checks_every_file_without_storing_any() {
+    let sources = TestDir::new();
+    let (expected, archive) = written(&sources.0).await;
+    let mut input = archive.as_slice();
+    let verified = ArchiveReader::open(&mut input)
+        .await
+        .unwrap()
+        .verify()
+        .await
+        .unwrap();
+    assert_eq!(verified, expected);
+    assert!(input.is_empty());
+
+    let tampered = tar(&[
+        ("manifest.json", &manifest(&[(1, SMALL)])),
+        ("parttable.bin", TABLE),
+        ("p-1.pcl", b"tampered"),
+    ])
+    .await;
+    assert_eq!(
+        invalid_argument(open(&tampered).await.unwrap().verify().await),
+        "checksum mismatch for `p-1.pcl`"
+    );
+}
+
+#[tokio::test]
 async fn writing_refuses_an_invalid_manifest_before_writing_any_byte() {
     let sources = TestDir::new();
     let mut bad_script = contents(&sources.0);
