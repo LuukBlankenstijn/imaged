@@ -6,7 +6,6 @@
   tailwindcss_4,
   util-linux,
   bootAssets,
-  ipxeAssets,
   testTools,
 }:
 
@@ -43,13 +42,10 @@ let
     SQLX_OFFLINE = "true";
   };
 
-  # pxe.rs embeds the kernels and initramfs, tftp.rs embeds the iPXE
-  # bootloaders, and web/app.rs references the stylesheet through asset! -- all
-  # resolved at compile time. None are tracked, and none exist in the dummy tree
-  # crane builds deps against, so they are materialised for the test build only.
+  # web/app.rs references the stylesheet through asset!, resolved at compile
+  # time. It is not tracked and does not exist in the dummy tree crane builds
+  # deps against, so it is generated for the test build only.
   realSourcePrep = ''
-    mkdir -p assets
-    cp -rL --no-preserve=mode ${bootAssets}/. ${ipxeAssets}/. assets/
     tailwindcss -i crates/web/input.css -o crates/web/assets/tailwind.css
   '';
 in
@@ -58,5 +54,6 @@ craneLib.cargoTest (
   // {
     cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { doCheck = false; });
     postPatch = realSourcePrep;
+    IMAGED_BOOT_ASSETS = bootAssets;
   }
 )

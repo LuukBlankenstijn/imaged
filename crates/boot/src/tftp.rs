@@ -8,9 +8,10 @@ use futures_lite::io::Cursor;
 
 use crate::pxe::Arch;
 
-static IPXE: &[u8] = include_bytes!("../../../assets/ipxe.efi");
-static IPXE_ARM64: &[u8] = include_bytes!("../../../assets/ipxe-arm64.efi");
-static UNDIONLY: &[u8] = include_bytes!("../../../assets/undionly.kpxe");
+static IPXE: &[u8] = include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/ipxe.efi"));
+static IPXE_ARM64: &[u8] =
+    include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/ipxe-arm64.efi"));
+static UNDIONLY: &[u8] = include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/undionly.kpxe"));
 
 fn boot_file(path: &str) -> Option<&'static [u8]> {
     match path {

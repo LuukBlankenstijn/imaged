@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use imaged_model::script::{InputValues, ScriptInput, validate_script};
 
-use crate::error::{AppError, Result};
+use imaged_model::error::{AppError, Result};
+use imaged_model::script::DeployInputs;
 
 #[derive(Debug, Clone)]
 pub struct Script {
@@ -19,12 +20,6 @@ pub struct NewScript {
     pub name: String,
     pub body: String,
     pub inputs: Vec<ScriptInput>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct DeployInputs {
-    pub shared: InputValues,
-    pub per_machine: BTreeMap<i64, InputValues>,
 }
 
 impl NewScript {

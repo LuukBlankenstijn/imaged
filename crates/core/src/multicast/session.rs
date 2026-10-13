@@ -5,7 +5,13 @@ use std::{
     time::Duration,
 };
 
-use imaged_model::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
+use imaged_model::{
+    MULTICAST_JOIN_WINDOW,
+    error::{AppError, Result},
+    get_multicast_port,
+    multicast::{ReceiverProgress, TransferPhase},
+    multicast_group,
+};
 use scuttlecast::{
     error::ProtoError,
     sender::{Sender, Sending},
@@ -14,23 +20,18 @@ use scuttlecast::{
 use tokio::{sync::watch, time::Instant};
 use tracing::{info, warn};
 
-use super::{MulticastProgress, ReceiverProgress, TransferPhase, Worker};
-use crate::{
-    domain::{host::Host, task::Task},
-    error::{AppError, Result},
-};
+use super::{MulticastProgress, Worker};
+use crate::domain::{host::Host, task::Task};
 
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const PORT_RELEASE_WAIT: Duration = Duration::from_secs(2);
 const PORT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
-impl From<Phase> for TransferPhase {
-    fn from(phase: Phase) -> Self {
-        match phase {
-            Phase::Gathering => Self::Gathering,
-            Phase::Sending => Self::Sending,
-            Phase::Draining => Self::Draining,
-        }
+fn transfer_phase(phase: Phase) -> TransferPhase {
+    match phase {
+        Phase::Gathering => TransferPhase::Gathering,
+        Phase::Sending => TransferPhase::Sending,
+        Phase::Draining => TransferPhase::Draining,
     }
 }
 
@@ -298,7 +299,7 @@ impl TransferStep {
         let bytes_per_second = state.bytes_per_second();
         MulticastProgress {
             task_id: self.task_id,
-            phase: state.phase.into(),
+            phase: transfer_phase(state.phase),
             fraction: match self.total_bytes {
                 0 => 0.0,
                 total => (sent as f64 / total as f64).min(1.0),

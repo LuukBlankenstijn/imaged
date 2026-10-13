@@ -21,7 +21,7 @@ async fn empty_image(s: &harness::TestServer) -> i64 {
 fn host_state(
     task: &imaged_core::domain::task::Task,
     host_id: i64,
-) -> imaged_core::domain::task::TaskState {
+) -> imaged_model::task::TaskState {
     task.hosts
         .iter()
         .find(|h| h.host_id == host_id)

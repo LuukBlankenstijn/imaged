@@ -1,13 +1,10 @@
 pub mod di;
 pub mod domain;
-pub mod error;
 pub mod listener;
 pub mod multicast;
-pub mod pxe;
 pub mod registry;
 pub mod repository;
 pub mod service;
-pub mod tftp;
 
 use std::{
     collections::BTreeMap, future::Future, net::SocketAddr, path::Path, sync::Arc, time::Duration,

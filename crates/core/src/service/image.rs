@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use crate::error::{AppError, Result};
 use bytes::Bytes;
 use derive_more::Constructor;
 use futures::Stream;
 use imaged_archive::manifest::{PARTITION_TABLE_FILE, partition_file};
+use imaged_model::error::{AppError, Result};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 

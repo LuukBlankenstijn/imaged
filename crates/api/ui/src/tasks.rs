@@ -8,10 +8,12 @@ use injectable::inject;
 #[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::task::{TaskState, TaskType};
+use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
-use imaged_core::error::AppError;
+use imaged_model::error::AppError;
 use imaged_model::error::Result;
+#[cfg(feature = "server")]
+use imaged_model::task::TaskState;
 
 #[get("/api/ui/tasks")]
 #[inject(task_repo: TaskRepo)]

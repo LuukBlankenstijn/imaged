@@ -1,6 +1,28 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferPhase {
+    Gathering,
+    Sending,
+    Draining,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReceiverProgress {
+    pub host_id: i64,
+    pub name: String,
+    pub joined: bool,
+    pub limiting: bool,
+    pub slices_behind: u32,
+    pub loss: f64,
+    pub naks: u64,
+    pub sink_stall_ms: u32,
+}
+
 /// Base port for a single file in a multicast transfer.
 ///
 /// Every file (partition table + each partition) gets its own port so a

@@ -3,10 +3,10 @@ use futures::stream;
 use reqwest::StatusCode;
 use serde_json::json;
 
-use imaged_core::domain::image::ImageStatus;
-use imaged_core::domain::task::TaskState;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::{MAC_HEADER, path};
+use imaged_model::image::ImageStatus;
+use imaged_model::task::TaskState;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 

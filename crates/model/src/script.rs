@@ -34,6 +34,14 @@ pub struct ScriptInput {
 
 pub type InputValues = BTreeMap<String, String>;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeployInputs {
+    #[serde(default)]
+    pub shared: InputValues,
+    #[serde(default)]
+    pub per_machine: BTreeMap<i64, InputValues>,
+}
+
 pub const MAX_SCRIPT_NAME_LEN: usize = 64;
 
 impl ScriptInput {

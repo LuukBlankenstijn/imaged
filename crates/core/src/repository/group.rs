@@ -1,8 +1,9 @@
-use crate::error::Result;
 use derive_more::Constructor;
+use imaged_model::error::Result;
+use imaged_model::group::Group;
 use sqlx::SqlitePool;
 
-use crate::domain::group::{Group, GroupRepository};
+use crate::domain::group::GroupRepository;
 
 #[derive(Debug, Constructor)]
 pub struct SqliteGroupRepository {
@@ -102,7 +103,7 @@ mod tests {
 
     use crate::build_test_container;
     use crate::di::DIContainer;
-    use crate::error::AppError;
+    use imaged_model::error::AppError;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 

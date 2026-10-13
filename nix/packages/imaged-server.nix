@@ -8,14 +8,13 @@
   wasm-bindgen-cli,
   binaryen,
   bootAssets,
-  ipxeAssets,
 }:
 
 let
   # sqlx::migrate! reads crates/core/migrations, the offline query cache lives
   # in crates/core/.sqlx, tailwind reads crates/web/input.css and dx reads
   # crates/server/Dioxus.toml, so the cargo source filter has to let those
-  # through. The kernels and initramfs pxe.rs embeds come from bootAssets.
+  # through. imaged-boot embeds the boot assets from IMAGED_BOOT_ASSETS.
   src = lib.fileset.toSource {
     root = ../..;
     fileset = lib.fileset.unions [
@@ -57,10 +56,7 @@ craneLib.mkCargoDerivation (
       }
     );
 
-    postPatch = ''
-      mkdir -p assets
-      cp -rL --no-preserve=mode ${bootAssets}/. ${ipxeAssets}/. assets/
-    '';
+    IMAGED_BOOT_ASSETS = bootAssets;
 
     buildPhaseCargoCommand = ''
       export HOME=$TMPDIR

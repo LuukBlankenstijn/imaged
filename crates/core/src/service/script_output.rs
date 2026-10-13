@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 
 use crate::domain::task::TaskRepository;
-use crate::error::Result;
+use imaged_model::error::Result;
 
 const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 

@@ -4,12 +4,13 @@ use axum::{Json, body::Body, extract::Path};
 use futures::TryStreamExt;
 use imaged_core::{
     di::{HostRepo, ImageRepo, ScriptProxy, ScriptRepo, ScriptVariables, TaskRepo},
-    domain::{script::Script, task::TaskState},
+    domain::script::Script,
     service::script_output::{ScriptRunKey, record_output},
 };
 use imaged_model::{
     agent::{PostInstall, PostInstallScript, ScriptFinished},
     error::{AppError, Result},
+    task::TaskState,
 };
 
 use crate::{AgentInfo, deploy::get_restore_task_and_verify};

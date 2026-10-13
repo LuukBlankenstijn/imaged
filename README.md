@@ -45,7 +45,7 @@ writes `/var/log/partclone.log` and, when not root, outputs nothing.
 
 Rust library. Domain model, SQLite (sqlx) repositories for hosts, images and
 tasks, the in-memory host connection registry, the multicast manager, image
-storage, DI wiring, and the PXE routes. Image partitions are stored on disk
+storage and DI wiring. Image partitions are stored on disk
 under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
 Images can be exported and imported as `imaged-archive` archives
@@ -57,6 +57,21 @@ the next time the server opens its data dir. Imported scripts replace the body
 and inputs of the library script with the same name (or are added) and are
 attached to the new image in their archived order; archives without scripts or
 a root partition still import.
+
+### `crates/boot` — `imaged-boot`
+
+Network boot: the PXE routes (`imaged_boot::pxe::router(public_url)`:
+`/boot/boot.ipxe`, `/boot/manifest.ipxe`, `/boot/{arch}/vmlinuz` and
+`/boot/{arch}/initramfs.cpio.xz`) and the read-only TFTP server
+(`imaged_boot::tftp::bind(address)`) that hands out the iPXE binaries, kernels
+and initramfs. All of them are embedded at compile time, so the server ships as
+one executable. The build script reads them from `IMAGED_BOOT_ASSETS` (an
+absolute path) when set, otherwise from `assets/` at the repository root, and
+fails naming every missing file. The directory holds `ipxe.efi`,
+`ipxe-arm64.efi`, `undionly.kpxe` and `x86_64/` and `arm64/` with `vmlinuz`
+and `initramfs.cpio.xz` each; `nix build .#boot-assets` builds exactly that
+directory. Nothing else depends on the assets: `imaged-core` and the API
+crates build and test without them.
 
 ### `crates/web` — `imaged-web`
 
@@ -79,8 +94,8 @@ headers and the JSON events sent over the websocket) lives in
 
 ### `crates/server` — `imaged-server`
 
-Binary and library package that wires `imaged-core`, `imaged-web` and the two
-API crates together behind axum. By default it serves the dashboard and the
+Binary and library package that wires `imaged-core`, `imaged-boot`,
+`imaged-web` and the two API crates together behind axum. By default it serves the dashboard and the
 agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
 and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 
@@ -93,7 +108,7 @@ short grace period and then cuts off whatever connection is left, after which
 machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
 `Dashboard::Off`, `OnMachineListener` or `Separate(address)`.
 
-The server side (core, both API crates and the `server` library) also builds
+The server side (core, boot, both API crates and the `server` library) also builds
 for Windows (`x86_64-pc-windows-gnu`). Multicast is Linux-only: on other
 platforms a multicast task fails with "multicast is only supported on Linux".
 
@@ -203,6 +218,16 @@ kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
 `build-initramfs` builds the initramfs for every arch, or only the ones passed
 as arguments (`build-initramfs arm64`).
 
+`imaged-boot` embeds the boot assets from `assets/` (see above). Entering the
+dev shell copies the kernels and iPXE binaries there and `build-initramfs`
+writes the initramfs there from the working tree, so on a fresh checkout:
+
+```sh
+nix develop
+build-initramfs x86_64 arm64
+cargo build
+```
+
 Tests run in one pass:
 
 ```sh
@@ -282,8 +307,8 @@ nix develop .#e2e -c e2e/run.sh
 ```
 
 Runs as your user inside user, network and pid namespaces; it needs `/dev/kvm`
-and `/dev/net/tun`, and real boot assets in `assets/` with an initramfs built
-from this tree (`build-initramfs x86_64`). The script:
+and `/dev/net/tun`, and real boot assets in `assets/` (or `IMAGED_BOOT_ASSETS`)
+with an initramfs built from this tree (`build-initramfs x86_64`). The script:
 
 1. builds the binaries it runs,
 2. creates the test disks,
@@ -299,5 +324,5 @@ from this tree (`build-initramfs x86_64`). The script:
    script.
 
 `E2E_FIRMWARE` picks `bios` or `uefi`, `E2E_OUT` the directory for logs, disks
-and archives (default `e2e/out`); `CARGO_TARGET_DIR` is honoured, and
-`IMAGED_ASSETS`, when set, must point at the repository's `assets/`.
+and archives (default `e2e/out`); `CARGO_TARGET_DIR` and `IMAGED_BOOT_ASSETS`
+are honoured, and the assets the script checks are the ones it compiles in.

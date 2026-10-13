@@ -10,11 +10,12 @@ use imaged_core as core;
 use tower::ServiceExt as _;
 
 use core::di::DIContainer;
-use core::domain::image::ImageStatus;
 use core::domain::script::NewScript;
-use core::domain::task::{TaskState, TaskType};
+use core::domain::task::TaskType;
 use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, path, route};
+use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, ScriptInput};
+use imaged_model::task::TaskState;
 
 const MAC: &str = "aa:bb:cc:dd:ee:01";
 const IDLE_MAC: &str = "aa:bb:cc:dd:ee:02";
@@ -716,14 +717,7 @@ async fn downloading_partitions_matches_the_repository_in_order() {
     assert_eq!(resp.status(), StatusCode::OK);
     let served: Vec<ImagePartition> = serde_json::from_slice(&body(resp).await).unwrap();
 
-    let expected: Vec<ImagePartition> = c
-        .image_repo
-        .get_partitions(image.id)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let expected = c.image_repo.get_partitions(image.id).await.unwrap();
     assert_eq!(served, expected);
 
     let listed: Vec<(i64, &str)> = served
@@ -872,7 +866,7 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row() {
         .expect("partition 2 row was recorded");
     assert_eq!(recorded.fstype, "ext4");
     assert_eq!(recorded.size_bytes, size as u64);
-    assert_eq!(uploaded, ImagePartition::from(recorded));
+    assert_eq!(uploaded, recorded);
 
     let restore_mac = next_mac();
     let restore_img = c

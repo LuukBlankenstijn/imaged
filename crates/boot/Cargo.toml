@@ -1,0 +1,20 @@
+[package]
+name = "imaged-boot"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "imaged_boot"
+path = "src/lib.rs"
+
+[dependencies]
+axum.workspace = true
+derive_more = { workspace = true, features = ["display"] }
+serde.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-tftp = "0.4.2"
+futures-lite = "2.6.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

@@ -1,6 +1,11 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
+
+pub use imaged_model::group::Group;
+pub use imaged_model::host::{ConnectionChange, HostConnectionEvent};
+pub use imaged_model::image::{ImagePartition, ImageStatus};
+pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
+pub use imaged_model::script::{DeployInputs, InputKind};
+pub use imaged_model::task::TaskState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
@@ -9,26 +14,6 @@ pub struct Host {
     pub name: String,
     pub disk_size_bytes: u64,
     pub ip: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HostConnectionEvent {
-    pub id: i64,
-    pub connected: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConnectionUpdate {
-    Connected(Vec<i64>),
-    Changed(HostConnectionEvent),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TransferPhase {
-    Gathering,
-    Sending,
-    Draining,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,40 +28,10 @@ pub struct MulticastProgress {
     pub hosts: Vec<ReceiverProgress>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ReceiverProgress {
-    pub host_id: i64,
-    pub name: String,
-    pub joined: bool,
-    pub limiting: bool,
-    pub slices_behind: u32,
-    pub loss: f64,
-    pub naks: u64,
-    pub sink_stall_ms: u32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KickRequest {
     pub task_id: i64,
     pub host_id: i64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ImageStatus {
-    Empty,
-    Capturing,
-    Importing,
-    Ready,
-    Faulted,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImagePartition {
-    pub id: i64,
-    pub partition_number: i64,
-    pub fstype: String,
-    pub size_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,17 +52,6 @@ pub enum TaskType {
     Deploy,
     Multicast,
     Reboot,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskState {
-    Pending,
-    Running,
-    Done,
-    Cancelled,
-    Failed,
-    Partial,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,12 +76,6 @@ pub struct Task {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Group {
-    pub id: i64,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateName {
     pub id: i64,
     pub new_name: String,
@@ -159,14 +97,6 @@ pub struct MulticastRequest {
     pub inputs: DeployInputs,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeployInputs {
-    #[serde(default)]
-    pub shared: BTreeMap<String, String>,
-    #[serde(default)]
-    pub per_machine: BTreeMap<i64, BTreeMap<String, String>>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateImageRequest {
     pub name: String,
@@ -183,14 +113,6 @@ pub struct CreateGroupRequest {
 pub struct UpdateGroupRequest {
     pub id: i64,
     pub host_ids: Vec<i64>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InputKind {
-    Text,
-    Number,
-    Choice,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

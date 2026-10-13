@@ -2564,17 +2564,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "imaged-core"
+name = "imaged-boot"
 version = "0.1.0"
 dependencies = [
  "async-tftp",
+ "axum",
+ "derive_more",
+ "futures-lite",
+ "serde",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "imaged-core"
+version = "0.1.0"
+dependencies = [
  "async-trait",
  "axum",
  "bytes",
  "chrono",
  "derive_more",
  "futures",
- "futures-lite",
  "imaged-archive",
  "imaged-model",
  "injectable",
@@ -2588,7 +2600,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower",
  "tower-http",
  "tracing",
 ]
@@ -2676,6 +2687,7 @@ dependencies = [
  "futures",
  "imaged-api-agent",
  "imaged-api-ui",
+ "imaged-boot",
  "imaged-core",
  "imaged-model",
  "imaged-server",

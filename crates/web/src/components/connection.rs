@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 
 #[cfg(feature = "web")]
-use crate::model::ConnectionUpdate;
+use crate::model::ConnectionChange;
 
 #[derive(Clone, Copy)]
 pub struct Connections(pub Signal<HashMap<i64, bool>>);
@@ -17,10 +17,10 @@ pub fn use_connection_provider() {
             if let Ok(mut stream) = crate::api::realtime::connection_state().await {
                 while let Some(Ok(update)) = stream.recv().await {
                     match update {
-                        ConnectionUpdate::Connected(hosts) => {
+                        ConnectionChange::Connected(hosts) => {
                             map.set(hosts.into_iter().map(|id| (id, true)).collect())
                         }
-                        ConnectionUpdate::Changed(event) => {
+                        ConnectionChange::Changed(event) => {
                             map.write().insert(event.id, event.connected);
                         }
                     }

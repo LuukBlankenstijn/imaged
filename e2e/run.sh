@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# usage: nix develop .#e2e -c e2e/run.sh  (env: E2E_FIRMWARE=bios|uefi, E2E_OUT, CARGO_TARGET_DIR, IMAGED_ASSETS)
+# usage: nix develop .#e2e -c e2e/run.sh  (env: E2E_FIRMWARE=bios|uefi, E2E_OUT, CARGO_TARGET_DIR, IMAGED_BOOT_ASSETS)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 source "$E2E_DIR/disk.sh"
 
-IMAGED_ASSETS=$(realpath -m "${IMAGED_ASSETS:-$REPO_DIR/assets}")
+IMAGED_BOOT_ASSETS=$(realpath -m "${IMAGED_BOOT_ASSETS:-$REPO_DIR/assets}")
+export IMAGED_BOOT_ASSETS
 TARGET_DIR=$(cd "$REPO_DIR" && realpath -m "${CARGO_TARGET_DIR:-target}")
 LINUX_TARGET=x86_64-unknown-linux-gnu
 IMAGED_SERVER=$TARGET_DIR/$LINUX_TARGET/debug/imaged-server
@@ -35,15 +36,11 @@ describe_checkout() {
 }
 
 check_boot_assets() {
-    local compiled
-    compiled=$(realpath -m "$REPO_DIR/assets")
-    [[ $IMAGED_ASSETS == "$compiled" ]] ||
-        fail "IMAGED_ASSETS is $IMAGED_ASSETS, but imaged-server compiles its boot assets in from $compiled; put the assets there instead"
     local asset
     for asset in x86_64/vmlinuz x86_64/initramfs.cpio.xz arm64/vmlinuz arm64/initramfs.cpio.xz ipxe.efi ipxe-arm64.efi undionly.kpxe; do
-        [[ -f $IMAGED_ASSETS/$asset ]] || fail "missing $IMAGED_ASSETS/$asset; build the boot assets (build-initramfs x86_64) or copy real ones into $IMAGED_ASSETS"
+        [[ -f $IMAGED_BOOT_ASSETS/$asset ]] || fail "missing $IMAGED_BOOT_ASSETS/$asset; build the boot assets (build-initramfs x86_64) or copy real ones into $IMAGED_BOOT_ASSETS"
     done
-    local initramfs=$IMAGED_ASSETS/x86_64/initramfs.cpio.xz
+    local initramfs=$IMAGED_BOOT_ASSETS/x86_64/initramfs.cpio.xz
     if (($(stat -c %s "$initramfs") < 1048576)); then
         fail "$initramfs is a placeholder; run build-initramfs x86_64"
     fi

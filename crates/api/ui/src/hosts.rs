@@ -8,12 +8,14 @@ use injectable::inject;
 #[cfg(feature = "server")]
 use imaged_core::di::{HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::script::{DeployInputs, resolve_inputs};
+use imaged_core::domain::script::resolve_inputs;
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
-use imaged_core::error::AppError;
+use imaged_model::error::AppError;
 use imaged_model::error::Result;
+#[cfg(feature = "server")]
+use imaged_model::script::DeployInputs;
 #[cfg(feature = "server")]
 use imaged_model::script::InputValues;
 #[cfg(feature = "server")]
@@ -55,7 +57,7 @@ pub async fn delete_host(id: i64) -> Result<()> {
 #[post("/api/ui/hosts/deploy")]
 #[inject(task_repo: TaskRepo, registry: Registry)]
 pub async fn deploy(req: DeployRequest) -> Result<Task> {
-    let inputs = host_inputs(req.image_id, &[req.id], req.inputs.into()).await?;
+    let inputs = host_inputs(req.image_id, &[req.id], req.inputs).await?;
     let task = task_repo
         .create_with_inputs(TaskType::Deploy, vec![req.id], Some(req.image_id), &inputs)
         .await?;

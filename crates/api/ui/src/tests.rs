@@ -9,13 +9,13 @@ use imaged_core as core;
 use tower::ServiceExt as _;
 
 use core::di::DIContainer;
-use core::domain::image::ImageStatus;
 use core::domain::script::NewScript;
-use core::domain::task::TaskState;
 use core::domain::task::TaskType;
-use core::error::AppError;
 use imaged_model::ServerEvent;
+use imaged_model::error::AppError;
+use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, ScriptInput};
+use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
 
 use crate::model;

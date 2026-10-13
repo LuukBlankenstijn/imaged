@@ -14,6 +14,7 @@ imaged-web = { path = "../web" }
 imaged-api-ui = { path = "../api/ui", optional = true }
 imaged-api-agent = { workspace = true, optional = true }
 imaged-core = { path = "../core", optional = true }
+imaged-boot = { workspace = true, optional = true }
 imaged-model = { workspace = true, features = ["logging"], optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { workspace = true, features = ["signal", "time"], optional = true }
@@ -30,6 +31,7 @@ server = [
     "imaged-api-ui/server",
     "dep:imaged-api-agent",
     "dep:imaged-core",
+    "dep:imaged-boot",
     "dep:imaged-model",
     "dep:axum",
     "dep:tokio",

@@ -1,6 +1,6 @@
 use derive_more::Constructor;
 
-use crate::error::Result;
+use imaged_model::error::Result;
 
 #[derive(Debug, Constructor)]
 pub struct Host {

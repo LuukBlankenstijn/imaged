@@ -101,13 +101,14 @@
         initramfsAssets = lib.mapAttrs' (
           arch: target: lib.nameValuePair "${arch}/initramfs.cpio.xz" target.initramfs
         ) targets;
-        kernels = pkgs.linkFarm "imaged-kernels" kernelAssets;
-        bootAssets = pkgs.linkFarm "imaged-boot-assets" (kernelAssets // initramfsAssets);
-        ipxeAssets = pkgs.linkFarm "imaged-ipxe-assets" {
+        ipxeFiles = {
           "ipxe.efi" = "${targets.x86_64.ipxe}/ipxe.efi";
           "undionly.kpxe" = "${targets.x86_64.ipxe}/undionly.kpxe";
           "ipxe-arm64.efi" = "${targets.arm64.ipxe}/ipxe.efi";
         };
+        kernels = pkgs.linkFarm "imaged-kernels" kernelAssets;
+        ipxeAssets = pkgs.linkFarm "imaged-ipxe-assets" ipxeFiles;
+        bootAssets = pkgs.linkFarm "imaged-boot-assets" (kernelAssets // initramfsAssets // ipxeFiles);
 
         devRustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
@@ -170,7 +171,7 @@
         teardown-net = pkgs.callPackage ./nix/scripts/teardown-net.nix { };
 
         imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
-          inherit craneLib bootAssets ipxeAssets;
+          inherit craneLib bootAssets;
           testTools = diskBuildTools;
         };
 
@@ -215,7 +216,6 @@
           imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
             inherit
               bootAssets
-              ipxeAssets
               wasm-bindgen-cli
               craneLib
               ;

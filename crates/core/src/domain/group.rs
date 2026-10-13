@@ -1,12 +1,5 @@
-use derive_more::Constructor;
-
-use crate::error::Result;
-
-#[derive(Debug, Constructor)]
-pub struct Group {
-    pub id: i64,
-    pub name: String,
-}
+use imaged_model::error::Result;
+use imaged_model::group::Group;
 
 #[async_trait::async_trait]
 pub trait GroupRepository: Send + Sync {

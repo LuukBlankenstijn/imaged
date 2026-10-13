@@ -105,7 +105,7 @@ impl Imaged {
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
         let machine_router =
-            core::pxe::router(&listeners.public_url).merge(imaged_api_agent::router());
+            imaged_boot::pxe::router(&listeners.public_url).merge(imaged_api_agent::router());
         let (machine_router, separate_dashboard) = match listeners.dashboard {
             Dashboard::Off => (machine_router, None),
             Dashboard::OnMachineListener => (machine_router.merge(dashboard_router()?), None),
@@ -121,7 +121,7 @@ impl Imaged {
             None => None,
         };
         let tftp = match listeners.tftp {
-            Some(address) => Some(core::tftp::bind(address).await?),
+            Some(address) => Some(imaged_boot::tftp::bind(address).await?),
             None => None,
         };
 

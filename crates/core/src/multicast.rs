@@ -9,11 +9,15 @@ use crate::{
     domain::{
         host::HostRepository,
         image::ImageRepository,
-        task::{Task, TaskRepository, TaskState, TaskType},
+        task::{Task, TaskRepository, TaskType},
     },
-    error::{AppError, Result},
     registry::HostRegistry,
     service::image::ImageService,
+};
+use imaged_model::{
+    error::{AppError, Result},
+    multicast::{ReceiverProgress, TransferPhase},
+    task::TaskState,
 };
 
 #[cfg(target_os = "linux")]
@@ -22,13 +26,6 @@ mod session;
 const DB_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const ORPHANED: &str = "Server stopped while task was running";
 const DISCONNECTED: &str = "Host disconnected before reporting the multicast result";
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TransferPhase {
-    Gathering,
-    Sending,
-    Draining,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MulticastProgress {
@@ -40,18 +37,6 @@ pub struct MulticastProgress {
     pub steps: usize,
     pub eta: Option<Duration>,
     pub hosts: Vec<ReceiverProgress>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ReceiverProgress {
-    pub host_id: i64,
-    pub name: String,
-    pub joined: bool,
-    pub limiting: bool,
-    pub slices_behind: u32,
-    pub loss: f64,
-    pub naks: u64,
-    pub sink_stall_ms: u32,
 }
 
 pub struct MulticastManager {

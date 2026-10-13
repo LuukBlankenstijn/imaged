@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use imaged_core::domain::image::ImageStatus;
-use imaged_core::domain::task::{Task, TaskState, TaskType};
+use imaged_core::domain::task::{Task, TaskType};
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::path;
+use imaged_model::image::ImageStatus;
+use imaged_model::task::TaskState;
 use reqwest::StatusCode;
 use serde_json::json;
 

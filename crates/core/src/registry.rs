@@ -4,7 +4,10 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use derive_more::Constructor;
-use imaged_model::{ServerEvent, Task};
+use imaged_model::{
+    ServerEvent, Task,
+    host::{ConnectionChange, HostConnectionEvent},
+};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::domain::task::Task as DomainTask;
@@ -21,18 +24,6 @@ impl<T> Drop for Registration<T> {
             cleanup();
         }
     }
-}
-
-#[derive(Constructor, Debug, Clone)]
-pub struct HostConnectionEvent {
-    pub id: i64,
-    pub connected: bool,
-}
-
-#[derive(Debug)]
-pub enum ConnectionChange {
-    Connected(Vec<i64>),
-    Changed(HostConnectionEvent),
 }
 
 pub struct ConnectionFeed {
@@ -177,10 +168,11 @@ impl HostRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionChange, ConnectionFeed, HostConnectionEvent, HostRegistry};
+    use super::{ConnectionFeed, HostRegistry};
     use crate::domain::task::{Task as DomainTask, TaskType};
     use chrono::Utc;
     use imaged_model::ServerEvent;
+    use imaged_model::host::{ConnectionChange, HostConnectionEvent};
     use std::sync::Arc;
     use std::time::Duration;
 

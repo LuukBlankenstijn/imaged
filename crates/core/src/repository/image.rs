@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
-use crate::{
-    domain::image::{ImagePartition, NewImagePartition},
-    error::{AppError, Result},
-};
+use crate::domain::image::NewImagePartition;
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
+use imaged_model::{
+    error::{AppError, Result},
+    image::{ImagePartition, ImageStatus},
+};
 use sqlx::SqlitePool;
 
-use crate::domain::image::{Image, ImageRepository, ImageStatus};
+use crate::domain::image::{Image, ImageRepository};
 
 #[derive(Debug, Constructor)]
 pub struct SqliteImageRepository {
@@ -30,7 +31,7 @@ impl SqliteImageRepository {
             image.id,
             image.name,
             None,
-            ImageStatus::from_string(image.status)?,
+            image_status(&image.status)?,
             image.error,
             Vec::new(),
             None,
@@ -44,7 +45,7 @@ impl ImageRepository for SqliteImageRepository {
         let result = sqlx::query!("SELECT status FROM images WHERE id = ?", id)
             .fetch_one(&self.pool)
             .await?;
-        return ImageStatus::from_string(result.status);
+        return image_status(&result.status);
     }
 
     async fn get(&self, id: i64) -> Result<Image> {
@@ -66,7 +67,7 @@ impl ImageRepository for SqliteImageRepository {
             image.id,
             image.name,
             image.captured_at,
-            ImageStatus::from_string(image.status)?,
+            image_status(&image.status)?,
             image.error,
             self.get_partitions(id).await?,
             image.root_partition,
@@ -120,7 +121,7 @@ impl ImageRepository for SqliteImageRepository {
             image.id,
             image.name,
             image.captured_at,
-            ImageStatus::from_string(image.status)?,
+            image_status(&image.status)?,
             image.error,
             partitions,
             image.root_partition,
@@ -188,7 +189,7 @@ impl ImageRepository for SqliteImageRepository {
                         id,
                         row.image_name,
                         row.captured_at,
-                        ImageStatus::from_string(row.image_status)?,
+                        image_status(&row.image_status)?,
                         row.error,
                         Vec::new(),
                         row.root_partition,
@@ -398,6 +399,13 @@ impl ImageRepository for SqliteImageRepository {
     }
 }
 
+fn image_status(value: &str) -> Result<ImageStatus> {
+    value.parse::<ImageStatus>().map_err(|e| {
+        tracing::info!(err=%e, "failed to convert string to ImageStatus");
+        AppError::Internal("conversion error".to_string())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -406,8 +414,9 @@ mod tests {
     use sqlx::Row;
 
     use crate::di::DIContainer;
-    use crate::domain::image::{ImageStatus, NewImagePartition};
-    use crate::error::AppError;
+    use crate::domain::image::NewImagePartition;
+    use imaged_model::error::AppError;
+    use imaged_model::image::ImageStatus;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -931,5 +940,13 @@ mod tests {
         c.image_repo.start_capture(img.id).await.unwrap();
 
         assert_eq!(c.image_repo.get(img.id).await.unwrap().root_partition, None);
+    }
+
+    #[test]
+    fn an_unknown_stored_status_is_an_internal_conversion_error() {
+        match super::image_status("bogus").unwrap_err() {
+            AppError::Internal(msg) => assert_eq!(msg, "conversion error"),
+            other => panic!("expected AppError::Internal, got {other:?}"),
+        }
     }
 }

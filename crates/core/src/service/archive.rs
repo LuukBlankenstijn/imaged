@@ -11,8 +11,8 @@ use tokio_util::io::ReaderStream;
 
 use crate::domain::image::{Image, ImageRepository, NewImagePartition};
 use crate::domain::script::{NewScript, ScriptRepository};
-use crate::error::{AppError, Result};
 use crate::service::image::ImageService;
+use imaged_model::error::{AppError, Result};
 
 const INTERRUPTED_IMPORT_ERROR: &str = "import interrupted";
 const CHUNK_BYTES: usize = 256 * 1024;
@@ -191,7 +191,7 @@ mod tests {
 
     use super::*;
     use crate::di::DIContainer;
-    use crate::domain::image::ImageStatus;
+    use imaged_model::image::ImageStatus;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 

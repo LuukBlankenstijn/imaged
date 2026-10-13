@@ -5,6 +5,7 @@ members = [
     "crates/api/agent",
     "crates/api/ui",
     "crates/archive",
+    "crates/boot",
     "crates/core",
     "crates/disk",
     "crates/e2e",
@@ -22,6 +23,7 @@ edition = "2024"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"] }
 imaged-model = { path = "crates/model", default-features = false }
 imaged-archive = { path = "crates/archive" }
+imaged-boot = { path = "crates/boot" }
 imaged-disk = { path = "crates/disk" }
 imaged-core = { path = "crates/core" }
 imaged-api-agent = { path = "crates/api/agent" }

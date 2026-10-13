@@ -1,10 +1,8 @@
 use derive_more::Constructor;
 use sqlx::SqlitePool;
 
-use crate::{
-    domain::{self, host::Host},
-    error::Result,
-};
+use crate::domain::{self, host::Host};
+use imaged_model::error::Result;
 
 #[derive(Debug, Constructor)]
 pub struct SqliteHostRepository {
@@ -130,8 +128,9 @@ mod tests {
 
     use crate::build_test_container;
     use crate::di::DIContainer;
-    use crate::domain::task::{TaskState, TaskType};
-    use crate::error::AppError;
+    use crate::domain::task::TaskType;
+    use imaged_model::error::AppError;
+    use imaged_model::task::TaskState;
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);
 

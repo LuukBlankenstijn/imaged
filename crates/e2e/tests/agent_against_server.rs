@@ -10,13 +10,14 @@ use reqwest::Url;
 use tokio::io::AsyncReadExt;
 
 use imaged_agent::server::Server;
-use imaged_core::domain::image::ImageStatus;
 use imaged_core::domain::script::NewScript;
-use imaged_core::domain::task::{Task, TaskState, TaskType};
+use imaged_core::domain::task::{Task, TaskType};
 use imaged_e2e::harness::{self, seed};
 use imaged_model::ServerEvent;
 use imaged_model::agent::{ImagePartition, PostInstall, PostInstallScript};
+use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, InputValues, ScriptInput};
+use imaged_model::task::TaskState;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 const AGENT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
@@ -43,9 +44,6 @@ async fn stored_partitions(s: &harness::TestServer, image_id: i64) -> Vec<ImageP
         .get_partitions(image_id)
         .await
         .expect("image partitions")
-        .into_iter()
-        .map(Into::into)
-        .collect()
 }
 
 #[tokio::test]
@@ -154,7 +152,7 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
     assert_eq!(stored.status, ImageStatus::Ready);
     assert!(stored.captured_at.is_some());
     assert_eq!(stored.root_partition, Some(1));
-    let partitions: Vec<ImagePartition> = stored.partitions.into_iter().map(Into::into).collect();
+    let partitions: Vec<ImagePartition> = stored.partitions;
     assert_eq!(partitions, vec![uploaded]);
 
     let on_disk = tokio::fs::read(s.container.image_service.get_partition_path(image.id, 1))

@@ -35,7 +35,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     let args = Args::parse();
-    imaged_model::setup_logging!(args.log_level, ["imaged_core"]);
+    imaged_model::setup_logging!(args.log_level, ["imaged_core", "imaged_boot"]);
 
     let scheme = if args.use_https { "https" } else { "http" };
     let imaged = Imaged::open(Config {

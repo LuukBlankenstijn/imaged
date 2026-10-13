@@ -6,7 +6,7 @@ use imaged_model::script::{InputKind, ScriptInput};
 use sqlx::{SqliteConnection, SqlitePool, types::Json};
 
 use crate::domain::script::{NewScript, Script, ScriptRepository};
-use crate::error::{AppError, Result};
+use imaged_model::error::{AppError, Result};
 
 #[derive(Debug, Constructor)]
 pub struct SqliteScriptRepository {
@@ -297,7 +297,7 @@ mod tests {
 
     use crate::di::DIContainer;
     use crate::domain::script::NewScript;
-    use crate::error::AppError;
+    use imaged_model::error::AppError;
     use imaged_model::script::{InputKind, ScriptInput};
 
     static DB_ID: AtomicU64 = AtomicU64::new(0);

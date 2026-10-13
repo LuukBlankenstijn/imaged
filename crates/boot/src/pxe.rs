@@ -11,10 +11,18 @@ use axum::{
 use derive_more::Display;
 use serde::Deserialize;
 
-static X86_64_VMLINUZ: &[u8] = include_bytes!("../../../assets/x86_64/vmlinuz");
-static X86_64_INITRAMFS: &[u8] = include_bytes!("../../../assets/x86_64/initramfs.cpio.xz");
-static ARM64_VMLINUZ: &[u8] = include_bytes!("../../../assets/arm64/vmlinuz");
-static ARM64_INITRAMFS: &[u8] = include_bytes!("../../../assets/arm64/initramfs.cpio.xz");
+static X86_64_VMLINUZ: &[u8] =
+    include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/x86_64/vmlinuz"));
+static X86_64_INITRAMFS: &[u8] = include_bytes!(concat!(
+    env!("IMAGED_BOOT_ASSETS_DIR"),
+    "/x86_64/initramfs.cpio.xz"
+));
+static ARM64_VMLINUZ: &[u8] =
+    include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/arm64/vmlinuz"));
+static ARM64_INITRAMFS: &[u8] = include_bytes!(concat!(
+    env!("IMAGED_BOOT_ASSETS_DIR"),
+    "/arm64/initramfs.cpio.xz"
+));
 
 #[derive(Clone, Copy, Deserialize, Display)]
 pub(crate) enum Arch {
@@ -57,14 +65,14 @@ impl Arch {
 }
 
 #[derive(Deserialize)]
-pub struct BootParams {
+struct BootParams {
     arch: Arch,
     product: Option<String>,
     manufacturer: Option<String>,
 }
 
 /// This ipxe script determines the machine type and chains into the manifest handler
-pub async fn bootstrap_ipxe(State(base): State<Arc<str>>) -> impl IntoResponse {
+async fn bootstrap_ipxe(State(base): State<Arc<str>>) -> impl IntoResponse {
     let body = format!(
         "#!ipxe\n\
          chain {base}/boot/manifest.ipxe?arch=${{buildarch}}&product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
@@ -73,7 +81,7 @@ pub async fn bootstrap_ipxe(State(base): State<Arc<str>>) -> impl IntoResponse {
     ([("content-type", "text/plain; charset=utf-8")], body)
 }
 
-pub async fn manifest_ipxe(
+async fn manifest_ipxe(
     State(base): State<Arc<str>>,
     Query(params): Query<BootParams>,
 ) -> impl IntoResponse {

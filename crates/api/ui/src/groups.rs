@@ -14,31 +14,25 @@ use imaged_model::error::Result;
 #[post("/api/ui/groups/create")]
 #[inject(group_repo: GroupRepo)]
 pub async fn create_group(req: CreateGroupRequest) -> Result<Group> {
-    let group = group_repo.create_group(&req.name, &req.host_ids).await?;
-    Ok(group.into())
+    group_repo.create_group(&req.name, &req.host_ids).await
 }
 
 #[post("/api/ui/groups/rename")]
 #[inject(group_repo: GroupRepo)]
 pub async fn update_group_name(req: UpdateName) -> Result<Group> {
-    let group = group_repo.update_name(req.id, &req.new_name).await?;
-    Ok(group.into())
+    group_repo.update_name(req.id, &req.new_name).await
 }
 
 #[get("/api/ui/groups")]
 #[inject(group_repo: GroupRepo)]
 pub async fn get_all_groups() -> Result<Vec<Group>> {
-    let groups = group_repo.get_all().await?;
-    Ok(groups.into_iter().map(Into::into).collect())
+    group_repo.get_all().await
 }
 
 #[post("/api/ui/groups/members")]
 #[inject(group_repo: GroupRepo)]
 pub async fn update_group_memberships(req: UpdateGroupRequest) -> Result<Group> {
-    let group = group_repo
-        .update_group_members(req.id, &req.host_ids)
-        .await?;
-    Ok(group.into())
+    group_repo.update_group_members(req.id, &req.host_ids).await
 }
 
 #[post("/api/ui/groups/delete")]
@@ -51,7 +45,7 @@ pub async fn delete_group(id: i64) -> Result<()> {
 #[post("/api/ui/groups/multicast")]
 #[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
 pub async fn multicast(req: MulticastRequest) -> Result<()> {
-    let inputs = crate::hosts::host_inputs(req.image_id, &req.host_ids, req.inputs.into()).await?;
+    let inputs = crate::hosts::host_inputs(req.image_id, &req.host_ids, req.inputs).await?;
     task_repo
         .create_with_inputs(
             TaskType::Multicast,

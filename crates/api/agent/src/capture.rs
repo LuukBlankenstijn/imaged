@@ -7,11 +7,12 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use imaged_core::{
     di::{HostRepo, ImageRepo, ImageSvc, TaskRepo},
-    domain::task::{Task, TaskState, TaskType},
+    domain::task::{Task, TaskType},
 };
 use imaged_model::{
     agent::{ImagePartition, PartitionUpload},
     error::{AppError, Result},
+    task::TaskState,
 };
 
 use crate::{AgentInfo, get_next_task};
@@ -42,7 +43,7 @@ pub async fn upload_partition_data(
         .save_partition(image_id, partition_number, &filesystem, size)
         .await?;
 
-    Ok(Json(partition.into()))
+    Ok(Json(partition))
 }
 
 #[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo, host_repo: HostRepo, task_repo: TaskRepo)]

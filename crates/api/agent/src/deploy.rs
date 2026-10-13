@@ -1,14 +1,12 @@
 use axum::{Json, body::Body, extract::Path};
 use imaged_core::{
     di::{HostRepo, ImageRepo, ImageSvc, TaskRepo},
-    domain::{
-        image::ImageStatus,
-        task::{Task, TaskType},
-    },
+    domain::task::{Task, TaskType},
 };
 use imaged_model::{
     agent::ImagePartition,
     error::{AppError, Result},
+    image::ImageStatus,
 };
 
 use crate::{AgentInfo, get_next_task};
@@ -58,9 +56,7 @@ pub async fn download_partitions(
             "Image {image_id} is not ready"
         )));
     };
-    let partitions = image_repo.get_partitions(image_id).await?;
-
-    Ok(Json(partitions.into_iter().map(Into::into).collect()))
+    Ok(Json(image_repo.get_partitions(image_id).await?))
 }
 
 pub(crate) async fn get_restore_task_and_verify(mac: &str, task_id: i64) -> Result<(Task, i64)> {

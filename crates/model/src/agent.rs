@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::image::ImagePartition;
+
 pub const MAC_HEADER: &str = "X-Agent-Mac";
 pub const IP_HEADER: &str = "X-Agent-Ip";
 
@@ -71,14 +73,6 @@ pub mod path {
     pub fn script_finished(task_id: i64, position: i64) -> String {
         script(route::SCRIPT_FINISHED, task_id, position)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ImagePartition {
-    pub id: i64,
-    pub partition_number: i64,
-    pub fstype: String,
-    pub size_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

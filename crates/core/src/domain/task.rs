@@ -1,7 +1,8 @@
-use crate::error::{AppError, Result};
 use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
+use imaged_model::error::{AppError, Result};
 use imaged_model::script::InputValues;
+use imaged_model::task::TaskState;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::str::FromStr as _;
@@ -30,29 +31,6 @@ impl TaskType {
     pub fn from_string(value: String) -> Result<Self> {
         TaskType::from_str(&value).map_err(|e| {
             tracing::info!(err=%e, "failed to convert string to TaskType");
-            AppError::Internal("conversion error".to_string())
-        })
-    }
-}
-
-#[derive(Debug, Display, FromStr, IsVariant, PartialEq, Eq, Clone, Copy, Deserialize)]
-#[display(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum TaskState {
-    Pending,
-    Running,
-    Done,
-    Failed,
-    Cancelled,
-    // Rollup-only: produced by `Task::aggregate_state`, never stored on a
-    // per-host row.
-    Partial,
-}
-
-impl TaskState {
-    pub fn from_string(value: String) -> Result<Self> {
-        TaskState::from_str(&value).map_err(|e| {
-            tracing::info!(err=%e, "failed to convert string to TaskState");
             AppError::Internal("conversion error".to_string())
         })
     }
@@ -377,22 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn task_state_is_variant_predicates_are_exhaustive_and_mutually_exclusive() {
-        assert!(TaskState::Pending.is_pending());
-        assert!(TaskState::Running.is_running());
-        assert!(TaskState::Done.is_done());
-        assert!(TaskState::Failed.is_failed());
-        assert!(TaskState::Cancelled.is_cancelled());
-        assert!(TaskState::Partial.is_partial());
-
-        assert!(!TaskState::Pending.is_running());
-        assert!(!TaskState::Done.is_partial());
-        assert!(!TaskState::Partial.is_done());
-        assert!(!TaskState::Failed.is_cancelled());
-        assert!(!TaskState::Cancelled.is_failed());
-    }
-
-    #[test]
     fn task_type_round_trips_through_display_and_from_string() {
         for t in [
             TaskType::Capture,
@@ -431,39 +393,6 @@ mod tests {
     #[test]
     fn task_type_from_string_rejects_unknown_with_internal_conversion_error() {
         let err = TaskType::from_string("bogus".to_string()).unwrap_err();
-        match err {
-            AppError::Internal(msg) => assert_eq!(msg, "conversion error"),
-            other => panic!("expected AppError::Internal, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn task_state_round_trips_through_display_and_from_string_for_all_variants() {
-        for s in [
-            TaskState::Pending,
-            TaskState::Running,
-            TaskState::Done,
-            TaskState::Failed,
-            TaskState::Cancelled,
-            TaskState::Partial,
-        ] {
-            assert_eq!(TaskState::from_string(s.to_string()).unwrap(), s);
-        }
-    }
-
-    #[test]
-    fn task_state_display_is_lowercase() {
-        assert_eq!(TaskState::Pending.to_string(), "pending");
-        assert_eq!(TaskState::Running.to_string(), "running");
-        assert_eq!(TaskState::Done.to_string(), "done");
-        assert_eq!(TaskState::Failed.to_string(), "failed");
-        assert_eq!(TaskState::Cancelled.to_string(), "cancelled");
-        assert_eq!(TaskState::Partial.to_string(), "partial");
-    }
-
-    #[test]
-    fn task_state_from_string_rejects_unknown_with_internal_conversion_error() {
-        let err = TaskState::from_string("bogus".to_string()).unwrap_err();
         match err {
             AppError::Internal(msg) => assert_eq!(msg, "conversion error"),
             other => panic!("expected AppError::Internal, got {other:?}"),

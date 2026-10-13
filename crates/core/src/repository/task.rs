@@ -1,5 +1,6 @@
-use crate::domain::task::{ScriptRun, Task, TaskHost, TaskRepository, TaskState, TaskType};
-use crate::error::{AppError, Result};
+use crate::domain::task::{ScriptRun, Task, TaskHost, TaskRepository, TaskType};
+use imaged_model::error::{AppError, Result};
+use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -24,7 +25,7 @@ struct TaskRow {
 }
 
 impl TryFrom<TaskRow> for Task {
-    type Error = crate::error::AppError;
+    type Error = imaged_model::error::AppError;
 
     fn try_from(row: TaskRow) -> Result<Self> {
         Ok(Self {
@@ -480,7 +481,7 @@ fn no_running_script(task_id: i64, host_id: i64, position: i64) -> AppError {
 mod tests {
     use super::*;
     use crate::di::DIContainer;
-    use crate::error::AppError;
+    use imaged_model::error::AppError;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;

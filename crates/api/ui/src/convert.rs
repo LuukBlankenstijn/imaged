@@ -1,18 +1,11 @@
 use imaged_core::domain::{
-    group::Group as DGroup,
     host::Host as DHost,
-    image::{Image as DImage, ImagePartition as DPartition, ImageStatus as DStatus},
-    script::{DeployInputs as DDeployInputs, NewScript as DNewScript, Script as DScript},
-    task::{
-        ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskState as DState,
-        TaskType as DType,
-    },
+    image::Image as DImage,
+    script::{NewScript as DNewScript, Script as DScript},
+    task::{ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskType as DType},
 };
-use imaged_core::multicast::{
-    MulticastProgress as DProgress, ReceiverProgress as DReceiver, TransferPhase as DPhase,
-};
-use imaged_core::registry::{ConnectionChange as DChange, HostConnectionEvent as DConn};
-use imaged_model::script::{InputKind as DInputKind, ScriptInput as DScriptInput};
+use imaged_core::multicast::MulticastProgress as DProgress;
+use imaged_model::script::ScriptInput as DScriptInput;
 
 use crate::model;
 
@@ -28,83 +21,17 @@ impl From<DHost> for model::Host {
     }
 }
 
-impl From<DConn> for model::HostConnectionEvent {
-    fn from(e: DConn) -> Self {
-        Self {
-            id: e.id,
-            connected: e.connected,
-        }
-    }
-}
-
-impl From<DChange> for model::ConnectionUpdate {
-    fn from(c: DChange) -> Self {
-        match c {
-            DChange::Connected(hosts) => Self::Connected(hosts),
-            DChange::Changed(event) => Self::Changed(event.into()),
-        }
-    }
-}
-
 impl From<DProgress> for model::MulticastProgress {
     fn from(p: DProgress) -> Self {
         Self {
             task_id: p.task_id,
-            phase: p.phase.into(),
+            phase: p.phase,
             fraction: p.fraction,
             bytes_per_second: p.bytes_per_second,
             step: p.step,
             steps: p.steps,
             eta_seconds: p.eta.map(|eta| eta.as_secs()),
-            hosts: p.hosts.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<DPhase> for model::TransferPhase {
-    fn from(p: DPhase) -> Self {
-        match p {
-            DPhase::Gathering => Self::Gathering,
-            DPhase::Sending => Self::Sending,
-            DPhase::Draining => Self::Draining,
-        }
-    }
-}
-
-impl From<DReceiver> for model::ReceiverProgress {
-    fn from(r: DReceiver) -> Self {
-        Self {
-            host_id: r.host_id,
-            name: r.name,
-            joined: r.joined,
-            limiting: r.limiting,
-            slices_behind: r.slices_behind,
-            loss: r.loss,
-            naks: r.naks,
-            sink_stall_ms: r.sink_stall_ms,
-        }
-    }
-}
-
-impl From<DStatus> for model::ImageStatus {
-    fn from(s: DStatus) -> Self {
-        match s {
-            DStatus::Empty => Self::Empty,
-            DStatus::Capturing => Self::Capturing,
-            DStatus::Importing => Self::Importing,
-            DStatus::Ready => Self::Ready,
-            DStatus::Faulted => Self::Faulted,
-        }
-    }
-}
-
-impl From<DPartition> for model::ImagePartition {
-    fn from(p: DPartition) -> Self {
-        Self {
-            id: p.id,
-            partition_number: p.partition_number,
-            fstype: p.fstype,
-            size_bytes: p.size_bytes,
+            hosts: p.hosts,
         }
     }
 }
@@ -115,9 +42,9 @@ impl From<DImage> for model::Image {
             id: i.id,
             name: i.name,
             captured_at: i.captured_at.map(|t| t.timestamp_millis()),
-            status: i.status.into(),
+            status: i.status,
             error_message: i.error,
-            partitions: i.partitions.into_iter().map(Into::into).collect(),
+            partitions: i.partitions,
             root_partition: i.root_partition,
         }
     }
@@ -134,24 +61,11 @@ impl From<DType> for model::TaskType {
     }
 }
 
-impl From<DState> for model::TaskState {
-    fn from(s: DState) -> Self {
-        match s {
-            DState::Pending => Self::Pending,
-            DState::Running => Self::Running,
-            DState::Done => Self::Done,
-            DState::Cancelled => Self::Cancelled,
-            DState::Failed => Self::Failed,
-            DState::Partial => Self::Partial,
-        }
-    }
-}
-
 impl From<DTaskHost> for model::TaskHost {
     fn from(h: DTaskHost) -> Self {
         Self {
             host_id: h.host_id,
-            state: h.state.into(),
+            state: h.state,
             error: h.error,
             started_at: h.started_at.map(|t| t.timestamp_millis()),
             finished_at: h.finished_at.map(|t| t.timestamp_millis()),
@@ -161,7 +75,7 @@ impl From<DTaskHost> for model::TaskHost {
 
 impl From<DTask> for model::Task {
     fn from(t: DTask) -> Self {
-        let state = t.aggregate_state().into();
+        let state = t.aggregate_state();
         Self {
             id: t.id,
             r#type: t.task_type.into(),
@@ -175,41 +89,12 @@ impl From<DTask> for model::Task {
     }
 }
 
-impl From<DGroup> for model::Group {
-    fn from(g: DGroup) -> Self {
-        Self {
-            id: g.id,
-            name: g.name,
-        }
-    }
-}
-
-impl From<DInputKind> for model::InputKind {
-    fn from(k: DInputKind) -> Self {
-        match k {
-            DInputKind::Text => Self::Text,
-            DInputKind::Number => Self::Number,
-            DInputKind::Choice => Self::Choice,
-        }
-    }
-}
-
-impl From<model::InputKind> for DInputKind {
-    fn from(k: model::InputKind) -> Self {
-        match k {
-            model::InputKind::Text => Self::Text,
-            model::InputKind::Number => Self::Number,
-            model::InputKind::Choice => Self::Choice,
-        }
-    }
-}
-
 impl From<DScriptInput> for model::ScriptInput {
     fn from(i: DScriptInput) -> Self {
         Self {
             name: i.name,
             label: i.label,
-            kind: i.kind.into(),
+            kind: i.kind,
             required: i.required,
             default_value: i.default_value,
             per_machine: i.per_machine,
@@ -223,7 +108,7 @@ impl From<model::ScriptInput> for DScriptInput {
         Self {
             name: i.name,
             label: i.label,
-            kind: i.kind.into(),
+            kind: i.kind,
             required: i.required,
             default_value: i.default_value,
             per_machine: i.per_machine,
@@ -263,15 +148,6 @@ impl From<DScriptRun> for model::ScriptRun {
             exit_code: r.exit_code,
             started_at: r.started_at.timestamp_millis(),
             finished_at: r.finished_at.map(|t| t.timestamp_millis()),
-        }
-    }
-}
-
-impl From<model::DeployInputs> for DDeployInputs {
-    fn from(i: model::DeployInputs) -> Self {
-        Self {
-            shared: i.shared,
-            per_machine: i.per_machine,
         }
     }
 }
