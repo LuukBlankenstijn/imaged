@@ -14,6 +14,7 @@ use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 
 const MIB: u64 = 1024 * 1024;
+const SWAP_UUID: &str = "0b8c5c3e-7f6e-4d4b-9c1a-1e2f3a4b5c6d";
 
 struct Disk {
     path: PathBuf,
@@ -116,8 +117,25 @@ fn os_root(dir: &Path, name: &str, marker: &str) -> PathBuf {
 fn swap_image(dir: &Path, size: u64) -> PathBuf {
     let image = dir.join("swap.img");
     File::create(&image).unwrap().set_len(size).unwrap();
-    run(Command::new("mkswap").arg(&image));
+    run(Command::new("mkswap")
+        .args(["-L", "packed-swap", "-U", SWAP_UUID])
+        .arg(&image));
     image
+}
+
+fn hibernated_swap_image(dir: &Path, size: u64) -> PathBuf {
+    let image = swap_image(dir, size);
+    let mut file = OpenOptions::new().write(true).open(&image).unwrap();
+    file.seek(SeekFrom::Start(4096 - 10)).unwrap();
+    std::io::Write::write_all(&mut file, b"S1SUSPEND\0").unwrap();
+    image
+}
+
+fn probe(device: &Path, tag: &str) -> String {
+    let output = run(Command::new("blkid")
+        .args(["-p", "-o", "value", "-s", tag])
+        .arg(device));
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 fn pack<I, S>(disk: &Path, output: &Path, extra: I) -> Output
@@ -199,7 +217,11 @@ async fn restore(filesystem: Filesystem, compressed: &Path, dir: &Path) -> PathB
     assert!(!target.exists());
     let compressed = tokio::fs::File::open(compressed).await.unwrap();
     let mut decoder = ZstdDecoder::new(tokio::io::BufReader::new(compressed));
-    let mut child = tokio::process::Command::new(filesystem.partclone_binary())
+    let binary = match filesystem {
+        Filesystem::Vfat => "partclone.vfat",
+        _ => "partclone.extfs",
+    };
+    let mut child = tokio::process::Command::new(binary)
         .arg("--restore")
         .arg("--restore_raw_file")
         .arg("--logfile")
@@ -219,8 +241,7 @@ async fn restore(filesystem: Filesystem, compressed: &Path, dir: &Path) -> PathB
     let status = child.wait().await.unwrap();
     assert!(
         status.success(),
-        "{} --restore failed: {status}\n{}",
-        filesystem.partclone_binary(),
+        "{binary} --restore failed: {status}\n{}",
         std::fs::read_to_string(&log).unwrap_or_default()
     );
     copied.unwrap();
@@ -350,18 +371,88 @@ async fn a_disk_image_packs_like_a_capture() {
 }
 
 #[tokio::test]
+async fn a_swap_partition_packs_as_its_header_and_restores_its_uuid_and_label() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = Disk::new(dir);
+    disk.write(3, &swap_image(dir, disk.size(3)));
+
+    let archive = dir.join("image.imaged");
+    packed(pack(&disk.path, &archive, [] as [&str; 0]));
+
+    let unpacked_dir = dir.join("unpacked");
+    let Unpacked { manifest, .. } = unpack(&archive, &unpacked_dir).await;
+    let partitions: Vec<(i64, &str, u64)> = manifest
+        .partitions
+        .iter()
+        .map(|p| (p.number, p.fstype.as_str(), p.size_bytes))
+        .collect();
+    assert_eq!(partitions, [(3, "swap", disk.size(3))]);
+    assert!(
+        std::fs::metadata(unpacked_dir.join("p-3.pcl"))
+            .unwrap()
+            .len()
+            < 4096
+    );
+
+    let target = dir.join("restored-swap.img");
+    File::create(&target)
+        .unwrap()
+        .set_len(disk.size(3))
+        .unwrap();
+    let compressed = tokio::fs::File::open(unpacked_dir.join("p-3.pcl"))
+        .await
+        .unwrap();
+    imaged_disk::restore_compressed(Filesystem::Swap, compressed, &target, &dir.join("log"))
+        .await
+        .unwrap();
+    assert_eq!(probe(&target, "TYPE"), "swap");
+    assert_eq!(probe(&target, "UUID"), SWAP_UUID);
+    assert_eq!(probe(&target, "LABEL"), "packed-swap");
+}
+
+#[tokio::test]
 async fn an_unsupported_filesystem_fails_without_leaving_output() {
     let dir = TempDir::new().unwrap();
     let dir = dir.path();
     let disk = Disk::new(dir);
-    disk.write(2, &swap_image(dir, disk.size(2)));
+    disk.write(2, &hibernated_swap_image(dir, disk.size(2)));
 
     let archive = dir.join("image.imaged");
     assert_failed_without_output(
         pack(&disk.path, &archive, [] as [&str; 0]),
-        "filesystem not supported: swap",
+        "filesystem not supported: swsuspend",
         &archive,
     );
+}
+
+#[tokio::test]
+async fn a_failing_partclone_fails_the_pack_without_leaving_output() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = Disk::new(dir);
+    let root = os_root(dir, "root", "valid");
+    disk.write(2, &ext4_image(dir, "root", disk.size(2), &root));
+    let stubs = dir.join("stubs");
+    std::fs::create_dir(&stubs).unwrap();
+    let stub = stubs.join("partclone.extfs");
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\necho 'stub partclone failed' >&2\nexit 3\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap());
+
+    let archive = dir.join("image.imaged");
+    let output = Command::new(env!("CARGO_BIN_EXE_imaged-pack"))
+        .arg(&disk.path)
+        .args(["--name", "packed", "-o"])
+        .arg(&archive)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    assert_failed_without_output(output, "partclone exited with exit status: 3", &archive);
 }
 
 #[tokio::test]

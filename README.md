@@ -34,12 +34,19 @@ image storage uses the same file names.
 ### `crates/disk` — `imaged-disk`
 
 Disk imaging shared by the agent and `imaged-pack`, so both encode partitions
-identically: partition table backup and restore with `sgdisk`, `partclone`
+identically: partition table backup and restore with `sgdisk`, partition
 clones piped through zstd and restores piped back through it, and the root
-partition probe. The probe runs `debugfs -R 'stat /etc/os-release'` against
-each ext partition without mounting it, so it needs no root; a symlinked
-`os-release` counts. `partclone` always gets `--logfile`: without it partclone
-writes `/var/log/partclone.log` and, when not root, outputs nothing.
+partition probe. ext2/3/4 and vfat partitions are cloned with `partclone`;
+swap partitions are stored as their header page only (the `SWAPSPACE2`
+signature with the UUID, label and size, 4 to 64 KiB) and restored by writing
+that page back, so the restored swap keeps its UUID and label. A swap
+partition holding a hibernation image is reported as `swsuspend` and refused.
+A clone stream ends in an error when partclone fails, so a reader that reaches
+its end without an error has the whole partition. The probe runs
+`debugfs -R 'stat /etc/os-release'` against each ext partition without
+mounting it, so it needs no root; a symlinked `os-release` counts. `partclone`
+always gets `--logfile`: without it partclone writes
+`/var/log/partclone.log` and, when not root, outputs nothing.
 
 ### `crates/core` — `imaged-core`
 
@@ -166,7 +173,7 @@ table with `sgdisk` into `parttable.bin`. Each partition is copied into a sparse
 temp file, its filesystem read with `blkid -p`, and cloned with `imaged-disk`
 into `p-<n>.pcl`; its size is its sector count times the sector size, as
 during a capture. Unformatted partitions are skipped like a capture skips
-them; ext2/3/4 and vfat are packed; any other filesystem fails the run.
+them; ext2/3/4, vfat and swap are packed; any other filesystem fails the run.
 `--root-partition <N>` sets the root partition (it must be one of the packed
 partitions); without it the root partition is found by the same rule as a
 capture and left unset when no single partition qualifies. The capture date is

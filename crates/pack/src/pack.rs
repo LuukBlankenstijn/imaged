@@ -126,7 +126,7 @@ async fn clone_partition(extracted: Extracted, dir: &Path) -> anyhow::Result<Par
     let path = dir.join(partition_file(number));
     info!(partition = number, filesystem = %extracted.filesystem, "cloning partition");
     let failed = || format!("cloning partition {number}");
-    let (partclone, mut compressed) = clone_compressed(
+    let mut compressed = clone_compressed(
         extracted.filesystem,
         &extracted.path,
         &dir.join(PARTCLONE_LOG),
@@ -138,7 +138,6 @@ async fn clone_partition(extracted: Extracted, dir: &Path) -> anyhow::Result<Par
     tokio::io::copy(&mut compressed, &mut file)
         .await
         .with_context(failed)?;
-    partclone.wait().await.with_context(failed)?;
     remove(&extracted.path).await?;
     Ok(PartitionSource {
         number,

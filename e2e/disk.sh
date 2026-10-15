@@ -1,4 +1,5 @@
 DISK_SIZE=128M
+SWAP_UUID=5d1f7a3e-2b4c-4e8f-9a61-0c3b7d2e9f14
 DISK_CONTENT=$OUT_DIR/disk-content
 KNOWN_FILES=(
     esp/MARKER.TXT
@@ -64,7 +65,8 @@ build_test_disk() {
     truncate -s "$DISK_SIZE" "$disk"
     sgdisk --clear \
         --new=1:1MiB:+32MiB --typecode=1:ef00 --change-name=1:esp \
-        --new=2:0:0 --typecode=2:8300 --change-name=2:root \
+        --new=2:0:-16MiB --typecode=2:8300 --change-name=2:root \
+        --new=3:0:0 --typecode=3:8200 --change-name=3:swap \
         "$disk" >/dev/null
 
     mkfs.vfat -n ESP -C "$work/esp.img" "$(partition_kib "$disk" 1)" >/dev/null
@@ -74,8 +76,13 @@ build_test_disk() {
     mke2fs -q -t ext4 -L root -d "$DISK_CONTENT/root" "$work/root.img" "$(partition_kib "$disk" 2)k"
     write_partition "$disk" 2 "$work/root.img"
 
+    truncate -s "$(partition_kib "$disk" 3)K" "$work/swap.img"
+    chmod 0600 "$work/swap.img"
+    mkswap -L e2e-swap -U "$SWAP_UUID" "$work/swap.img" >/dev/null
+    write_partition "$disk" 3 "$work/swap.img"
+
     rm -rf "$work"
-    log "built $DISK_SIZE test disk $(relative "$disk"): GPT, p1 vfat ESP, p2 ext4 root with busybox and /etc/os-release; marker '$marker'"
+    log "built $DISK_SIZE test disk $(relative "$disk"): GPT, p1 vfat ESP, p2 ext4 root with busybox and /etc/os-release, p3 swap $SWAP_UUID; marker '$marker'"
 }
 
 build_blank_disk() {
@@ -125,6 +132,12 @@ verify_deployed_disk() {
         cmp "$DISK_CONTENT/$file" "$actual/$file" >&2 || fail "$file on ${deployed##*/} differs from the source disk"
     done
     log "ESP and ext4 files match: $(cat "$actual/root/e2e/marker.txt")"
+    local swap=$OUT_DIR/verify/$(basename "$deployed" .raw).swap
+    extract_partition "$deployed" 3 "$swap"
+    [[ $(blkid -p -o value -s UUID "$swap") == "$SWAP_UUID" && $(blkid -p -o value -s LABEL "$swap") == e2e-swap ]] ||
+        fail "swap on ${deployed##*/} p3 is not $SWAP_UUID/e2e-swap: $(blkid -p "$swap")"
+    rm -f "$swap"
+    log "swap header restored with UUID $SWAP_UUID and label e2e-swap"
     log "random.bin sha256 $(sha256sum <"$actual/root/e2e/random.bin" | cut -c1-16)… identical"
 
     [[ -f $actual/root/etc/hostname ]] || fail "${deployed##*/} has no /etc/hostname; the post-install script did not run"

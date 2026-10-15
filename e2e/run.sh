@@ -271,7 +271,7 @@ deploy_captured() {
 
 prepare_outside_namespace() {
     require_commands cargo cc unshare ip qemu-system-x86_64 dnsmasq curl jq sgdisk sfdisk blkid mke2fs e2fsck debugfs \
-        mkfs.vfat fsck.fat mcopy partclone.extfs partclone.vfat xz tar
+        mkfs.vfat fsck.fat mcopy mkswap partclone.extfs partclone.vfat xz tar
     [[ -x ${E2E_BUSYBOX:-} ]] || fail "E2E_BUSYBOX must point at a static busybox binary (run inside: nix develop $REPO_DIR#e2e)"
     [[ -r /dev/kvm && -w /dev/kvm ]] || fail "/dev/kvm is not accessible"
     mkdir -p "$OUT_DIR"

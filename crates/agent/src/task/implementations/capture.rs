@@ -39,7 +39,7 @@ impl ClientTaskExt for CaptureTask {
     }
 
     async fn handle_partition(&self, partition: PartitionTarget) -> anyhow::Result<()> {
-        let (partclone, compressed) = clone_compressed(
+        let compressed = clone_compressed(
             partition.filesystem,
             Path::new(&partition.device),
             Path::new(PARTCLONE_LOG),
@@ -54,8 +54,7 @@ impl ClientTaskExt for CaptureTask {
                 compressed,
             )
             .await?;
-
-        partclone.wait().await
+        Ok(())
     }
 
     async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
