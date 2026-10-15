@@ -267,7 +267,9 @@ Tests run in one pass:
 cargo test --workspace
 ```
 
-CI runs the same suite as `nix build .#checks.x86_64-linux.tests`.
+CI runs the same suite as `nix build .#checks.x86_64-linux.tests`, which
+embeds placeholder boot assets so it builds neither the agent nor the
+initramfs.
 
 ## Network boot
 

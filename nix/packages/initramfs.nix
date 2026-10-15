@@ -24,5 +24,5 @@ runCommand "imaged-initramfs.cpio.xz"
     STAGING=$(mktemp -d)
     ${initramfsStaging "${imaged-agent}/bin/imaged-agent"}
     cd "$STAGING"
-    find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e > "$out"
+    find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e --threads=0 --block-size=48MiB > "$out"
   ''

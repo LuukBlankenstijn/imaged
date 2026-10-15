@@ -1,5 +1,6 @@
 {
   lib,
+  stdenv,
   craneLib,
   pkg-config,
   sqlite,
@@ -48,11 +49,26 @@ in
 craneLib.mkCargoDerivation (
   commonArgs
   // {
+    # The two cargo invocations `dx bundle --release` makes, so dx finds every
+    # dependency of the server and the wasm client already compiled.
     cargoArtifacts = craneLib.buildDepsOnly (
       commonArgs
       // {
-        cargoExtraArgs = "-p imaged-server";
         doCheck = false;
+        buildPhaseCargoCommand = ''
+          cargo build --locked -p imaged-server --bin imaged-server \
+            --no-default-features --features server \
+            --target ${stdenv.hostPlatform.rust.rustcTarget} --profile server-release \
+            --config 'profile.server-release.inherits="release"' \
+            --config profile.server-release.strip=false
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
+          cargo build --locked -p imaged-server --bin imaged-server \
+            --no-default-features --features web \
+            --target wasm32-unknown-unknown --profile wasm-release \
+            --config 'profile.wasm-release.inherits="release"' \
+            --config profile.wasm-release.strip=false \
+            --config 'profile.wasm-release.opt-level="s"'
+        '';
       }
     );
 

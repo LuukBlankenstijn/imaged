@@ -28,6 +28,8 @@ in
 craneLib.buildPackage (
   commonArgs
   // {
-    cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+    cargoArtifacts = craneLib.buildDepsOnly (
+      commonArgs // { buildPhaseCargoCommand = "cargoWithProfile build -p imaged-agent"; }
+    );
   }
 )

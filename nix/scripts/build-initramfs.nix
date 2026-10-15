@@ -52,7 +52,7 @@ writeShellApplication {
     pack() {
       OUTPUT="$(pwd)/assets/$1/initramfs.cpio.xz"
       mkdir -p "$(dirname "$OUTPUT")"
-      (cd "$STAGING" && find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e > "$OUTPUT")
+      (cd "$STAGING" && find . | cpio -o -H newc 2>/dev/null | xz --check=crc32 -9e --threads=0 --block-size=48MiB > "$OUTPUT")
       rm -rf "$STAGING"
       echo "built: $(du -h "$OUTPUT" | cut -f1) from $2"
     }

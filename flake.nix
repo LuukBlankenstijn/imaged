@@ -109,6 +109,12 @@
         kernels = pkgs.linkFarm "imaged-kernels" kernelAssets;
         ipxeAssets = pkgs.linkFarm "imaged-ipxe-assets" ipxeFiles;
         bootAssets = pkgs.linkFarm "imaged-boot-assets" (kernelAssets // initramfsAssets // ipxeFiles);
+        placeholderBootAssets = pkgs.runCommand "imaged-placeholder-boot-assets" { } ''
+          for asset in ${lib.escapeShellArgs (lib.attrNames (kernelAssets // initramfsAssets // ipxeFiles))}; do
+            mkdir -p "$out/$(dirname "$asset")"
+            echo "placeholder $asset" > "$out/$asset"
+          done
+        '';
 
         devRustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
@@ -171,7 +177,8 @@
         teardown-net = pkgs.callPackage ./nix/scripts/teardown-net.nix { };
 
         imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
-          inherit craneLib bootAssets;
+          inherit craneLib;
+          bootAssets = placeholderBootAssets;
           testTools = diskBuildTools;
         };
 

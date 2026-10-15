@@ -52,7 +52,13 @@ in
 craneLib.cargoTest (
   commonArgs
   // {
-    cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { doCheck = false; });
+    cargoArtifacts = craneLib.buildDepsOnly (
+      commonArgs
+      // {
+        doCheck = false;
+        buildPhaseCargoCommand = "cargoWithProfile test --workspace --no-run";
+      }
+    );
     postPatch = realSourcePrep;
     IMAGED_BOOT_ASSETS = bootAssets;
   }
