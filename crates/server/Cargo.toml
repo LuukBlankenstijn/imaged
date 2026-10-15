@@ -44,5 +44,6 @@ web = ["dioxus/web", "imaged-web/web"]
 [dev-dependencies]
 imaged-server = { path = ".", features = ["server"] }
 futures.workspace = true
+serde_json.workspace = true
 reqwest = { version = "0.12", default-features = false }
 tokio-tungstenite = "0.29"

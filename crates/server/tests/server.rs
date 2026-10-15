@@ -5,11 +5,15 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
+use imaged_api_ui::model::TaskProgress;
+use imaged_model::AgentEvent;
 use imaged_model::agent::{MAC_HEADER, route};
-use imaged_server::{Config, Dashboard, Imaged, Listeners};
+use imaged_model::progress::{HostProgress, Stage};
+use imaged_server::{Config, Dashboard, Imaged, Listeners, TaskProgressFeed};
 use reqwest::StatusCode;
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
@@ -77,6 +81,13 @@ async fn closes_within_a_second(agent: &mut AgentStream) -> bool {
     })
     .await
     .is_ok()
+}
+
+async fn next_within_a_second(progress: &mut TaskProgressFeed) -> Vec<TaskProgress> {
+    tokio::time::timeout(Duration::from_secs(1), progress.next())
+        .await
+        .unwrap()
+        .unwrap()
 }
 
 async fn ends_within_a_second(mut response: reqwest::Response) -> bool {
@@ -228,11 +239,26 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
 
     let mut agent = connect_agent(headless).await;
     assert_eq!(imaged.connected_hosts().len(), 1);
+    let mut progress = imaged.watch_task_progress();
+    assert_eq!(progress.next().await, Some(Vec::new()));
+    let reported = HostProgress {
+        task_id: 7,
+        fraction: 0.5,
+        stage: Stage::Finishing,
+    };
+    let event = serde_json::to_string(&AgentEvent::from(reported.clone())).unwrap();
+    agent.send(Message::text(event)).await.unwrap();
+    let tasks = next_within_a_second(&mut progress).await;
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, 7);
+    assert_eq!(tasks[0].hosts.values().collect::<Vec<_>>(), [&reported]);
+    assert_eq!(imaged.task_progress(), tasks);
     let stopping = Instant::now();
     server.stop().await.unwrap();
     assert!(stopping.elapsed() < Duration::from_secs(1));
     assert!(closes_within_a_second(&mut agent).await);
     assert!(imaged.connected_hosts().is_empty());
+    assert!(next_within_a_second(&mut progress).await.is_empty());
     assert!(probe.refuses_connections(headless).await);
     assert!(imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.is_err());
 

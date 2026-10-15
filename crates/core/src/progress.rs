@@ -76,6 +76,10 @@ impl ProgressBoard {
             .send_if_modified(|snapshot| snapshot.multicast.take().is_some());
     }
 
+    pub fn tasks(&self) -> Vec<TaskProgress> {
+        self.snapshot.borrow().tasks()
+    }
+
     pub fn watch(&self) -> watch::Receiver<Snapshot> {
         self.snapshot.subscribe()
     }

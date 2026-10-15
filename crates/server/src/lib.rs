@@ -15,15 +15,17 @@ use std::{
 
 use axum::{Router, routing::get};
 use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
-use imaged_api_ui::model::Image;
+use imaged_api_ui::model::{Image, TaskProgress};
 use imaged_core::{
     self as core,
     di::{DIContainer, MachineIp},
+    progress::Snapshot,
     registry::HostRegistry,
 };
 use imaged_model::{error::Result, script::ScriptInput};
 use imaged_web::App;
 use tokio::io::AsyncRead;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
@@ -67,6 +69,8 @@ pub struct Server {
 }
 
 struct ServingClaim(MachineIp);
+
+pub struct TaskProgressFeed(watch::Receiver<Snapshot>);
 
 impl Imaged {
     pub async fn open(config: Config) -> io::Result<Self> {
@@ -167,6 +171,25 @@ impl Imaged {
 
     pub fn connected_hosts(&self) -> Vec<i64> {
         self.container.host_registry.connected_hosts()
+    }
+
+    pub fn task_progress(&self) -> Vec<TaskProgress> {
+        let tasks = self.container.progress_board.tasks();
+        tasks.into_iter().map(Into::into).collect()
+    }
+
+    pub fn watch_task_progress(&self) -> TaskProgressFeed {
+        let mut snapshots = self.container.progress_board.watch();
+        snapshots.mark_changed();
+        TaskProgressFeed(snapshots)
+    }
+}
+
+impl TaskProgressFeed {
+    pub async fn next(&mut self) -> Option<Vec<TaskProgress>> {
+        self.0.changed().await.ok()?;
+        let tasks = self.0.borrow_and_update().tasks();
+        Some(tasks.into_iter().map(Into::into).collect())
     }
 }
 

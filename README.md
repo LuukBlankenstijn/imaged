@@ -129,8 +129,12 @@ machine listener only serves `/boot/*` and `/api/client/*`; the dashboard is
 program reads and feeds imaged through the same handle:
 `imaged.import_archive(reader)` imports an image archive and returns the image,
 `imaged.script_inputs(image_id)` lists the inputs declared by the image's
-scripts in script order and `imaged.connected_hosts()` lists the ids of the
-machines whose agent is connected.
+scripts in script order, `imaged.connected_hosts()` lists the ids of the
+machines whose agent is connected and `imaged.task_progress()` returns the
+progress of every task being worked on, the same `TaskProgress` the dashboard
+shows. `imaged.watch_task_progress()` follows it: the feed's `next()` returns
+the current progress at once and then waits for each change; changes made
+between two calls are merged, so a slow reader only sees the latest.
 
 The server side (core, boot, both API crates and the `server` library) also builds
 for Windows (`x86_64-pc-windows-gnu`). Multicast is Linux-only: on other
