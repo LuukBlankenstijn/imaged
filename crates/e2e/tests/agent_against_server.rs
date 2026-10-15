@@ -12,10 +12,12 @@ use tokio::io::AsyncReadExt;
 use imaged_agent::server::Server;
 use imaged_core::domain::script::NewScript;
 use imaged_core::domain::task::{Task, TaskType};
+use imaged_core::progress::Snapshot;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::ServerEvent;
 use imaged_model::agent::{ImagePartition, PostInstall, PostInstallScript};
 use imaged_model::image::ImageStatus;
+use imaged_model::progress::Stage;
 use imaged_model::script::{InputKind, InputValues, ScriptInput};
 use imaged_model::task::TaskState;
 
@@ -370,4 +372,36 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
     assert_eq!(host_state(&current_task, host.id), TaskState::Running);
     let queued_task = s.container.task_repo.get(queued).await.unwrap();
     assert_eq!(host_state(&queued_task, host.id), TaskState::Pending);
+}
+
+#[tokio::test]
+async fn progress_reported_through_the_client_is_shown_until_the_agent_disconnects() {
+    let s = harness::server().await;
+    let (agent, mac) = agent(s);
+    agent.progress(4_242).partition_table();
+    let mut board = s.container.progress_board.watch();
+
+    let mut events = Box::pin(agent.connect_events(DISK).await.expect("connect events"));
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    let reported = |snapshot: &Snapshot| {
+        snapshot.tasks().iter().any(|task| {
+            task.task_id == 4_242
+                && task
+                    .hosts
+                    .get(&host.id)
+                    .is_some_and(|p| p.stage == Stage::PartitionTable)
+        })
+    };
+    tokio::select! {
+        event = events.next() => panic!("a host without tasks receives no event, got {event:?}"),
+        seen = tokio::time::timeout(WAIT, board.wait_for(reported)) => {
+            seen.expect("the progress reaches the board").unwrap();
+        }
+    }
+
+    drop(events);
+    tokio::time::timeout(WAIT, board.wait_for(|snapshot| !reported(snapshot)))
+        .await
+        .expect("the progress is forgotten once the agent disconnects")
+        .unwrap();
 }

@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 
 use crate::components::connection::use_connection_provider;
 use crate::components::icons::Icon;
-use crate::components::multicast::use_transfer_provider;
+use crate::components::progress::use_progress_provider;
 use crate::components::toast::Toaster;
 use crate::views::{Groups, Hosts, Images, Scripts, Tasks};
 
@@ -25,7 +25,7 @@ pub enum Route {
 #[component]
 pub fn App() -> Element {
     use_connection_provider();
-    use_transfer_provider();
+    use_progress_provider();
 
     rsx! {
         document::Link { rel: "preconnect", href: "https://fonts.googleapis.com" }

@@ -4,6 +4,6 @@ pub mod hooks;
 pub mod icons;
 pub mod menu;
 pub mod modal;
-pub mod multicast;
+pub mod progress;
 pub mod toast;
 pub mod ui;

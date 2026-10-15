@@ -4,7 +4,7 @@ use crate::api::tasks::{cancel_task, get_all_tasks, get_script_runs, kick_host, 
 use crate::components::hooks::{use_poll, use_poll_while};
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
-use crate::components::multicast::use_transfer;
+use crate::components::progress::use_task_progress;
 use crate::components::toast::toast_error;
 use crate::components::ui::{
     Badge, Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge,
@@ -12,8 +12,8 @@ use crate::components::ui::{
 };
 use crate::format::{format_bytes, format_duration, format_relative};
 use crate::model::{
-    KickRequest, MulticastProgress, ReceiverProgress, ScriptRun, Task, TaskHost, TaskState,
-    TaskType, TransferPhase,
+    HostProgress, KickRequest, MulticastProgress, ReceiverProgress, ScriptRun, Stage, Task,
+    TaskHost, TaskProgress, TaskState, TaskType, TransferPhase,
 };
 
 fn select_class() -> &'static str {
@@ -152,18 +152,24 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         .clone()
         .unwrap_or_else(|| "\u{2014}".to_string());
     let host_count = task.hosts.len();
-    let transfer = use_transfer(task_id);
+    let progress = use_task_progress(task_id);
+    let multicast = progress.as_ref().and_then(|p| p.multicast.as_ref());
     let hosts: Vec<_> = task
         .hosts
         .iter()
         .map(|h| {
-            let receiver = transfer
+            let running = h.state == TaskState::Running;
+            let reported = progress
                 .as_ref()
-                .and_then(|p| p.hosts.iter().find(|r| r.host_id == h.host_id).cloned());
-            (h.clone(), receiver)
+                .filter(|_| running)
+                .and_then(|p| p.hosts.get(&h.host_id).cloned());
+            let receiver = multicast
+                .filter(|_| running)
+                .and_then(|m| m.receivers.iter().find(|r| r.host_id == h.host_id).cloned());
+            (h.clone(), reported, receiver)
         })
         .collect();
-    let receiving = transfer.is_some();
+    let receiving = multicast.is_some();
 
     let do_cancel = move || {
         spawn(async move {
@@ -234,17 +240,18 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                     }
                 }
             }
-            if let Some(progress) = transfer {
-                TransferBar { progress }
+            if let Some(progress) = progress {
+                TaskProgressBar { hosts: task.hosts.clone(), progress }
             }
             if expanded() {
                 div { class: "border-t border-line/60 px-4 py-3",
                     div { class: "flex flex-col gap-2",
-                        for (h, receiver) in hosts.iter() {
+                        for (h, reported, receiver) in hosts.iter() {
                             TaskHostRow {
                                 key: "{h.host_id}",
                                 task_id,
                                 host: h.clone(),
+                                progress: reported.clone(),
                                 receiver: receiver.clone(),
                                 kickable: receiving && h.state == TaskState::Running,
                                 on_kick: move |host_id| kick_target.set(Some(host_id)),
@@ -287,6 +294,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
 fn TaskHostRow(
     task_id: i64,
     host: TaskHost,
+    progress: Option<HostProgress>,
     receiver: Option<ReceiverProgress>,
     kickable: bool,
     on_kick: EventHandler<i64>,
@@ -298,35 +306,47 @@ fn TaskHostRow(
 
     rsx! {
         div {
-            div { class: "flex flex-wrap items-center gap-3 text-sm",
-                span { class: "font-mono text-xs text-fog-500", "host {host_id}" }
-                TaskStateBadge { state: host.state }
-                if let Some(started) = host.started_at {
-                    span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
-                }
-                if let Some(finished) = host.finished_at {
-                    span { class: "font-mono text-xs text-fog-600", "end {format_relative(finished)}" }
-                }
-                if let Some(err) = host.error.clone() {
-                    span { class: "text-xs text-bad", "{err}" }
-                }
-                if let Some(receiver) = receiver {
-                    ReceiverStats { receiver }
-                }
-                if kickable {
-                    Button {
-                        variant: ButtonVariant::Danger,
-                        onclick: move |_| on_kick.call(host_id),
-                        "Kick"
+            div { class: "flex items-center gap-3 text-sm",
+                div { class: "flex min-w-0 flex-1 flex-wrap items-center gap-3",
+                    span { class: "font-mono text-xs text-fog-500", "host {host_id}" }
+                    TaskStateBadge { state: host.state }
+                    if let Some(started) = host.started_at {
+                        span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
+                    }
+                    if let Some(finished) = host.finished_at {
+                        span { class: "font-mono text-xs text-fog-600", "end {format_relative(finished)}" }
+                    }
+                    if let Some(err) = host.error.clone() {
+                        span { class: "text-xs text-bad", "{err}" }
                     }
                 }
-                if has_scripts {
-                    Button {
-                        variant: if scripts_open() { ButtonVariant::Primary } else { ButtonVariant::Subtle },
-                        class: "ml-auto px-2 py-1 text-xs",
-                        onclick: move |_| scripts_open.toggle(),
-                        Icon { name: "script", class: "w-3.5 h-3.5" }
-                        "Script output"
+                div { class: "flex shrink-0 items-center gap-2",
+                    if kickable {
+                        Button {
+                            variant: ButtonVariant::Danger,
+                            class: "px-2 py-1 text-xs",
+                            onclick: move |_| on_kick.call(host_id),
+                            "Kick"
+                        }
+                    }
+                    if has_scripts {
+                        Button {
+                            variant: if scripts_open() { ButtonVariant::Primary } else { ButtonVariant::Subtle },
+                            class: "px-2 py-1 text-xs",
+                            onclick: move |_| scripts_open.toggle(),
+                            Icon { name: "script", class: "w-3.5 h-3.5" }
+                            "Script output"
+                        }
+                    }
+                }
+            }
+            if progress.is_some() || receiver.is_some() {
+                div { class: "mt-1.5 ml-1 flex flex-col gap-1 border-l-2 border-line pl-3",
+                    if let Some(progress) = progress {
+                        HostProgressStats { progress }
+                    }
+                    if let Some(receiver) = receiver {
+                        ReceiverStats { receiver }
                     }
                 }
             }
@@ -403,33 +423,99 @@ fn ScriptRunView(run: ScriptRun) -> Element {
 }
 
 #[component]
-fn TransferBar(progress: MulticastProgress) -> Element {
-    let percent = (progress.fraction * 100.0).clamp(0.0, 100.0);
-    let rate = format_bytes(progress.bytes_per_second as u64);
-    let joined = progress.hosts.iter().filter(|h| h.joined).count();
+fn ProgressBar(fraction: f64) -> Element {
+    let percent = (fraction * 100.0).clamp(0.0, 100.0);
+    rsx! {
+        div { class: "flex flex-1 items-center gap-3",
+            div { class: "h-1.5 flex-1 overflow-hidden rounded-full bg-ink-700",
+                div {
+                    class: "h-full rounded-full bg-run transition-all duration-500",
+                    style: "width: {percent}%",
+                }
+            }
+            span { class: "w-10 text-right font-mono text-xs text-fog-300", "{percent:.0}%" }
+        }
+    }
+}
+
+fn host_fraction(host: &TaskHost, progress: &TaskProgress) -> Option<f64> {
+    match host.state {
+        TaskState::Pending => Some(0.0),
+        TaskState::Running => Some(
+            progress
+                .hosts
+                .get(&host.host_id)
+                .map_or(0.0, |p| p.fraction),
+        ),
+        TaskState::Done => Some(1.0),
+        TaskState::Failed | TaskState::Cancelled | TaskState::Partial => None,
+    }
+}
+
+#[component]
+fn TaskProgressBar(hosts: Vec<TaskHost>, progress: TaskProgress) -> Element {
+    let fractions: Vec<f64> = hosts
+        .iter()
+        .filter_map(|h| host_fraction(h, &progress))
+        .collect();
+    let fraction = fractions.iter().sum::<f64>() / fractions.len().max(1) as f64;
+    let done = hosts.iter().filter(|h| h.state == TaskState::Done).count();
 
     rsx! {
         div { class: "border-t border-line/60 px-4 py-2.5",
-            div { class: "flex items-center gap-3",
-                div { class: "h-1.5 flex-1 overflow-hidden rounded-full bg-ink-700",
-                    div {
-                        class: "h-full rounded-full bg-run transition-all duration-500",
-                        style: "width: {percent}%",
-                    }
-                }
-                span { class: "w-10 text-right font-mono text-xs text-fog-300", "{percent:.0}%" }
-            }
+            ProgressBar { fraction }
             div { class: "mt-1.5 flex flex-wrap items-center gap-3 font-mono text-[11px] text-fog-500",
-                span { class: "text-fog-300", "{phase_label(progress.phase)}" }
-                span { "{rate}/s" }
-                span { "{joined}/{progress.hosts.len()} joined" }
-                span { "file {progress.step}/{progress.steps}" }
-                if let Some(eta) = progress.eta_seconds {
-                    span { "eta {format_duration(eta)}" }
+                span { "{done}/{fractions.len()} hosts done" }
+            }
+            if let Some(multicast) = progress.multicast {
+                MulticastStats { multicast }
+            }
+        }
+    }
+}
+
+#[component]
+fn MulticastStats(multicast: MulticastProgress) -> Element {
+    let rate = format_bytes(multicast.bytes_per_second as u64);
+    let joined = multicast.receivers.iter().filter(|r| r.joined).count();
+
+    rsx! {
+        div { class: "mt-1 flex flex-wrap items-center gap-3 font-mono text-[11px] text-fog-500",
+            span { class: "text-fog-300", "{phase_label(multicast.phase)}" }
+            span { "{rate}/s" }
+            span { "{joined}/{multicast.receivers.len()} joined" }
+            span { "file {multicast.step}/{multicast.steps}" }
+            if let Some(eta) = multicast.eta_seconds {
+                span { "eta {format_duration(eta)}" }
+            }
+            if let Some(culprit) = multicast.receivers.iter().find(|r| r.limiting) {
+                span { class: "text-warn", "held up by {culprit.name}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn HostProgressStats(progress: HostProgress) -> Element {
+    rsx! {
+        div { class: "flex flex-wrap items-center gap-3",
+            div { class: "flex w-56", ProgressBar { fraction: progress.fraction } }
+            match progress.stage {
+            Stage::PartitionTable => rsx! {
+                span { class: "font-mono text-xs text-fog-500", "partition table" }
+            },
+            Stage::Partition { number, index, count, bytes_per_second, eta_seconds } => rsx! {
+                span { class: "font-mono text-xs text-fog-500", "partition {number} ({index + 1}/{count})" }
+                if bytes_per_second > 0.0 {
+                    span { class: "font-mono text-xs text-fog-600", "{format_bytes(bytes_per_second as u64)}/s" }
                 }
-                if let Some(culprit) = progress.hosts.iter().find(|h| h.limiting) {
-                    span { class: "text-warn", "held up by {culprit.name}" }
+                if let Some(eta) = eta_seconds {
+                    span { class: "font-mono text-xs text-fog-600", "eta {format_duration(eta)}" }
                 }
+            },
+            Stage::Finishing => rsx! {
+                span { class: "font-mono text-xs text-fog-500", "finishing" }
+            },
             }
         }
     }
@@ -447,16 +533,19 @@ fn phase_label(phase: TransferPhase) -> &'static str {
 fn ReceiverStats(receiver: ReceiverProgress) -> Element {
     let loss = receiver.loss * 100.0;
     rsx! {
-        if receiver.joined {
-            span { class: "font-mono text-xs text-fog-600", "{receiver.slices_behind} behind" }
-            span { class: "font-mono text-xs text-fog-600", "{loss:.1}% loss" }
-            span { class: "font-mono text-xs text-fog-600", "{receiver.naks} naks" }
-            span { class: "font-mono text-xs text-fog-600", "{receiver.sink_stall_ms} ms stalled" }
-        } else {
-            span { class: "font-mono text-xs text-fog-600", "not joined" }
-        }
-        if receiver.limiting {
-            span { class: "text-xs text-warn", "holding up the transfer" }
+        div { class: "flex flex-wrap items-center gap-3",
+            span { class: "font-mono text-xs text-fog-500", "receiver" }
+            if receiver.joined {
+                span { class: "font-mono text-xs text-fog-600", "{receiver.slices_behind} behind" }
+                span { class: "font-mono text-xs text-fog-600", "{loss:.1}% loss" }
+                span { class: "font-mono text-xs text-fog-600", "{receiver.naks} naks" }
+                span { class: "font-mono text-xs text-fog-600", "{receiver.sink_stall_ms} ms stalled" }
+            } else {
+                span { class: "font-mono text-xs text-fog-600", "not joined" }
+            }
+            if receiver.limiting {
+                span { class: "text-xs text-warn", "holding up the transfer" }
+            }
         }
     }
 }
@@ -482,44 +571,110 @@ mod tests {
         }
     }
 
-    fn progress(fraction: f64, eta_seconds: Option<u64>) -> MulticastProgress {
+    fn multicast(eta_seconds: Option<u64>) -> MulticastProgress {
         MulticastProgress {
-            task_id: 3,
             phase: TransferPhase::Sending,
-            fraction,
             bytes_per_second: 1024.0 * 1024.0,
             step: 2,
             steps: 5,
             eta_seconds,
-            hosts: vec![receiver(1, true, true), receiver(2, false, false)],
+            receivers: vec![receiver(1, true, true), receiver(2, false, false)],
+        }
+    }
+
+    fn task_host(host_id: i64, state: TaskState) -> TaskHost {
+        TaskHost {
+            host_id,
+            state,
+            error: None,
+            started_at: None,
+            finished_at: None,
+        }
+    }
+
+    fn reported(fraction: f64, stage: Stage) -> HostProgress {
+        HostProgress {
+            task_id: 3,
+            fraction,
+            stage,
         }
     }
 
     #[test]
-    fn the_transfer_bar_shows_the_phase_progress_and_how_many_hosts_joined() {
-        let html = render(rsx! { TransferBar { progress: progress(0.42, Some(90)) } });
+    fn the_task_bar_averages_the_hosts_that_are_still_meant_to_finish() {
+        let hosts = vec![
+            task_host(1, TaskState::Done),
+            task_host(2, TaskState::Running),
+            task_host(3, TaskState::Pending),
+            task_host(4, TaskState::Failed),
+        ];
+        let progress = TaskProgress {
+            task_id: 3,
+            hosts: [(2, reported(0.5, Stage::Finishing))].into(),
+            multicast: None,
+        };
 
-        assert!(html.contains("width: 42%"), "{html}");
+        let html = render(rsx! { TaskProgressBar { hosts, progress } });
+
+        assert!(html.contains("width: 50%"), "{html}");
+        assert!(html.contains("1/3 hosts done"), "{html}");
+        assert!(!html.contains("joined"), "{html}");
+    }
+
+    #[test]
+    fn a_multicast_adds_the_transfer_stats_below_the_task_bar() {
+        let progress = TaskProgress {
+            task_id: 3,
+            hosts: Default::default(),
+            multicast: Some(multicast(Some(90))),
+        };
+
+        let html = render(
+            rsx! { TaskProgressBar { hosts: vec![task_host(1, TaskState::Running)], progress } },
+        );
+
+        assert!(html.contains("width: 0%"), "{html}");
         assert!(html.contains("sending"), "{html}");
         assert!(html.contains("1.00 MiB/s"), "{html}");
         assert!(html.contains("1/2 joined"), "{html}");
         assert!(html.contains("file 2/5"), "{html}");
         assert!(html.contains("eta 1m 30s"), "{html}");
+        assert!(html.contains("held up by lab-1"), "{html}");
     }
 
     #[test]
-    fn a_transfer_without_an_eta_omits_it_and_clamps_the_bar() {
-        let html = render(rsx! { TransferBar { progress: progress(1.5, None) } });
+    fn multicast_stats_without_an_eta_omit_it() {
+        let html = render(rsx! { MulticastStats { multicast: multicast(None) } });
 
-        assert!(html.contains("width: 100%"), "{html}");
         assert!(!html.contains("eta"), "{html}");
     }
 
     #[test]
-    fn the_transfer_bar_names_the_host_holding_the_transfer_up() {
-        let html = render(rsx! { TransferBar { progress: progress(0.42, None) } });
+    fn a_host_shows_the_partition_it_is_imaging_with_its_rate_and_eta() {
+        let progress = reported(
+            0.42,
+            Stage::Partition {
+                number: 3,
+                index: 1,
+                count: 2,
+                bytes_per_second: 2.0 * 1024.0 * 1024.0,
+                eta_seconds: Some(75),
+            },
+        );
 
-        assert!(html.contains("held up by lab-1"), "{html}");
+        let html = render(rsx! { HostProgressStats { progress } });
+
+        assert!(html.contains("width: 42%"), "{html}");
+        assert!(html.contains("partition 3 (2/2)"), "{html}");
+        assert!(html.contains("2.00 MiB/s"), "{html}");
+        assert!(html.contains("eta 1m 15s"), "{html}");
+    }
+
+    #[test]
+    fn a_progress_bar_is_clamped_to_full() {
+        let html = render(rsx! { ProgressBar { fraction: 1.5 } });
+
+        assert!(html.contains("width: 100%"), "{html}");
     }
 
     #[test]

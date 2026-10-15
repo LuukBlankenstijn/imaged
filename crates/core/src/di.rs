@@ -13,6 +13,7 @@ use crate::domain::image::ImageRepository;
 use crate::domain::script::ScriptRepository;
 use crate::domain::task::TaskRepository;
 use crate::multicast::MulticastManager;
+use crate::progress::ProgressBoard;
 use crate::registry::HostRegistry;
 use crate::service::archive::ArchiveService;
 use crate::service::image::ImageService;
@@ -29,6 +30,7 @@ pub struct DIContainer {
     pub image_service: Arc<ImageService>,
     pub archive_service: Arc<ArchiveService>,
     pub multicast_manager: Arc<MulticastManager>,
+    pub progress_board: Arc<ProgressBoard>,
     pub machine_ip: Arc<RwLock<Option<IpAddr>>>,
     pub agent_liveness: AgentLiveness,
     pub script_proxy: Option<Arc<str>>,
@@ -46,6 +48,7 @@ register_injectable!(Registry(Arc<HostRegistry>), host_registry);
 register_injectable!(ImageSvc(Arc<ImageService>), image_service);
 register_injectable!(ArchiveSvc(Arc<ArchiveService>), archive_service);
 register_injectable!(MulticastMgr(Arc<MulticastManager>), multicast_manager);
+register_injectable!(Progress(Arc<ProgressBoard>), progress_board);
 register_injectable!(MachineIp(Arc<RwLock<Option<IpAddr>>>), machine_ip);
 register_injectable!(Liveness(AgentLiveness), agent_liveness);
 register_injectable!(ScriptProxy(Option<Arc<str>>), script_proxy);

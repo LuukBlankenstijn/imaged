@@ -19,7 +19,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    setup_logging!(args.log_level, ["scuttlecast"]);
+    setup_logging!(args.log_level, ["imaged-disk", "scuttlecast"]);
 
     let mac = sys::get_mac()?;
     let ip = sys::get_ip();

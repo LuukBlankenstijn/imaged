@@ -2,6 +2,7 @@ pub mod di;
 pub mod domain;
 pub mod listener;
 pub mod multicast;
+pub mod progress;
 pub mod registry;
 pub mod repository;
 pub mod service;
@@ -68,6 +69,7 @@ pub async fn build_di_container(
     let script_repo = repository::script_repo(pool.clone());
     let group_repo = repository::group_repo(pool);
     let host_registry = Arc::new(registry::HostRegistry::default());
+    let progress_board = Arc::new(progress::ProgressBoard::default());
     let image_service = Arc::new(service::image::ImageService::new(images_dir));
     let archive_service = Arc::new(
         service::archive::ArchiveService::start(
@@ -84,6 +86,7 @@ pub async fn build_di_container(
             image_repo.clone(),
             image_service.clone(),
             host_registry.clone(),
+            progress_board.clone(),
             multicast_interface,
         )
         .await?,
@@ -104,6 +107,7 @@ pub async fn build_di_container(
         image_service,
         archive_service,
         multicast_manager,
+        progress_board,
         machine_ip,
         agent_liveness,
         script_proxy.map(Arc::from),

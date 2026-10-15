@@ -12,7 +12,8 @@ Types and rules shared by the server, the agent, the dashboard and the packer:
 `AppError` with optional axum (`axum-error`), sqlx (`sqlx-error`) and dioxus
 server function (`serverfn`) integrations, the agent protocol
 (`imaged_model::agent`: route templates, path builders, request and response
-types, headers; the websocket events are `ServerEvent`), the multicast group
+types, headers; the websocket events are `ServerEvent` down and `AgentEvent`
+up), the progress an agent reports (`imaged_model::progress`), the multicast group
 and port math, the script input and script name rules, and the rules for the
 variables an embedding program hands to scripts. Builds for wasm; the
 `logging` feature adds the tracing setup the binaries share.
@@ -46,13 +47,20 @@ its end without an error has the whole partition. The probe runs
 `debugfs -R 'stat /etc/os-release'` against each ext partition without
 mounting it, so it needs no root; a symlinked `os-release` counts. `partclone`
 always gets `--logfile`: without it partclone writes
-`/var/log/partclone.log` and, when not root, outputs nothing.
+`/var/log/partclone.log` and, when not root, outputs nothing. Its stderr is
+parsed: every data status line (fraction done, rate, time remaining) goes to the
+caller's progress callback, the bitmap scan before it is skipped and any other
+line is logged. A clone stream only ends once its last progress is reported.
 
 ### `crates/core` — `imaged-core`
 
 Rust library. Domain model, SQLite (sqlx) repositories for hosts, images and
-tasks, the in-memory host connection registry, the multicast manager, image
-storage and DI wiring. Image partitions are stored on disk
+tasks, the in-memory host connection registry, the multicast manager, the
+in-memory progress board, image storage and DI wiring. The progress board keeps
+the latest progress each agent reported, until the host finishes, fails, is
+cancelled or disconnects; a running multicast session adds its scuttlecast sender
+stats (phase, rate, per-receiver lag and loss, the host holding it up) to the
+same board. Image partitions are stored on disk
 under `<data-dir>/images/`, next to the `<data-dir>/imaged.db` database.
 
 Images can be exported and imported as `imaged-archive` archives
@@ -86,7 +94,11 @@ Dioxus fullstack library that renders the dashboard (hydrated wasm client) and
 mounts the server-side routes. The Scripts page edits the script library; each image
 lists its scripts and root partition; the deploy and multicast dialogs ask for
 the inputs of the image's scripts (shared values once, per-machine values per
-host); and the Tasks page shows each host's script output.
+host); and the Tasks page shows each host's script output. Active tasks get a
+progress bar averaging their hosts, each running host its own bar with the
+partition being imaged, its rate and eta, and a multicast also the sender stats
+and per-host receiver stats used to decide whom to kick. Progress is streamed
+from `/api/ui/task-progress` at most once a second.
 
 ### `crates/api/ui` — `imaged-api-ui`
 
@@ -148,7 +160,11 @@ truthy (anything but empty, `0`, `f`, `false`, `n`, `no` or `off`).
 Rust binary that runs on a PXE-booted machine. On start it connects to
 `/api/client/stream` over a websocket with its state (mac address, disk size),
 receives capture / deploy tasks over it as JSON events, and uploads and
-downloads partition tables, partitions and script output over HTTP. Uses
+downloads partition tables, partitions and script output over HTTP. Task
+progress goes up the same websocket: the agent weighs each partition by its size
+(swap counts as nothing, only its header is imaged) and sends its latest
+progress at most every 5 seconds, only when it changed, and again after a
+reconnect. Uses
 `imaged-disk` (`partclone` for filesystem-aware imaging, `sgdisk` for the
 partition table, `debugfs` for the root partition).
 

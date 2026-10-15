@@ -1,3 +1,5 @@
+mod status;
+
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -7,28 +9,31 @@ use std::task::{Context, Poll, ready};
 use anyhow::{anyhow, bail};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::process::{Child, ChildStdout, Command};
+use tokio::task::JoinHandle;
 
+use crate::Progress;
 use crate::imaging::Captured;
 
 const LOG_TAIL_LINES: usize = 20;
 
-pub fn capture(binary: &str, source: &Path, logfile: &Path) -> anyhow::Result<Captured> {
-    let mut child = Command::new(binary)
-        .arg("--clone")
-        .arg("--logfile")
-        .arg(logfile)
+pub fn capture(
+    binary: &str,
+    source: &Path,
+    logfile: &Path,
+    on_progress: impl Fn(Progress) + Send + 'static,
+) -> anyhow::Result<Captured> {
+    let mut child = partclone(binary, "--clone", logfile)
         .arg("--source")
         .arg(source)
         .args(["--output", "-"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
         .spawn()?;
     let stdout = child.stdout.take().expect("stdout piped");
-    Ok(Box::new(Output::Reading {
+    let stderr = child.stderr.take().expect("stderr piped");
+    let progress = tokio::spawn(status::follow(stderr, on_progress));
+    Ok(Box::new(Output {
         stdout,
-        child,
-        logfile: logfile.to_owned(),
+        exit: Some(Box::pin(exited(child, progress, logfile.to_owned()))),
     }))
 }
 
@@ -37,22 +42,20 @@ pub async fn restore(
     mut data: impl AsyncRead + Unpin,
     target: &Path,
     logfile: &Path,
+    on_progress: impl Fn(Progress),
 ) -> anyhow::Result<()> {
-    let mut child = Command::new(binary)
-        .arg("--restore")
-        .arg("--logfile")
-        .arg(logfile)
+    let mut child = partclone(binary, "--restore", logfile)
         .args(["--source", "-", "--output"])
         .arg(target)
         .stdin(Stdio::piped())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
         .spawn()?;
-    let copied = {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        tokio::io::copy(&mut data, &mut stdin).await
-    };
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+    let (copied, ()) = tokio::join!(
+        async move { tokio::io::copy(&mut data, &mut stdin).await },
+        status::follow(stderr, on_progress),
+    );
 
     let status = child.wait().await?;
     match copied {
@@ -74,14 +77,22 @@ pub async fn restore(
     }
 }
 
-enum Output {
-    Reading {
-        stdout: ChildStdout,
-        child: Child,
-        logfile: PathBuf,
-    },
-    Exiting(Pin<Box<dyn Future<Output = io::Result<()>> + Send>>),
-    Done,
+fn partclone(binary: &str, mode: &str, logfile: &Path) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .arg(mode)
+        .args(status::FLAGS)
+        .arg("--logfile")
+        .arg(logfile)
+        .env("LC_ALL", "C")
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+struct Output {
+    stdout: ChildStdout,
+    exit: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send>>>,
 }
 
 impl AsyncRead for Output {
@@ -90,34 +101,24 @@ impl AsyncRead for Output {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        loop {
-            match &mut *self {
-                Output::Reading { stdout, .. } => {
-                    let filled = buf.filled().len();
-                    ready!(Pin::new(stdout).poll_read(cx, buf))?;
-                    if buf.filled().len() > filled || buf.remaining() == 0 {
-                        return Poll::Ready(Ok(()));
-                    }
-                    let Output::Reading { child, logfile, .. } =
-                        std::mem::replace(&mut *self, Output::Done)
-                    else {
-                        unreachable!("matched Reading above");
-                    };
-                    *self = Output::Exiting(Box::pin(exited(child, logfile)));
-                }
-                Output::Exiting(exit) => {
-                    let result = ready!(exit.as_mut().poll(cx));
-                    *self = Output::Done;
-                    return Poll::Ready(result);
-                }
-                Output::Done => return Poll::Ready(Ok(())),
-            }
+        let output = &mut *self;
+        let Some(exit) = &mut output.exit else {
+            return Poll::Ready(Ok(()));
+        };
+        let filled = buf.filled().len();
+        ready!(Pin::new(&mut output.stdout).poll_read(cx, buf))?;
+        if buf.filled().len() > filled || buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
         }
+        let result = ready!(exit.as_mut().poll(cx));
+        output.exit = None;
+        Poll::Ready(result)
     }
 }
 
-async fn exited(mut child: Child, logfile: PathBuf) -> io::Result<()> {
+async fn exited(mut child: Child, progress: JoinHandle<()>, logfile: PathBuf) -> io::Result<()> {
     let status = child.wait().await?;
+    let _ = progress.await;
     if status.success() {
         return Ok(());
     }

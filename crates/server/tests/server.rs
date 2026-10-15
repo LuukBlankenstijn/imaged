@@ -137,7 +137,7 @@ impl Probe {
 
     async fn dashboard_progress(&self, address: SocketAddr) -> reqwest::Response {
         self.0
-            .get(format!("http://{address}/api/ui/multicast-progress"))
+            .get(format!("http://{address}/api/ui/task-progress"))
             .send()
             .await
             .unwrap()

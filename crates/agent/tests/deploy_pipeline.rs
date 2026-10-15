@@ -50,8 +50,12 @@ async fn deploy_pipeline_pipes_decompressed_bytes_into_partclone() {
         size: plaintext.len() as u64,
     };
 
+    let progress = agent
+        .progress(task_id)
+        .partitions(std::slice::from_ref(&target))
+        .remove(0);
     DeployTask::new(agent, task_id)
-        .handle_partition(target)
+        .handle_partition(target, progress)
         .await
         .expect("handle_partition should drive the full download pipeline");
 

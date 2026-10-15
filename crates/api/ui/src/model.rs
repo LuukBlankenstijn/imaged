@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 pub use imaged_model::group::Group;
 pub use imaged_model::host::{ConnectionChange, HostConnectionEvent};
 pub use imaged_model::image::{ImagePartition, ImageStatus};
 pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
+pub use imaged_model::progress::{HostProgress, Stage};
 pub use imaged_model::script::{DeployInputs, InputKind};
 pub use imaged_model::task::TaskState;
 
@@ -17,15 +20,20 @@ pub struct Host {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MulticastProgress {
+pub struct TaskProgress {
     pub task_id: i64,
+    pub hosts: BTreeMap<i64, HostProgress>,
+    pub multicast: Option<MulticastProgress>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MulticastProgress {
     pub phase: TransferPhase,
-    pub fraction: f64,
     pub bytes_per_second: f64,
     pub step: usize,
     pub steps: usize,
     pub eta_seconds: Option<u64>,
-    pub hosts: Vec<ReceiverProgress>,
+    pub receivers: Vec<ReceiverProgress>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

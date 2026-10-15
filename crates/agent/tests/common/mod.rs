@@ -19,8 +19,8 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
 use imaged_agent::server::Server;
-use imaged_model::ServerEvent;
 use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, TaskFailure, route};
+use imaged_model::{AgentEvent, ServerEvent};
 use reqwest::Url;
 
 const CHUNK: usize = 512;
@@ -125,6 +125,7 @@ struct AppState {
     upgrades: Arc<AtomicUsize>,
     control: broadcast::Sender<StubCommand>,
     pongs: Arc<AtomicUsize>,
+    agent_events: Arc<Mutex<Vec<AgentEvent>>>,
 }
 
 pub struct StubServer {
@@ -135,6 +136,7 @@ pub struct StubServer {
     upgrades: Arc<AtomicUsize>,
     control: broadcast::Sender<StubCommand>,
     pongs: Arc<AtomicUsize>,
+    agent_events: Arc<Mutex<Vec<AgentEvent>>>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -177,6 +179,11 @@ impl StubServer {
     pub fn pongs(&self) -> usize {
         self.pongs.load(Ordering::SeqCst)
     }
+
+    /// Every event the agent sent up its websocket, across all connections.
+    pub fn agent_events(&self) -> Vec<AgentEvent> {
+        self.agent_events.lock().unwrap().clone()
+    }
 }
 
 impl Drop for StubServer {
@@ -192,6 +199,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
     let upgrades = Arc::new(AtomicUsize::new(0));
     let (control, _) = broadcast::channel(32);
     let pongs = Arc::new(AtomicUsize::new(0));
+    let agent_events = Arc::new(Mutex::new(Vec::new()));
 
     let state = Arc::new(AppState {
         cfg,
@@ -201,6 +209,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
         upgrades: upgrades.clone(),
         control: control.clone(),
         pongs: pongs.clone(),
+        agent_events: agent_events.clone(),
     });
 
     let app = Router::new()
@@ -231,6 +240,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
         upgrades,
         control,
         pongs,
+        agent_events,
         handle,
     }
 }
@@ -406,6 +416,10 @@ async fn handle_socket(s: Arc<AppState>, mut socket: WebSocket) {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(Message::Pong(_))) => {
                         s.pongs.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        let event = serde_json::from_str(text.as_str()).expect("agent event");
+                        s.agent_events.lock().unwrap().push(event);
                     }
                     Some(Ok(_)) => {}
                 },

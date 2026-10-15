@@ -7,7 +7,8 @@ use std::time::Duration;
 use common::{StreamBehavior, StubConfig, StubServer, agent_server, fake_bins, stub_server};
 use imaged_agent::connection::{self, Backoff};
 use imaged_agent::task::ClientState;
-use imaged_model::{ServerEvent, Task, TaskType};
+use imaged_model::progress::{HostProgress, Stage};
+use imaged_model::{AgentEvent, ServerEvent, Task, TaskType};
 use tokio_util::sync::CancellationToken;
 
 const MAC: &str = "aa:bb:cc:dd:ee:ff";
@@ -57,6 +58,18 @@ async fn wait_for_task(state: &ClientState, expected: Option<i64>) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for current task {expected:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+async fn wait_for_agent_events(server: &StubServer, at_least: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while server.agent_events().len() < at_least {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {at_least} agent events (saw {:?})",
+            server.agent_events()
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
@@ -131,6 +144,33 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
 
     tokio::select! {
         _ = connection::run(agent, state.clone(), 1024, TEST_BACKOFF) => {
+            unreachable!("the agent must never exit because the connection dropped")
+        }
+        _ = driver => {}
+    }
+}
+
+#[tokio::test]
+async fn the_latest_progress_is_sent_on_connect_and_again_after_a_reconnect() {
+    let server = stub_server(StubConfig::new().stream_behavior(StreamBehavior::HoldOpen)).await;
+    let agent = agent_server(&server.base_url, MAC);
+    agent.progress(TASK_ID).partition_table();
+    let reported = AgentEvent::Progress(HostProgress {
+        task_id: TASK_ID,
+        fraction: 0.0,
+        stage: Stage::PartitionTable,
+    });
+
+    let driver = async {
+        wait_for_agent_events(&server, 1).await;
+        server.close_connections();
+        wait_for_upgrades(&server, 2).await;
+        wait_for_agent_events(&server, 2).await;
+        assert_eq!(server.agent_events(), [reported.clone(), reported]);
+    };
+
+    tokio::select! {
+        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), 1024, TEST_BACKOFF) => {
             unreachable!("the agent must never exit because the connection dropped")
         }
         _ = driver => {}

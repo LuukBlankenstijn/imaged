@@ -4,7 +4,8 @@ use imaged_core::domain::{
     script::{NewScript as DNewScript, Script as DScript},
     task::{ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskType as DType},
 };
-use imaged_core::multicast::MulticastProgress as DProgress;
+use imaged_core::multicast::MulticastProgress as DMulticastProgress;
+use imaged_core::progress::TaskProgress as DTaskProgress;
 use imaged_model::script::ScriptInput as DScriptInput;
 
 use crate::model;
@@ -21,17 +22,25 @@ impl From<DHost> for model::Host {
     }
 }
 
-impl From<DProgress> for model::MulticastProgress {
-    fn from(p: DProgress) -> Self {
+impl From<DTaskProgress> for model::TaskProgress {
+    fn from(p: DTaskProgress) -> Self {
         Self {
             task_id: p.task_id,
+            hosts: p.hosts,
+            multicast: p.multicast.map(Into::into),
+        }
+    }
+}
+
+impl From<DMulticastProgress> for model::MulticastProgress {
+    fn from(p: DMulticastProgress) -> Self {
+        Self {
             phase: p.phase,
-            fraction: p.fraction,
             bytes_per_second: p.bytes_per_second,
             step: p.step,
             steps: p.steps,
             eta_seconds: p.eta.map(|eta| eta.as_secs()),
-            hosts: p.hosts,
+            receivers: p.receivers,
         }
     }
 }

@@ -1,6 +1,8 @@
 use derive_more::{Constructor, Display, From, IsVariant};
 use serde::{Deserialize, Serialize};
 
+use crate::progress::HostProgress;
+
 #[derive(Debug, Display, IsVariant, Serialize, Deserialize, PartialEq, Clone, Copy)]
 pub enum TaskType {
     Capture,
@@ -20,6 +22,11 @@ pub struct Task {
 pub enum ServerEvent {
     Task(Task),
     Cancel(i64),
+}
+
+#[derive(Debug, Serialize, Deserialize, From, Clone, PartialEq)]
+pub enum AgentEvent {
+    Progress(HostProgress),
 }
 
 #[cfg(test)]

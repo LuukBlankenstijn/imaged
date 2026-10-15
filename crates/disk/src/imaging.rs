@@ -3,7 +3,7 @@ use std::path::Path;
 use async_compression::tokio::bufread::{ZstdDecoder, ZstdEncoder};
 use tokio::io::{AsyncRead, BufReader};
 
-use crate::{Filesystem, partclone, swap};
+use crate::{Filesystem, Progress, partclone, swap};
 
 pub type Captured = Box<dyn AsyncRead + Send + Unpin>;
 pub type Compressed = ZstdEncoder<BufReader<Captured>>;
@@ -24,9 +24,14 @@ impl Imager {
         }
     }
 
-    fn capture(&self, source: &Path, logfile: &Path) -> anyhow::Result<Captured> {
+    fn capture(
+        &self,
+        source: &Path,
+        logfile: &Path,
+        on_progress: impl Fn(Progress) + Send + 'static,
+    ) -> anyhow::Result<Captured> {
         match self {
-            Self::Partclone(binary) => partclone::capture(binary, source, logfile),
+            Self::Partclone(binary) => partclone::capture(binary, source, logfile, on_progress),
             Self::SwapHeader => swap::capture(source),
         }
     }
@@ -36,9 +41,12 @@ impl Imager {
         data: impl AsyncRead + Unpin,
         target: &Path,
         logfile: &Path,
+        on_progress: impl Fn(Progress),
     ) -> anyhow::Result<()> {
         match self {
-            Self::Partclone(binary) => partclone::restore(binary, data, target, logfile).await,
+            Self::Partclone(binary) => {
+                partclone::restore(binary, data, target, logfile, on_progress).await
+            }
             Self::SwapHeader => swap::restore(data, target).await,
         }
     }
@@ -48,8 +56,9 @@ pub fn clone_compressed(
     filesystem: Filesystem,
     source: &Path,
     logfile: &Path,
+    on_progress: impl Fn(Progress) + Send + 'static,
 ) -> anyhow::Result<Compressed> {
-    let captured = Imager::of(filesystem).capture(source, logfile)?;
+    let captured = Imager::of(filesystem).capture(source, logfile, on_progress)?;
     Ok(ZstdEncoder::new(BufReader::new(captured)))
 }
 
@@ -58,7 +67,10 @@ pub async fn restore_compressed(
     compressed: impl AsyncRead + Unpin,
     target: &Path,
     logfile: &Path,
+    on_progress: impl Fn(Progress),
 ) -> anyhow::Result<()> {
     let data = ZstdDecoder::new(BufReader::new(compressed));
-    Imager::of(filesystem).restore(data, target, logfile).await
+    Imager::of(filesystem)
+        .restore(data, target, logfile, on_progress)
+        .await
 }

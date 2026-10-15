@@ -1,4 +1,5 @@
 use anyhow::Result;
+use imaged_disk::Progress;
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::task::implementations::ClientTaskExt;
@@ -9,18 +10,22 @@ use crate::task::implementations::ClientTaskExt;
 )]
 pub trait RunnableClientTask: ClientTaskExt {
     async fn run(&self) -> Result<()> {
+        let progress = self.server().progress(self.task_id());
         let disk = crate::sys::disk::find_target_disk().await?;
         let device = format!("/dev/{}", disk.name);
 
+        progress.partition_table();
         self.handle_partition_table(&device).await?;
 
         let disk = crate::sys::disk::find_target_disk().await?;
 
         let partitions = self.plan_partitions(&disk).await?;
-        for partition in &partitions {
-            self.handle_partition(partition.clone()).await?;
+        for (partition, reporter) in partitions.iter().zip(progress.partitions(&partitions)) {
+            reporter.report(Progress::default());
+            self.handle_partition(partition.clone(), reporter).await?;
         }
 
+        progress.finishing();
         self.after_partitions(&partitions).await
     }
 }

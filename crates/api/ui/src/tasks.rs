@@ -6,7 +6,7 @@ use crate::model::{KickRequest, ScriptRun, Task};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{ImageRepo, MulticastMgr, Registry, TaskRepo};
+use imaged_core::di::{ImageRepo, MulticastMgr, Progress, Registry, TaskRepo};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
 #[cfg(feature = "server")]
@@ -30,7 +30,7 @@ pub async fn get_script_runs(task_id: i64, host_id: i64) -> Result<Vec<ScriptRun
 }
 
 #[post("/api/ui/tasks/cancel")]
-#[inject(task_repo: TaskRepo, image_repo: ImageRepo, multicast_mgr: MulticastMgr, registry: Registry)]
+#[inject(task_repo: TaskRepo, image_repo: ImageRepo, multicast_mgr: MulticastMgr, registry: Registry, progress: Progress)]
 pub async fn cancel_task(id: i64) -> Result<()> {
     let task = task_repo.get(id).await?;
     let state = task.aggregate_state();
@@ -56,12 +56,13 @@ pub async fn cancel_task(id: i64) -> Result<()> {
         .filter(|h| h.state.is_pending() || h.state.is_running())
     {
         registry.cancel_task(host.host_id, task.id);
+        progress.forget(host.host_id);
     }
     Ok(())
 }
 
 #[post("/api/ui/tasks/kick")]
-#[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr, registry: Registry)]
+#[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr, registry: Registry, progress: Progress)]
 pub async fn kick_host(req: KickRequest) -> Result<()> {
     let KickRequest { task_id, host_id } = req;
     let task = task_repo.get(task_id).await?;
@@ -77,6 +78,7 @@ pub async fn kick_host(req: KickRequest) -> Result<()> {
         .await?;
     multicast_mgr.wake();
     registry.cancel_task(host_id, task.id);
+    progress.forget(host_id);
     Ok(())
 }
 

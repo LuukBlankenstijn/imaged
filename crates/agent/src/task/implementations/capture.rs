@@ -6,6 +6,7 @@ use imaged_disk::{backup_partition_table, clone_compressed, holds_system, root_p
 use tracing::{info, warn};
 
 use super::{ClientTaskExt, PARTCLONE_LOG};
+use crate::progress::PartitionProgress;
 use crate::server::Server;
 use crate::sys::disk::PartitionTarget;
 use crate::task::PARTTABLE_TMP;
@@ -38,11 +39,16 @@ impl ClientTaskExt for CaptureTask {
         Ok(())
     }
 
-    async fn handle_partition(&self, partition: PartitionTarget) -> anyhow::Result<()> {
+    async fn handle_partition(
+        &self,
+        partition: PartitionTarget,
+        progress: PartitionProgress,
+    ) -> anyhow::Result<()> {
         let compressed = clone_compressed(
             partition.filesystem,
             Path::new(&partition.device),
             Path::new(PARTCLONE_LOG),
+            move |partition| progress.report(partition),
         )?;
 
         self.server

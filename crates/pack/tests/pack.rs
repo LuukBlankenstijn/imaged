@@ -403,9 +403,15 @@ async fn a_swap_partition_packs_as_its_header_and_restores_its_uuid_and_label() 
     let compressed = tokio::fs::File::open(unpacked_dir.join("p-3.pcl"))
         .await
         .unwrap();
-    imaged_disk::restore_compressed(Filesystem::Swap, compressed, &target, &dir.join("log"))
-        .await
-        .unwrap();
+    imaged_disk::restore_compressed(
+        Filesystem::Swap,
+        compressed,
+        &target,
+        &dir.join("log"),
+        |_| {},
+    )
+    .await
+    .unwrap();
     assert_eq!(probe(&target, "TYPE"), "swap");
     assert_eq!(probe(&target, "UUID"), SWAP_UUID);
     assert_eq!(probe(&target, "LABEL"), "packed-swap");

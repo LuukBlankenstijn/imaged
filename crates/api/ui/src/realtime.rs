@@ -1,13 +1,16 @@
 use dioxus::fullstack::ServerEvents;
 use dioxus::prelude::*;
 
-use crate::model::{ConnectionChange, MulticastProgress};
+use crate::model::{ConnectionChange, TaskProgress};
 
 #[cfg(feature = "server")]
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{MulticastMgr, Registry};
+use imaged_core::di::{Progress, Registry};
+
+#[cfg(feature = "server")]
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[get("/api/ui/connection-state")]
 #[inject(registry: Registry)]
@@ -22,17 +25,22 @@ pub async fn connection_state() -> ServerFnResult<ServerEvents<ConnectionChange>
     }))
 }
 
-#[get("/api/ui/multicast-progress")]
-#[inject(multicast: MulticastMgr)]
-pub async fn multicast_progress() -> ServerFnResult<ServerEvents<Option<MulticastProgress>>> {
-    let mut progress = multicast.progress();
+#[get("/api/ui/task-progress")]
+#[inject(progress: Progress)]
+pub async fn task_progress() -> ServerFnResult<ServerEvents<Vec<TaskProgress>>> {
+    let mut snapshots = progress.watch();
     Ok(ServerEvents::new(move |mut tx| async move {
         loop {
-            let current = progress.borrow_and_update().clone().map(Into::into);
-            if tx.send(current).await.is_err() {
+            let tasks = snapshots.borrow_and_update().tasks();
+            if tx
+                .send(tasks.into_iter().map(Into::into).collect())
+                .await
+                .is_err()
+            {
                 return;
             }
-            if progress.changed().await.is_err() {
+            tokio::time::sleep(PROGRESS_INTERVAL).await;
+            if snapshots.changed().await.is_err() {
                 return;
             }
         }

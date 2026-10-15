@@ -130,6 +130,7 @@ async fn clone_partition(extracted: Extracted, dir: &Path) -> anyhow::Result<Par
         extracted.filesystem,
         &extracted.path,
         &dir.join(PARTCLONE_LOG),
+        |_| {},
     )
     .with_context(failed)?;
     let mut file = File::create(&path)

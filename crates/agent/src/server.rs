@@ -1,28 +1,39 @@
 use std::io;
 use std::net::IpAddr;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStreamExt};
-use imaged_model::ServerEvent;
+use futures::{SinkExt as _, Stream, StreamExt, TryStreamExt};
 use imaged_model::agent::{
     IP_HEADER, ImagePartition, MAC_HEADER, PartitionUpload, PostInstall, ScriptFinished,
     StreamQuery, TaskFailure, path, route,
 };
+use imaged_model::progress::HostProgress;
+use imaged_model::{AgentEvent, ServerEvent};
 use mac_address::MacAddress;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Body, Client, Method, RequestBuilder, Response, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
-use tokio_tungstenite::tungstenite::Message;
+use tokio::net::TcpStream;
+use tokio::sync::watch;
+use tokio::time::{Interval, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::io::{ReaderStream, StreamReader};
+
+use crate::progress::{Reports, TaskProgress};
+
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct Server {
     http: Client,
     base: Url,
     headers: HeaderMap,
+    progress: Reports,
 }
 
 #[derive(Deserialize)]
@@ -46,7 +57,16 @@ impl Server {
             http,
             base,
             headers,
+            progress: watch::Sender::new(None),
         })
+    }
+
+    pub fn progress(&self, task_id: i64) -> TaskProgress {
+        TaskProgress::new(self.progress.clone(), task_id)
+    }
+
+    pub fn clear_progress(&self) {
+        self.progress.send_replace(None);
     }
 
     pub fn base_url(&self) -> &str {
@@ -104,23 +124,14 @@ impl Server {
         let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .with_context(|| format!("GET {}", route::STREAM))?;
-        Ok(futures::stream::unfold(socket, |mut socket| async move {
-            loop {
-                let event = match socket.next().await? {
-                    Ok(Message::Text(text)) => decode(text.as_bytes()),
-                    Ok(Message::Binary(bytes)) => decode(&bytes),
-                    Ok(Message::Close(_)) => return None,
-                    Ok(_) => continue,
-                    Err(e) => {
-                        tracing::info!(err=%e, "agent control stream ended");
-                        return None;
-                    }
-                };
-                if let Some(event) = event {
-                    return Some((event, socket));
-                }
-            }
-        }))
+        let connection = Connection::new(socket, self.progress.subscribe());
+        Ok(futures::stream::unfold(
+            connection,
+            |mut connection| async move {
+                let event = connection.next_event().await?;
+                Some((event, connection))
+            },
+        ))
     }
 
     pub async fn disconnect(&self) -> Result<()> {
@@ -246,6 +257,69 @@ impl Server {
         )
         .await?;
         Ok(())
+    }
+}
+
+struct Connection {
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    progress: watch::Receiver<Option<HostProgress>>,
+    interval: Interval,
+}
+
+impl Connection {
+    fn new(
+        socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        mut progress: watch::Receiver<Option<HostProgress>>,
+    ) -> Self {
+        progress.mark_changed();
+        let mut interval = tokio::time::interval(PROGRESS_INTERVAL);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        Self {
+            socket,
+            progress,
+            interval,
+        }
+    }
+
+    async fn next_event(&mut self) -> Option<ServerEvent> {
+        loop {
+            let frame = tokio::select! {
+                frame = self.socket.next() => frame?,
+                _ = self.interval.tick() => {
+                    if let Err(e) = self.send_progress().await {
+                        tracing::info!(err=%e, "could not report progress, closing the agent control stream");
+                        return None;
+                    }
+                    continue;
+                }
+            };
+            let event = match frame {
+                Ok(Message::Text(text)) => decode(text.as_bytes()),
+                Ok(Message::Binary(bytes)) => decode(&bytes),
+                Ok(Message::Close(_)) => return None,
+                Ok(_) => continue,
+                Err(e) => {
+                    tracing::info!(err=%e, "agent control stream ended");
+                    return None;
+                }
+            };
+            if event.is_some() {
+                return event;
+            }
+        }
+    }
+
+    async fn send_progress(&mut self) -> Result<(), tungstenite::Error> {
+        if !self.progress.has_changed().unwrap_or(false) {
+            return Ok(());
+        }
+        let Some(progress) = self.progress.borrow_and_update().clone() else {
+            return Ok(());
+        };
+        tracing::info!(task_id = progress.task_id, fraction = progress.fraction, stage = ?progress.stage, "reporting progress");
+        let json = serde_json::to_string(&AgentEvent::from(progress))
+            .expect("agent events serialize to json");
+        self.socket.send(Message::text(json)).await
     }
 }
 

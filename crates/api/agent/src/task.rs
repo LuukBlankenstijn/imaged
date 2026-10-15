@@ -1,6 +1,6 @@
 use axum::{Json, extract::Path};
 use imaged_core::{
-    di::{HostRepo, ImageRepo, MulticastMgr, TaskRepo},
+    di::{HostRepo, ImageRepo, MulticastMgr, Progress, TaskRepo},
     domain::task::TaskType,
 };
 use imaged_model::{
@@ -10,7 +10,7 @@ use imaged_model::{
 
 use crate::{AgentInfo, get_next_task};
 
-#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo)]
+#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo, progress: Progress)]
 pub async fn mark_finished(agent: AgentInfo, Path(task_id): Path<i64>) -> Result {
     let mac = &agent.mac;
     let task = get_next_task(mac).await?;
@@ -32,11 +32,12 @@ pub async fn mark_finished(agent: AgentInfo, Path(task_id): Path<i64>) -> Result
         image_repo.mark_finished(image_id).await?;
     }
     task_repo.mark_finished(task.id, host_id).await?;
+    progress.forget(host_id);
 
     Ok(())
 }
 
-#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
+#[injectable::inject(host_repo: HostRepo, image_repo: ImageRepo, task_repo: TaskRepo, multicast_mgr: MulticastMgr, progress: Progress)]
 pub async fn mark_failed(
     agent: AgentInfo,
     Path(task_id): Path<i64>,
@@ -57,6 +58,7 @@ pub async fn mark_failed(
     }
 
     task_repo.mark_failed(task.id, host_id, &error).await?;
+    progress.forget(host_id);
     if task.task_type == TaskType::Multicast {
         multicast_mgr.wake();
     }

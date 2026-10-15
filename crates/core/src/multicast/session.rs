@@ -133,7 +133,7 @@ impl Worker {
                 Ok(()) = progress.changed() => {
                     let state = progress.borrow_and_update();
                     joined = joined.max(state.receivers.len());
-                    self.progress.send_replace(Some(step.progress(&state, targets)));
+                    self.progress.report_multicast(step.progress(&state, targets));
                 }
                 _ = log.tick() => log_progress(&progress.borrow(), step.task_id, targets),
             }
@@ -260,7 +260,7 @@ impl Targets {
             .map_or_else(|| ip.to_string(), |target| target.name.clone())
     }
 
-    fn hosts(&self, state: &TransferState) -> Vec<ReceiverProgress> {
+    fn receivers(&self, state: &TransferState) -> Vec<ReceiverProgress> {
         let culprit = limiting_receiver(state).map(|r| r.receiver_id);
         self.participants
             .iter()
@@ -300,15 +300,11 @@ impl TransferStep {
         MulticastProgress {
             task_id: self.task_id,
             phase: transfer_phase(state.phase),
-            fraction: match self.total_bytes {
-                0 => 0.0,
-                total => (sent as f64 / total as f64).min(1.0),
-            },
             bytes_per_second,
             step: self.step,
             steps: self.steps,
             eta: Duration::try_from_secs_f64(left as f64 / bytes_per_second).ok(),
-            hosts: targets.hosts(state),
+            receivers: targets.receivers(state),
         }
     }
 }
@@ -462,11 +458,10 @@ mod tests {
     }
 
     #[test]
-    fn progress_covers_the_whole_task_rather_than_the_file_being_sent() {
+    fn the_eta_covers_the_whole_task_rather_than_the_file_being_sent() {
         let reported = step(1000, 4000).progress(&sending_state(10, 5.0), &no_targets());
 
         assert_eq!(reported.task_id, 4);
-        assert_eq!(reported.fraction, 0.5);
         assert_eq!(reported.bytes_per_second, 500.0);
         assert_eq!(reported.eta, Some(Duration::from_secs(4)));
         assert_eq!((reported.step, reported.steps), (2, 3));
@@ -476,16 +471,14 @@ mod tests {
     fn a_stalled_transfer_reports_progress_without_an_eta() {
         let reported = step(1000, 4000).progress(&sending_state(0, 0.0), &no_targets());
 
-        assert_eq!(reported.fraction, 0.25);
         assert_eq!(reported.eta, None);
     }
 
     #[test]
-    fn progress_stays_in_range_when_sizes_are_unknown_or_overshot() {
-        let fraction =
-            |s: TransferStep| s.progress(&sending_state(10, 1.0), &no_targets()).fraction;
-        assert_eq!(fraction(step(0, 0)), 0.0);
-        assert_eq!(fraction(step(0, 500)), 1.0);
+    fn an_overshot_transfer_has_nothing_left_to_wait_for() {
+        let reported = step(0, 500).progress(&sending_state(10, 1.0), &no_targets());
+
+        assert_eq!(reported.eta, Some(Duration::ZERO));
     }
 
     #[test]
@@ -509,8 +502,8 @@ mod tests {
             ..TransferState::default()
         };
 
-        let hosts = targets.hosts(&state);
-        let row = |id: i64| hosts.iter().find(|h| h.host_id == id).unwrap();
+        let receivers = targets.receivers(&state);
+        let row = |id: i64| receivers.iter().find(|h| h.host_id == id).unwrap();
 
         assert!(row(7).joined && !row(7).limiting);
         assert!(row(8).joined && row(8).limiting);
@@ -526,7 +519,7 @@ mod tests {
             ..TransferState::default()
         };
 
-        assert!(targets.hosts(&state).iter().all(|h| !h.joined));
+        assert!(targets.receivers(&state).iter().all(|h| !h.joined));
         assert!(targets.host_at("10.0.0.1".parse().unwrap()).is_none());
     }
 

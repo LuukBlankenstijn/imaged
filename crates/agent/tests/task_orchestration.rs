@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::offline_server;
+use imaged_agent::progress::PartitionProgress;
 use imaged_agent::server::Server;
 use imaged_agent::sys::disk::{BlockDevice, PartitionTarget};
 use imaged_agent::task::types::RunningTask;
@@ -79,7 +80,11 @@ impl ClientTaskExt for RecordingTask {
         Ok(self.planned.clone())
     }
 
-    async fn handle_partition(&self, partition: PartitionTarget) -> anyhow::Result<()> {
+    async fn handle_partition(
+        &self,
+        partition: PartitionTarget,
+        _: PartitionProgress,
+    ) -> anyhow::Result<()> {
         let index = self.calls.fetch_add(1, Ordering::SeqCst);
         self.record(format!("partition:{}", partition.number));
         if self.fail_partition_at == Some(index) {

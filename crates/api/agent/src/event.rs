@@ -8,16 +8,17 @@ use axum::{
 use bytes::Bytes;
 use imaged_core::{
     AgentLiveness,
-    di::{HostRepo, Liveness, Registry, TaskRepo},
+    di::{HostRepo, Liveness, Progress, Registry, TaskRepo},
     domain::task::Task,
+    progress::ProgressBoard,
     registry::Registration,
 };
-use imaged_model::{ServerEvent, agent::StreamQuery, error::Result};
+use imaged_model::{AgentEvent, ServerEvent, agent::StreamQuery, error::Result};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::AgentInfo;
 
-#[injectable::inject(host_repo: HostRepo, task_repo: TaskRepo, registry: Registry, liveness: Liveness)]
+#[injectable::inject(host_repo: HostRepo, task_repo: TaskRepo, registry: Registry, liveness: Liveness, progress: Progress)]
 pub async fn start_stream(
     agent: AgentInfo,
     Query(StreamQuery { disk_size_bytes }): Query<StreamQuery>,
@@ -33,8 +34,12 @@ pub async fn start_stream(
         .await?
         .filter(|task| task.is_dispatchable_to(host_id));
     let liveness = *liveness;
+    let progress = progress.clone();
 
-    Ok(upgrade.on_upgrade(move |socket| serve(socket, host_id, registration, pending, liveness)))
+    Ok(upgrade.on_upgrade(move |socket| async move {
+        serve(socket, host_id, registration, pending, liveness, &progress).await;
+        progress.forget(host_id);
+    }))
 }
 
 async fn serve(
@@ -43,6 +48,7 @@ async fn serve(
     mut registration: Registration<ServerEvent>,
     pending: Option<Task>,
     liveness: AgentLiveness,
+    progress: &ProgressBoard,
 ) {
     if let Some(task) = pending {
         let task = imaged_model::Task::new(task.id, task.task_type.into(), task.image_id);
@@ -65,7 +71,12 @@ async fn serve(
             }
             frame = socket.recv() => match frame {
                 Some(Ok(Message::Close(_)) | Err(_)) | None => break,
-                Some(Ok(_)) => last_seen = Instant::now(),
+                Some(Ok(message)) => {
+                    last_seen = Instant::now();
+                    if let Message::Text(text) = message {
+                        receive(text.as_str(), host_id, progress);
+                    }
+                }
             },
             _ = ping.tick() => {
                 if last_seen.elapsed() > liveness.timeout {
@@ -77,6 +88,13 @@ async fn serve(
                 }
             }
         }
+    }
+}
+
+fn receive(text: &str, host_id: i64, progress: &ProgressBoard) {
+    match serde_json::from_str(text) {
+        Ok(AgentEvent::Progress(report)) => progress.report(host_id, report),
+        Err(e) => tracing::warn!(host_id, err = %e, "ignoring an undecodable agent event"),
     }
 }
 

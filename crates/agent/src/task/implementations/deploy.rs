@@ -6,6 +6,7 @@ use imaged_disk::{restore_compressed, restore_partition_table};
 use tracing::{debug, info};
 
 use super::{ClientTaskExt, PARTCLONE_LOG};
+use crate::progress::PartitionProgress;
 use crate::server::Server;
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 use crate::task::PARTTABLE_TMP;
@@ -39,7 +40,11 @@ impl ClientTaskExt for DeployTask {
         super::image_partitions(&self.server, self.task_id, disk).await
     }
 
-    async fn handle_partition(&self, partition: PartitionTarget) -> anyhow::Result<()> {
+    async fn handle_partition(
+        &self,
+        partition: PartitionTarget,
+        progress: PartitionProgress,
+    ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download");
         let compressed = self
             .server
@@ -52,6 +57,7 @@ impl ClientTaskExt for DeployTask {
             compressed,
             Path::new(&partition.device),
             Path::new(PARTCLONE_LOG),
+            |partition| progress.report(partition),
         )
         .await
     }

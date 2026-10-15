@@ -54,10 +54,12 @@ async fn start_task(server: &Arc<Server>, state: Arc<ClientState>, task: imaged_
 }
 
 async fn run_task(task: Task, cancel_for_task: CancellationToken) {
-    let result = match tokio::select! {
+    let outcome = tokio::select! {
         r = task.run() => Some(r),
         _ = cancel_for_task.cancelled() => None,
-    } {
+    };
+    task.server().clear_progress();
+    let result = match outcome {
         Some(result) => result,
         None => {
             tracing::error!("task cancelled");

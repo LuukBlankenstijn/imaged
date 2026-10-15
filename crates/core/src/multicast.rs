@@ -11,6 +11,7 @@ use crate::{
         image::ImageRepository,
         task::{Task, TaskRepository, TaskType},
     },
+    progress::ProgressBoard,
     registry::HostRegistry,
     service::image::ImageService,
 };
@@ -31,17 +32,15 @@ const DISCONNECTED: &str = "Host disconnected before reporting the multicast res
 pub struct MulticastProgress {
     pub task_id: i64,
     pub phase: TransferPhase,
-    pub fraction: f64,
     pub bytes_per_second: f64,
     pub step: usize,
     pub steps: usize,
     pub eta: Option<Duration>,
-    pub hosts: Vec<ReceiverProgress>,
+    pub receivers: Vec<ReceiverProgress>,
 }
 
 pub struct MulticastManager {
     wake: watch::Sender<()>,
-    progress: watch::Receiver<Option<MulticastProgress>>,
     _worker: AbortOnDropHandle<()>,
 }
 
@@ -52,17 +51,17 @@ impl MulticastManager {
         images: Arc<dyn ImageRepository>,
         image_service: Arc<ImageService>,
         registry: Arc<HostRegistry>,
+        progress: Arc<ProgressBoard>,
         interface: String,
     ) -> Result<Self> {
-        let (published, progress) = watch::channel(None);
         let worker = Worker {
             tasks,
             hosts,
             images,
             image_service,
             registry,
+            progress,
             interface,
-            progress: published,
         };
         worker.fail_orphans().await?;
         let (wake, mut woken) = watch::channel(());
@@ -71,17 +70,12 @@ impl MulticastManager {
         }
         Ok(Self {
             wake,
-            progress,
             _worker: AbortOnDropHandle::new(tokio::spawn(worker.run(woken))),
         })
     }
 
     pub fn wake(&self) {
         self.wake.send_replace(());
-    }
-
-    pub fn progress(&self) -> watch::Receiver<Option<MulticastProgress>> {
-        self.progress.clone()
     }
 }
 
@@ -92,8 +86,8 @@ struct Worker {
     images: Arc<dyn ImageRepository>,
     image_service: Arc<ImageService>,
     registry: Arc<HostRegistry>,
+    progress: Arc<ProgressBoard>,
     interface: String,
-    progress: watch::Sender<Option<MulticastProgress>>,
 }
 
 impl Worker {
@@ -123,7 +117,7 @@ impl Worker {
             .catch_unwind()
             .await
             .unwrap_or_else(|_| Err(AppError::Internal("multicast session panicked".to_string())));
-        self.progress.send_replace(None);
+        self.progress.end_multicast();
         if let Err(e) = &outcome {
             error!(task_id = task.id, err = %e, "multicast session failed");
         }
@@ -196,6 +190,7 @@ where
 mod tests {
     use super::*;
     use crate::di::DIContainer;
+    use crate::progress::Snapshot;
     use crate::test_support::container;
     use imaged_model::{ServerEvent, get_multicast_port, multicast_group};
     use scuttlecast::{error::ProtoError, receiver::Receiver};
@@ -408,12 +403,15 @@ mod tests {
                 .await
                 .unwrap();
             let receiving = tokio::spawn(receiver(task.id, 0).recv_to(Vec::new()));
-            let mut progress = c.multicast_manager.progress();
+            let mut progress = c.progress_board.watch();
 
             c.multicast_manager.wake();
-            let joined = |p: &Option<MulticastProgress>| {
-                p.as_ref()
-                    .is_some_and(|p| p.hosts.iter().any(|h| h.host_id == kicked && h.joined))
+            let joined = |snapshot: &Snapshot| {
+                snapshot.tasks().iter().any(|t| {
+                    t.multicast.as_ref().is_some_and(|m| {
+                        m.receivers.iter().any(|r| r.host_id == kicked && r.joined)
+                    })
+                })
             };
             tokio::time::timeout(SETTLE, progress.wait_for(joined))
                 .await
@@ -466,6 +464,7 @@ mod tests {
                 c.image_repo.clone(),
                 c.image_service.clone(),
                 c.host_registry.clone(),
+                c.progress_board.clone(),
                 "lo".to_string(),
             )
             .await

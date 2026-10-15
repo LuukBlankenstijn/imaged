@@ -13,6 +13,7 @@ use std::sync::Arc;
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
 
+use crate::progress::PartitionProgress;
 use crate::server::Server;
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
@@ -36,7 +37,11 @@ pub trait ClientTaskExt: std::fmt::Display {
         disk.formatted_partitions()
     }
 
-    async fn handle_partition(&self, _: PartitionTarget) -> anyhow::Result<()> {
+    async fn handle_partition(
+        &self,
+        _: PartitionTarget,
+        _: PartitionProgress,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
