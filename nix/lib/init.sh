@@ -13,6 +13,11 @@ load_drivers() {
 load_drivers
 load_drivers
 
+if [ -d /sys/firmware/efi/efivars ]; then
+    modprobe -q efivarfs
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+fi
+
 for backlight in /sys/class/backlight/*; do
     [ -f "$backlight/max_brightness" ] || continue
     [ "$(cat "$backlight/brightness")" = "0" ] || continue

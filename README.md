@@ -289,9 +289,13 @@ the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
 any, mounts the root partition under `/tmp/imaged-root`, then every entry of
 the image's `/etc/fstab` that names a partition of the restored disk (by
 `UUID=`, `LABEL=`, `PARTUUID=`, `PARTLABEL=` or device path), then `/proc`,
-`/sys` and `/dev`. Each script is written to `/tmp` inside that root and run
-with `chroot`, through its shebang or `/bin/sh` without one, with these
-variables:
+`/sys` and `/dev`. Symlinks on the way to `/etc/fstab` resolve inside the
+image, so an absolute link such as NixOS's `/etc/fstab -> /etc/static/fstab`
+finds the image's file. On UEFI machines the initramfs mounts `efivarfs`, and
+the `/sys` bind mount carries it into the chroot, so a script can write boot
+entries to NVRAM (`bootctl install`, `grub-install`, `efibootmgr`). Each
+script is written to `/tmp` inside that root and run with `chroot`, through
+its shebang or `/bin/sh` without one, with these variables:
 
 - `IMAGED_INPUT_<NAME>` for each of its inputs that has a value (the name
   uppercased),

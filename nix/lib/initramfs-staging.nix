@@ -32,7 +32,7 @@ let
     "samples/"
     "fs/"
   ];
-  kept = "fs/(ext4|fat|nls|jbd2)/|fs/mbcache|net/packet/";
+  kept = "fs/(ext4|fat|nls|jbd2|efivarfs)/|fs/mbcache|net/packet/";
 in
 agentBin: ''
   mkdir -p "$STAGING"/{bin,proc,sys,dev,tmp,etc,run,lib/modules/${version}}

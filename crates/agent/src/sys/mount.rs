@@ -4,6 +4,7 @@ use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+use rustix::fs::{Mode, OFlags, ResolveFlags};
 use rustix::mount::{MountFlags, UnmountFlags};
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
@@ -34,7 +35,7 @@ impl MountedSystem {
             )
         })?;
 
-        let fstab = match std::fs::read_to_string(system.root.join("etc/fstab")) {
+        let fstab = match read_in_root(&system.root, "etc/fstab") {
             Ok(fstab) => fstab,
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e).context("reading the image's /etc/fstab"),
@@ -125,6 +126,22 @@ impl Drop for MountedSystem {
     }
 }
 
+fn read_in_root(root: &Path, path: &str) -> io::Result<String> {
+    let root = rustix::fs::open(
+        root,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    let file = rustix::fs::openat2(
+        &root,
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::IN_ROOT,
+    )?;
+    io::read_to_string(std::fs::File::from(file))
+}
+
 fn mounts_under(mountinfo: &[u8], root: &Path) -> Vec<PathBuf> {
     mountinfo
         .split(|&byte| byte == b'\n')
@@ -203,5 +220,23 @@ mod tests {
                 Path::new("/tmp/imaged-root"),
             ]
         );
+    }
+
+    #[test]
+    fn an_absolute_fstab_symlink_resolves_inside_the_image_root() {
+        let root = std::env::temp_dir().join(format!("imaged-read-in-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("etc/static")).unwrap();
+        std::fs::write(
+            root.join("etc/static/fstab"),
+            "LABEL=ESP /boot vfat defaults\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/etc/static/fstab", root.join("etc/fstab")).unwrap();
+
+        let fstab = read_in_root(&root, "etc/fstab");
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(fstab.unwrap(), "LABEL=ESP /boot vfat defaults\n");
     }
 }
