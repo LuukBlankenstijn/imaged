@@ -1,10 +1,18 @@
-use std::{future::Future, io, net::SocketAddr, path::Path};
+use std::{
+    future::Future,
+    io,
+    net::SocketAddr,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Instant,
+};
 
 use async_tftp::{
     packet,
     server::{Handler, TftpServerBuilder},
 };
-use futures_lite::io::Cursor;
+use futures_lite::{AsyncRead, io::Cursor};
 
 use crate::pxe::Arch;
 
@@ -28,13 +36,40 @@ fn boot_file(path: &str) -> Option<&'static [u8]> {
 
 struct BootFiles;
 
+struct Transfer {
+    file: Cursor<&'static [u8]>,
+    path: String,
+    client: SocketAddr,
+    started: Instant,
+}
+
+impl AsyncRead for Transfer {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.file).poll_read(cx, buf)
+    }
+}
+
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        let size = self.file.get_ref().len() as u64;
+        if self.file.position() == size {
+            let elapsed_ms = self.started.elapsed().as_millis();
+            tracing::info!(path = %self.path, client = %self.client, size, elapsed_ms, "tftp transfer done");
+        }
+    }
+}
+
 impl Handler for BootFiles {
-    type Reader = Cursor<&'static [u8]>;
+    type Reader = Transfer;
     type Writer = Cursor<Vec<u8>>;
 
     async fn read_req_open(
         &mut self,
-        _client: &SocketAddr,
+        client: &SocketAddr,
         path: &Path,
     ) -> Result<(Self::Reader, Option<u64>), packet::Error> {
         let requested = path.to_string_lossy();
@@ -43,10 +78,20 @@ impl Handler for BootFiles {
             .filter(|part| !matches!(*part, "" | "." | ".."))
             .collect::<Vec<_>>()
             .join("/");
-        tracing::debug!(path = %relative, "tftp read request");
 
-        let bytes = boot_file(&relative).ok_or(packet::Error::FileNotFound)?;
-        Ok((Cursor::new(bytes), Some(bytes.len() as u64)))
+        let Some(bytes) = boot_file(&relative) else {
+            tracing::warn!(path = %relative, %client, "tftp request for an unknown file");
+            return Err(packet::Error::FileNotFound);
+        };
+        let size = bytes.len() as u64;
+        tracing::info!(path = %relative, %client, size, "tftp transfer started");
+        let transfer = Transfer {
+            file: Cursor::new(bytes),
+            path: relative,
+            client: *client,
+            started: Instant::now(),
+        };
+        Ok((transfer, Some(size)))
     }
 
     async fn write_req_open(
@@ -98,7 +143,11 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(served.into_inner(), Arch::X86_64.vmlinuz(), "{requested}");
+            assert_eq!(
+                *served.file.get_ref(),
+                Arch::X86_64.vmlinuz(),
+                "{requested}"
+            );
             assert_eq!(size, Some(Arch::X86_64.vmlinuz().len() as u64));
         }
     }
