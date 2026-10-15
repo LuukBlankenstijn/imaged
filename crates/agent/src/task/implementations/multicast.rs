@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use derive_more::{Constructor, Display};
 use imaged_disk::{restore_compressed, restore_partition_table};
@@ -7,15 +6,15 @@ use tokio::io::AsyncReadExt;
 use tracing::{debug, info};
 
 use super::{ClientTaskExt, PARTCLONE_LOG};
-use crate::progress::PartitionProgress;
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::PartitionProgress;
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 use crate::{multicast::multicast_stream, task::PARTTABLE_TMP};
 
 #[derive(Clone, Display, Constructor)]
 #[display("multicast task")]
 pub struct MulticastTask {
-    server: Arc<Server>,
+    agent: Agent,
     task_id: i64,
 }
 
@@ -24,13 +23,13 @@ impl ClientTaskExt for MulticastTask {
         self.task_id
     }
 
-    fn server(&self) -> &Server {
-        &self.server
+    fn agent(&self) -> &Agent {
+        &self.agent
     }
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let mut buffer: Vec<u8> = Vec::new();
-        multicast_stream(self.task_id, 0)?
+        multicast_stream(&self.agent.status, self.task_id, 0)?
             .read_to_end(&mut buffer)
             .await
             .map_err(|e| anyhow::anyhow!("failed to receive the partition table: {e}"))?;
@@ -42,7 +41,7 @@ impl ClientTaskExt for MulticastTask {
     }
 
     async fn plan_partitions(&self, disk: &BlockDevice) -> anyhow::Result<Vec<PartitionTarget>> {
-        super::image_partitions(&self.server, self.task_id, disk).await
+        super::image_partitions(&self.agent, self.task_id, disk).await
     }
 
     async fn handle_partition(
@@ -51,7 +50,7 @@ impl ClientTaskExt for MulticastTask {
         progress: PartitionProgress,
     ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download over multicast");
-        let stream = multicast_stream(self.task_id, partition.number)?;
+        let stream = multicast_stream(&self.agent.status, self.task_id, partition.number)?;
 
         info!(partition_number=%partition.number, filesystem=%partition.filesystem, "restoring partition");
         restore_compressed(
@@ -65,7 +64,7 @@ impl ClientTaskExt for MulticastTask {
     }
 
     async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
-        crate::task::post_install::run(&self.server, self.task_id, partitions).await
+        crate::task::post_install::run(&self.agent, self.task_id, partitions).await
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {

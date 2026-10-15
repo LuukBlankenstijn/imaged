@@ -25,15 +25,12 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::io::{ReaderStream, StreamReader};
 
-use crate::progress::{Reports, TaskProgress};
-
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct Server {
     http: Client,
     base: Url,
     headers: HeaderMap,
-    progress: Reports,
 }
 
 #[derive(Deserialize)]
@@ -57,16 +54,7 @@ impl Server {
             http,
             base,
             headers,
-            progress: watch::Sender::new(None),
         })
-    }
-
-    pub fn progress(&self, task_id: i64) -> TaskProgress {
-        TaskProgress::new(self.progress.clone(), task_id)
-    }
-
-    pub fn clear_progress(&self) {
-        self.progress.send_replace(None);
     }
 
     pub fn base_url(&self) -> &str {
@@ -111,6 +99,7 @@ impl Server {
     pub async fn connect_events(
         &self,
         disk_size_bytes: u64,
+        progress: watch::Receiver<Option<HostProgress>>,
     ) -> Result<impl Stream<Item = ServerEvent> + Send> {
         let url = self
             .http
@@ -124,7 +113,7 @@ impl Server {
         let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .with_context(|| format!("GET {}", route::STREAM))?;
-        let connection = Connection::new(socket, self.progress.subscribe());
+        let connection = Connection::new(socket, progress);
         Ok(futures::stream::unfold(
             connection,
             |mut connection| async move {
@@ -316,7 +305,7 @@ impl Connection {
         let Some(progress) = self.progress.borrow_and_update().clone() else {
             return Ok(());
         };
-        tracing::info!(task_id = progress.task_id, fraction = progress.fraction, stage = ?progress.stage, "reporting progress");
+        tracing::debug!(task_id = progress.task_id, fraction = progress.fraction, stage = ?progress.stage, "reporting progress");
         let json = serde_json::to_string(&AgentEvent::from(progress))
             .expect("agent events serialize to json");
         self.socket.send(Message::text(json)).await

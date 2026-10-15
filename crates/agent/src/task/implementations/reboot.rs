@@ -1,14 +1,12 @@
-use std::sync::Arc;
-
 use derive_more::{Constructor, Display};
 
-use crate::server::Server;
+use crate::agent::Agent;
 use crate::task::implementations::ClientTaskExt;
 
 #[derive(Clone, Display, Constructor)]
 #[display("reboot task")]
 pub struct RebootTask {
-    server: Arc<Server>,
+    agent: Agent,
     task_id: i64,
 }
 
@@ -17,8 +15,8 @@ impl ClientTaskExt for RebootTask {
         self.task_id
     }
 
-    fn server(&self) -> &Server {
-        &self.server
+    fn agent(&self) -> &Agent {
+        &self.agent
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {

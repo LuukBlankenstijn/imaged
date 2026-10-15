@@ -68,7 +68,13 @@ if [ -z "${SERVER_ADDR:-}" ]; then
 fi
 
 echo "Starting imaged-agent at $SERVER_ADDR"
-/bin/imaged-agent "$SERVER_ADDR"
+if [ -c /dev/tty1 ]; then
+    dmesg -n 3
+    openvt -c 2 -- /bin/sh -c 'while :; do echo; echo "imaged shell, Alt+F1 returns to the dashboard"; /bin/sh; done'
+    openvt -c 1 -s -w -- /bin/imaged-agent "$SERVER_ADDR"
+else
+    /bin/imaged-agent "$SERVER_ADDR"
+fi
 
 echo "imaged-agent exited. Dropping to recovery shell."
 exec /bin/sh

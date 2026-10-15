@@ -51,6 +51,8 @@ always gets `--logfile`: without it partclone writes
 parsed: every data status line (fraction done, rate, time remaining) goes to the
 caller's progress callback, the bitmap scan before it is skipped and any other
 line is logged. A clone stream only ends once its last progress is reported.
+The output of `sgdisk` and `partprobe` is logged too, and a failure carries it
+in its error; nothing is printed to the caller's terminal.
 
 ### `crates/core` — `imaged-core`
 
@@ -172,8 +174,25 @@ reconnect. Uses
 `imaged-disk` (`partclone` for filesystem-aware imaging, `sgdisk` for the
 partition table, `debugfs` for the root partition).
 
+On the machine's screen the agent draws a dashboard on tty1 (the initramfs
+starts it there with `openvt` and quiets kernel messages to errors). F1 shows
+the progress: the whole task, the current rate and time left in big digits,
+every partition and post-install script, and the latest logs. A multicast
+shows panels coloured green, yellow or red (blue while waiting) for the
+receiver's own state: scuttlecast's diagnosis (`DISK SLOW` when the disk cannot
+keep up), receive rate with its history, disk write rate and stalls, loss,
+NAKs and kernel drops. F2 shows the logs, F3 switches to a shell on tty2
+(Alt+F1 comes back) and F10 reboots after a confirmation; a reboot during a
+task first reports it failed. When a task ends a banner replaces the big
+digits and the stats stay on screen; after a deploy, multicast or reboot task
+the machine reboots after a 5 second countdown that any key cancels. Plain
+logs, and anything written to stderr, go to the serial console. The dashboard only uses characters of
+the kernel console font (code page 437) and its 8 colours, and fits down to
+80x25.
+
 ```sh
-cargo run -p imaged-agent -- http://<server>:8080
+cargo run -p imaged-agent -- http://<server>:8080            # dashboard in this terminal
+cargo run -p imaged-agent -- --no-tui http://<server>:8080   # plain logs, Ctrl-S opens a shell
 ```
 
 ### `crates/pack` — `imaged-pack`

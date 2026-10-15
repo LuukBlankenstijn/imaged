@@ -8,8 +8,10 @@ use futures::StreamExt;
 use mac_address::MacAddress;
 use reqwest::Url;
 use tokio::io::AsyncReadExt;
+use tokio::sync::watch;
 
 use imaged_agent::server::Server;
+use imaged_agent::status::{Identity, Status};
 use imaged_core::domain::script::NewScript;
 use imaged_core::domain::task::{Task, TaskType};
 use imaged_core::progress::Snapshot;
@@ -54,7 +56,10 @@ async fn connect_events_registers_an_unknown_host_with_its_disk_size_and_ip() {
     let (agent, mac) = agent(s);
     assert!(s.container.host_repo.get_by_mac(&mac).await.is_err());
 
-    let events = agent.connect_events(DISK).await.expect("connect events");
+    let events = agent
+        .connect_events(DISK, watch::channel(None).1)
+        .await
+        .expect("connect events");
     let mut events = std::pin::pin!(events);
 
     let host = s
@@ -88,7 +93,10 @@ async fn the_pending_capture_task_is_the_first_server_event() {
         .expect("create image");
     let task_id = seed::capture_task(s, host.id, image.id).await;
 
-    let events = agent.connect_events(DISK).await.expect("connect events");
+    let events = agent
+        .connect_events(DISK, watch::channel(None).1)
+        .await
+        .expect("connect events");
     let mut events = std::pin::pin!(events);
     let event = tokio::time::timeout(WAIT, events.next())
         .await
@@ -378,10 +386,24 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
 async fn progress_reported_through_the_client_is_shown_until_the_agent_disconnects() {
     let s = harness::server().await;
     let (agent, mac) = agent(s);
-    agent.progress(4_242).partition_table();
+    let status = Status::new(Identity {
+        mac: mac.clone(),
+        ip: None,
+        server: s.base_url.clone(),
+    });
+    status.task_started(&imaged_model::Task::new(
+        4_242,
+        imaged_model::TaskType::Deploy,
+        None,
+    ));
     let mut board = s.container.progress_board.watch();
 
-    let mut events = Box::pin(agent.connect_events(DISK).await.expect("connect events"));
+    let mut events = Box::pin(
+        agent
+            .connect_events(DISK, status.uplink())
+            .await
+            .expect("connect events"),
+    );
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
     let reported = |snapshot: &Snapshot| {
         snapshot.tasks().iter().any(|task| {

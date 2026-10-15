@@ -48,7 +48,7 @@ pub async fn restore(
         .args(["--source", "-", "--output"])
         .arg(target)
         .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
+        .stdout(Stdio::null())
         .spawn()?;
     let mut stdin = child.stdin.take().expect("stdin piped");
     let stderr = child.stderr.take().expect("stderr piped");

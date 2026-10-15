@@ -8,13 +8,11 @@ pub use deploy::DeployTask;
 pub use multicast::MulticastTask;
 pub use reboot::RebootTask;
 
-use std::sync::Arc;
-
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
 
-use crate::progress::PartitionProgress;
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::{Outcome, PartitionProgress};
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
 const PARTCLONE_LOG: &str = "/tmp/partclone-log";
@@ -27,7 +25,7 @@ const PARTCLONE_LOG: &str = "/tmp/partclone-log";
 pub trait ClientTaskExt: std::fmt::Display {
     fn task_id(&self) -> i64;
 
-    fn server(&self) -> &Server;
+    fn agent(&self) -> &Agent;
 
     async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {
         Ok(())
@@ -55,28 +53,31 @@ pub trait ClientTaskExt: std::fmt::Display {
 
     async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
-        self.server().mark_failed(self.task_id(), err).await
+        self.agent()
+            .status
+            .task_ended(Outcome::Failed(err.to_string()));
+        self.agent().server.mark_failed(self.task_id(), err).await
     }
 }
 
 async fn report_finished(task: &(impl ClientTaskExt + ?Sized)) -> anyhow::Result<()> {
-    task.server().mark_finished(task.task_id()).await?;
+    task.agent().server.mark_finished(task.task_id()).await?;
+    task.agent().status.task_ended(Outcome::Done);
     tracing::info!(task=%task, "finished task successfully");
     Ok(())
 }
 
 async fn finish_and_reboot(task: &impl ClientTaskExt) -> anyhow::Result<()> {
     report_finished(task).await?;
-    let _ = task.server().disconnect().await;
-    crate::sys::reboot()
+    crate::reboot::after_countdown(task.agent()).await
 }
 
 async fn image_partitions(
-    server: &Server,
+    agent: &Agent,
     task_id: i64,
     disk: &BlockDevice,
 ) -> anyhow::Result<Vec<PartitionTarget>> {
-    let partitions = server.partitions(task_id).await?;
+    let partitions = agent.server.partitions(task_id).await?;
     if partitions.is_empty() {
         anyhow::bail!("image for task {task_id} has no partitions to restore");
     }
@@ -97,13 +98,13 @@ pub enum Task {
 }
 
 impl Task {
-    pub fn new(server: Arc<Server>, task: &imaged_model::Task) -> Self {
+    pub fn new(agent: Agent, task: &imaged_model::Task) -> Self {
         let id = task.id;
         match task.task_type {
-            imaged_model::TaskType::Capture => Self::Capture(CaptureTask::new(server, id)),
-            imaged_model::TaskType::Deploy => Self::Deploy(DeployTask::new(server, id)),
-            imaged_model::TaskType::Multicast => Self::Multicast(MulticastTask::new(server, id)),
-            imaged_model::TaskType::Reboot => Self::Reboot(RebootTask::new(server, id)),
+            imaged_model::TaskType::Capture => Self::Capture(CaptureTask::new(agent, id)),
+            imaged_model::TaskType::Deploy => Self::Deploy(DeployTask::new(agent, id)),
+            imaged_model::TaskType::Multicast => Self::Multicast(MulticastTask::new(agent, id)),
+            imaged_model::TaskType::Reboot => Self::Reboot(RebootTask::new(agent, id)),
         }
     }
 }

@@ -2,9 +2,10 @@ pub mod implementations;
 mod post_install;
 pub mod types;
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::Outcome;
 use types::RunningTask;
 pub use types::{ClientState, RunnableClientTask};
 
@@ -17,17 +18,17 @@ use tokio_util::sync::CancellationToken;
 const PARTTABLE_TMP: &str = "/parttable.bin";
 
 pub async fn handle_message(
-    server: &Arc<Server>,
+    agent: &Agent,
     state: Arc<ClientState>,
     msg: imaged_model::ServerEvent,
 ) {
     match msg {
-        imaged_model::ServerEvent::Task(task) => start_task(server, state, task).await,
-        imaged_model::ServerEvent::Cancel(task_id) => cancel_task(state.deref(), task_id).await,
+        imaged_model::ServerEvent::Task(task) => start_task(agent, state, task).await,
+        imaged_model::ServerEvent::Cancel(task_id) => state.cancel(task_id).await,
     }
 }
 
-async fn start_task(server: &Arc<Server>, state: Arc<ClientState>, task: imaged_model::Task) {
+async fn start_task(agent: &Agent, state: Arc<ClientState>, task: imaged_model::Task) {
     let mut current = state.current_task.lock().await;
     if current.is_some() {
         tracing::warn!("task already running, ignoring new task");
@@ -37,7 +38,8 @@ async fn start_task(server: &Arc<Server>, state: Arc<ClientState>, task: imaged_
     let cancel = tokio_util::sync::CancellationToken::new();
     let cancel_for_task = cancel.clone();
     let state_for_task = state.clone();
-    let runnable = Task::new(server.clone(), &task);
+    let runnable = Task::new(agent.clone(), &task);
+    agent.status.task_started(&task);
 
     let handle = tokio::spawn(async move {
         tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
@@ -58,34 +60,20 @@ async fn run_task(task: Task, cancel_for_task: CancellationToken) {
         r = task.run() => Some(r),
         _ = cancel_for_task.cancelled() => None,
     };
-    task.server().clear_progress();
-    let result = match outcome {
-        Some(result) => result,
+    let status = task.agent().status.clone();
+    let finalized = match outcome {
         None => {
             tracing::error!("task cancelled");
+            status.task_ended(Outcome::Cancelled);
             return;
         }
+        Some(Ok(())) => task.finalize().await,
+        Some(Err(e)) => task.finalize_error(&format!("{e:#}")).await,
     };
-    match result {
-        Ok(_) => {
-            if let Err(e) = task.finalize().await {
-                tracing::error!(task=%task, error=%e, "failed to finalize task");
-            }
-        }
-        Err(e) => {
-            let reason = format!("{e:#}");
-            if let Err(e) = task.finalize_error(&reason).await {
-                tracing::error!(task=%task, error=%e, "failed to finalize task");
-            }
-        }
-    }
-}
-
-async fn cancel_task(state: &ClientState, task_id: i64) {
-    let current = state.current_task.lock().await;
-    if let Some(running) = current.as_ref()
-        && running.task_id == task_id
-    {
-        running.cancel.cancel();
+    if let Err(e) = finalized {
+        tracing::error!(task=%task, error=%e, "failed to finalize task");
+        status.task_ended(Outcome::Failed(format!(
+            "could not report the result: {e:#}"
+        )));
     }
 }

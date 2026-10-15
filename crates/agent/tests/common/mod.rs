@@ -18,7 +18,9 @@ use axum::{Json, Router};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
+use imaged_agent::agent::Agent;
 use imaged_agent::server::Server;
+use imaged_agent::status::{Identity, Status};
 use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, TaskFailure, route};
 use imaged_model::{AgentEvent, ServerEvent};
 use reqwest::Url;
@@ -428,13 +430,20 @@ async fn handle_socket(s: Arc<AppState>, mut socket: WebSocket) {
     }
 }
 
-pub fn agent_server(base_url: &str, mac: &str) -> Arc<Server> {
+pub fn agent_server(base_url: &str, mac: &str) -> Agent {
     let url = Url::parse(base_url).expect("valid base url");
-    let mac: mac_address::MacAddress = mac.parse().expect("valid mac address");
-    Arc::new(Server::new(url, mac, None).expect("agent server client"))
+    let parsed: mac_address::MacAddress = mac.parse().expect("valid mac address");
+    Agent {
+        server: Arc::new(Server::new(url, parsed, None).expect("agent server client")),
+        status: Status::new(Identity {
+            mac: mac.to_string(),
+            ip: None,
+            server: base_url.to_string(),
+        }),
+    }
 }
 
-pub fn offline_server() -> Arc<Server> {
+pub fn offline_agent() -> Agent {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe");
     let addr = listener.local_addr().expect("probe addr");
     drop(listener);

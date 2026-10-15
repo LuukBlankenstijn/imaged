@@ -154,7 +154,9 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
 async fn the_latest_progress_is_sent_on_connect_and_again_after_a_reconnect() {
     let server = stub_server(StubConfig::new().stream_behavior(StreamBehavior::HoldOpen)).await;
     let agent = agent_server(&server.base_url, MAC);
-    agent.progress(TASK_ID).partition_table();
+    agent
+        .status
+        .task_started(&Task::new(TASK_ID, TaskType::Deploy, Some(1)));
     let reported = AgentEvent::Progress(HostProgress {
         task_id: TASK_ID,
         fraction: 0.0,

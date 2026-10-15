@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::Connection;
 use crate::task::{self, ClientState};
 
 #[derive(Clone, Copy, Debug)]
@@ -20,24 +21,39 @@ impl Backoff {
 }
 
 pub async fn run(
-    server: Arc<Server>,
+    agent: Agent,
     state: Arc<ClientState>,
     disk_size_bytes: u64,
     backoff: Backoff,
 ) -> ! {
     let mut delay = backoff.start;
     loop {
-        match server.connect_events(disk_size_bytes).await {
+        agent
+            .status
+            .update(|s| s.connection = Connection::Connecting);
+        let lost = match agent
+            .server
+            .connect_events(disk_size_bytes, agent.status.uplink())
+            .await
+        {
             Ok(events) => {
                 tracing::info!("agent control connection established");
+                agent
+                    .status
+                    .update(|s| s.connection = Connection::Connected);
                 delay = backoff.start;
-                drain(&server, &state, events).await;
+                drain(&agent, &state, events).await;
                 tracing::warn!("agent control connection closed, reconnecting");
+                "the server closed the connection".to_string()
             }
             Err(e) => {
                 tracing::error!(err=%format_args!("{e:#}"), "failed to establish agent control connection");
+                format!("{e:#}")
             }
-        }
+        };
+        agent
+            .status
+            .update(|s| s.connection = Connection::Lost(lost));
 
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(backoff.cap);
@@ -45,12 +61,12 @@ pub async fn run(
 }
 
 async fn drain(
-    server: &Arc<Server>,
+    agent: &Agent,
     state: &Arc<ClientState>,
     events: impl Stream<Item = imaged_model::ServerEvent>,
 ) {
     let mut events = std::pin::pin!(events);
     while let Some(event) = events.next().await {
-        task::handle_message(server, state.clone(), event).await;
+        task::handle_message(agent, state.clone(), event).await;
     }
 }

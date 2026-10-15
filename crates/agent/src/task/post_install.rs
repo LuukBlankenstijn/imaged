@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
@@ -13,7 +13,8 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn};
 
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::{Identity, ScriptPhase};
 use crate::sys::disk::PartitionTarget;
 use crate::sys::mount::MountedSystem;
 
@@ -21,49 +22,47 @@ const SCRIPT_PATH: &str = "/tmp/imaged-script";
 const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
 
-struct Agent {
-    mac: String,
-    ip: String,
-    server: String,
-}
-
-impl Agent {
-    fn current(server: &Server) -> Result<Self> {
-        Ok(Self {
-            mac: crate::sys::get_mac()?.to_string().to_ascii_lowercase(),
-            ip: crate::sys::get_ip()
-                .map(|ip| ip.to_string())
-                .unwrap_or_default(),
-            server: server.base_url().to_string(),
-        })
-    }
-}
-
-pub async fn run(server: &Server, task_id: i64, partitions: &[PartitionTarget]) -> Result<()> {
-    let plan = server.post_install(task_id).await?;
+pub async fn run(agent: &Agent, task_id: i64, partitions: &[PartitionTarget]) -> Result<()> {
+    let plan = agent.server.post_install(task_id).await?;
     if plan.scripts.is_empty() {
         return Ok(());
     }
     let root = root_partition(&plan, partitions)?;
     let disk = crate::sys::disk::find_target_disk().await?;
-    let agent = Agent::current(server)?;
+    agent.status.update_task(|task| {
+        task.scripts = plan
+            .scripts
+            .iter()
+            .map(|script| (script.name.clone(), ScriptPhase::Waiting))
+            .collect();
+    });
     let system = MountedSystem::mount(root, &disk)?;
-    let ran = run_scripts(server, task_id, &system, &plan, &agent).await;
+    let ran = run_scripts(agent, task_id, &system, &plan).await;
     let unmounted = system.unmount();
     ran?;
     unmounted
 }
 
 async fn run_scripts(
-    server: &Server,
+    agent: &Agent,
     task_id: i64,
     system: &MountedSystem,
     plan: &PostInstall,
-    agent: &Agent,
 ) -> Result<()> {
-    for script in &plan.scripts {
-        let env = script_env(script, agent, plan.proxy.as_deref(), &plan.variables);
-        run_script(server, task_id, system.root(), script, env).await?;
+    let identity = agent.status.snapshot().identity;
+    for (index, script) in plan.scripts.iter().enumerate() {
+        let env = script_env(script, &identity, plan.proxy.as_deref(), &plan.variables);
+        agent
+            .status
+            .update_task(|task| task.scripts[index].1 = ScriptPhase::Running);
+        let status = run_script(agent, task_id, system.root(), script, env).await?;
+        let exited = ScriptPhase::Exited(status.code().map(i64::from));
+        agent
+            .status
+            .update_task(|task| task.scripts[index].1 = exited);
+        if !status.success() {
+            bail!("post-install script `{}` failed: {status}", script.name);
+        }
     }
     Ok(())
 }
@@ -83,11 +82,12 @@ fn root_partition<'a>(
 
 fn script_env(
     script: &PostInstallScript,
-    agent: &Agent,
+    identity: &Identity,
     proxy: Option<&str>,
     variables: &BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
-    let agent_values = [PATH, "/root", &agent.mac, &agent.ip, &agent.server];
+    let ip = identity.ip.as_deref().unwrap_or_default();
+    let agent_values = [PATH, "/root", &identity.mac, ip, &identity.server];
     let mut env: Vec<(String, String)> = AGENT_VARIABLES
         .iter()
         .zip(agent_values)
@@ -123,12 +123,12 @@ fn script_command(body: &str) -> &'static [&'static str] {
 }
 
 async fn run_script(
-    server: &Server,
+    agent: &Agent,
     task_id: i64,
     root: &Path,
     script: &PostInstallScript,
     env: Vec<(String, String)>,
-) -> Result<()> {
+) -> Result<ExitStatus> {
     info!(script=%script.name, "running post-install script");
     let file = root.join(SCRIPT_PATH.trim_start_matches('/'));
     if let Some(dir) = file.parent()
@@ -139,7 +139,7 @@ async fn run_script(
     }
     std::fs::write(&file, &script.body).with_context(|| format!("writing {}", file.display()))?;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))?;
-    let result = execute(server, task_id, root, script, env).await;
+    let result = execute(agent, task_id, root, script, env).await;
     if let Err(e) = std::fs::remove_file(&file) {
         warn!(file=%file.display(), error=%e, "could not remove the script");
     }
@@ -147,12 +147,12 @@ async fn run_script(
 }
 
 async fn execute(
-    server: &Server,
+    agent: &Agent,
     task_id: i64,
     root: &Path,
     script: &PostInstallScript,
     env: Vec<(String, String)>,
-) -> Result<()> {
+) -> Result<ExitStatus> {
     let (sender, receiver) = tokio::net::unix::pipe::pipe()?;
     let output = sender.into_blocking_fd()?;
     let mut command = Command::new("chroot");
@@ -173,7 +173,9 @@ async fn execute(
         let _ = on_exit.await;
         tokio::time::sleep(OUTPUT_GRACE).await;
     });
-    let upload = server.upload_script_output(task_id, script.position, lines);
+    let upload = agent
+        .server
+        .upload_script_output(task_id, script.position, lines);
     let wait = async {
         let status = child.wait().await;
         let _ = exited.send(());
@@ -182,15 +184,12 @@ async fn execute(
     let (uploaded, status) = tokio::join!(upload, wait);
     let status = status.context("waiting for the script")?;
     uploaded.context("sending the script output")?;
-    server
+    agent
+        .server
         .finish_script(task_id, script.position, status.code().map(i64::from))
         .await?;
-
-    if !status.success() {
-        bail!("post-install script `{}` failed: {status}", script.name);
-    }
-    info!(script=%script.name, "post-install script finished");
-    Ok(())
+    info!(script=%script.name, %status, "post-install script finished");
+    Ok(status)
 }
 
 fn output_lines(
@@ -235,10 +234,10 @@ mod tests {
         }
     }
 
-    fn agent() -> Agent {
-        Agent {
+    fn agent() -> Identity {
+        Identity {
             mac: "52:54:00:12:34:56".to_string(),
-            ip: "10.0.2.15".to_string(),
+            ip: Some("10.0.2.15".to_string()),
             server: "http://10.0.2.2:8080".to_string(),
         }
     }

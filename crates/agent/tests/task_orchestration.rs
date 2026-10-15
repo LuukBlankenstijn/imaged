@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::offline_server;
-use imaged_agent::progress::PartitionProgress;
-use imaged_agent::server::Server;
+use common::offline_agent;
+use imaged_agent::agent::Agent;
+use imaged_agent::status::PartitionProgress;
 use imaged_agent::sys::disk::{BlockDevice, PartitionTarget};
 use imaged_agent::task::types::RunningTask;
 use imaged_agent::task::{
@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 struct RecordingTask {
-    server: Arc<Server>,
+    agent: Agent,
     log: Arc<Mutex<Vec<String>>>,
     planned: Vec<PartitionTarget>,
     calls: Arc<AtomicUsize>,
@@ -27,7 +27,7 @@ struct RecordingTask {
 impl RecordingTask {
     fn new(planned: Vec<PartitionTarget>) -> Self {
         Self {
-            server: offline_server(),
+            agent: offline_agent(),
             log: Arc::new(Mutex::new(Vec::new())),
             planned,
             calls: Arc::new(AtomicUsize::new(0)),
@@ -66,8 +66,8 @@ impl ClientTaskExt for RecordingTask {
         0
     }
 
-    fn server(&self) -> &Server {
-        &self.server
+    fn agent(&self) -> &Agent {
+        &self.agent
     }
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
@@ -150,7 +150,7 @@ async fn wait_until_slot_cleared(state: &Arc<ClientState>) {
 async fn a_task_event_starts_and_stores_the_running_task() {
     let state = Arc::new(ClientState::default());
 
-    handle_message(&offline_server(), state.clone(), capture_event(7)).await;
+    handle_message(&offline_agent(), state.clone(), capture_event(7)).await;
 
     {
         let guard = state.current_task.lock().await;
@@ -167,7 +167,7 @@ async fn a_second_task_while_one_runs_is_refused_and_leaves_the_first_intact() {
     let first_cancel = CancellationToken::new();
     preseed(&state, 100, first_cancel.clone()).await;
 
-    handle_message(&offline_server(), state.clone(), capture_event(200)).await;
+    handle_message(&offline_agent(), state.clone(), capture_event(200)).await;
 
     let guard = state.current_task.lock().await;
     assert_eq!(guard.as_ref().unwrap().task_id, 100);
@@ -180,7 +180,7 @@ async fn cancel_with_a_matching_id_cancels_the_running_task() {
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_server(), state.clone(), ServerEvent::Cancel(100)).await;
+    handle_message(&offline_agent(), state.clone(), ServerEvent::Cancel(100)).await;
 
     assert!(cancel.is_cancelled());
     assert!(
@@ -195,7 +195,7 @@ async fn cancel_with_a_stale_id_is_ignored() {
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_server(), state.clone(), ServerEvent::Cancel(999)).await;
+    handle_message(&offline_agent(), state.clone(), ServerEvent::Cancel(999)).await;
 
     assert!(!cancel.is_cancelled());
     assert_eq!(
@@ -208,7 +208,7 @@ async fn cancel_with_a_stale_id_is_ignored() {
 async fn after_completion_the_running_task_slot_is_cleared() {
     let state = Arc::new(ClientState::default());
 
-    handle_message(&offline_server(), state.clone(), capture_event(11)).await;
+    handle_message(&offline_agent(), state.clone(), capture_event(11)).await;
 
     wait_until_slot_cleared(&state).await;
     assert!(state.current_task.lock().await.is_none());
@@ -280,7 +280,7 @@ async fn deploy_plan_partitions_fails_at_http_download_before_the_empty_partitio
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(2),
-        DeployTask::new(offline_server(), 42).plan_partitions(&disk),
+        DeployTask::new(offline_agent(), 42).plan_partitions(&disk),
     )
     .await;
 

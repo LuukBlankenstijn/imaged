@@ -1,7 +1,11 @@
+pub mod agent;
 pub mod connection;
+pub mod logging;
 pub mod multicast;
-pub mod progress;
+pub mod reboot;
 pub mod server;
 pub mod shell;
+pub mod status;
 pub mod sys;
 pub mod task;
+pub mod ui;

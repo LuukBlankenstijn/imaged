@@ -5,6 +5,7 @@ use common::{StubConfig, agent_server, fake_bins, stub_server};
 use imaged_agent::sys::disk::PartitionTarget;
 use imaged_agent::task::{ClientTaskExt, DeployTask};
 use imaged_model::agent::path;
+use imaged_model::{Task, TaskType};
 
 fn pseudo_random(len: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(len);
@@ -50,8 +51,11 @@ async fn deploy_pipeline_pipes_decompressed_bytes_into_partclone() {
         size: plaintext.len() as u64,
     };
 
+    agent
+        .status
+        .task_started(&Task::new(task_id, TaskType::Deploy, Some(1)));
     let progress = agent
-        .progress(task_id)
+        .status
         .partitions(std::slice::from_ref(&target))
         .remove(0);
     DeployTask::new(agent, task_id)

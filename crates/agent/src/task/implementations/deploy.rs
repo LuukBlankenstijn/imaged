@@ -1,20 +1,19 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use derive_more::{Constructor, Display};
 use imaged_disk::{restore_compressed, restore_partition_table};
 use tracing::{debug, info};
 
 use super::{ClientTaskExt, PARTCLONE_LOG};
-use crate::progress::PartitionProgress;
-use crate::server::Server;
+use crate::agent::Agent;
+use crate::status::PartitionProgress;
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 use crate::task::PARTTABLE_TMP;
 
 #[derive(Constructor, Clone, Display)]
 #[display("deploy task {task_id}")]
 pub struct DeployTask {
-    server: Arc<Server>,
+    agent: Agent,
     task_id: i64,
 }
 
@@ -23,12 +22,12 @@ impl ClientTaskExt for DeployTask {
         self.task_id
     }
 
-    fn server(&self) -> &Server {
-        &self.server
+    fn agent(&self) -> &Agent {
+        &self.agent
     }
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
-        let data = self.server.partition_table(self.task_id).await?;
+        let data = self.agent.server.partition_table(self.task_id).await?;
         tokio::fs::write(PARTTABLE_TMP, data).await?;
         restore_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
 
@@ -37,7 +36,7 @@ impl ClientTaskExt for DeployTask {
     }
 
     async fn plan_partitions(&self, disk: &BlockDevice) -> anyhow::Result<Vec<PartitionTarget>> {
-        super::image_partitions(&self.server, self.task_id, disk).await
+        super::image_partitions(&self.agent, self.task_id, disk).await
     }
 
     async fn handle_partition(
@@ -47,6 +46,7 @@ impl ClientTaskExt for DeployTask {
     ) -> anyhow::Result<()> {
         debug!(partition_number=%partition.number, "starting partition download");
         let compressed = self
+            .agent
             .server
             .partition_data(self.task_id, partition.number)
             .await?;
@@ -63,7 +63,7 @@ impl ClientTaskExt for DeployTask {
     }
 
     async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
-        crate::task::post_install::run(&self.server, self.task_id, partitions).await
+        crate::task::post_install::run(&self.agent, self.task_id, partitions).await
     }
 
     async fn finalize(&self) -> anyhow::Result<()> {

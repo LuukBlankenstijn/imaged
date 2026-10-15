@@ -12,9 +12,11 @@ use tokio_util::io::StreamReader;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{info, warn};
 
+use crate::status::Status;
 use crate::sys;
 
 const JOIN_TIMEOUT: Duration = MULTICAST_JOIN_WINDOW.saturating_add(Duration::from_secs(60));
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 
 fn local_ipv4() -> anyhow::Result<Ipv4Addr> {
@@ -24,32 +26,42 @@ fn local_ipv4() -> anyhow::Result<Ipv4Addr> {
     }
 }
 
-async fn log_progress(port: u16, progress: watch::Receiver<ReceiveState>) {
-    let mut ticker = tokio::time::interval(PROGRESS_LOG_INTERVAL);
+async fn report(status: Status, slot: i64, port: u16, progress: watch::Receiver<ReceiveState>) {
+    let mut sample = tokio::time::interval(SAMPLE_INTERVAL);
+    let mut log = tokio::time::interval(PROGRESS_LOG_INTERVAL);
     loop {
-        ticker.tick().await;
-        let state = progress.borrow().clone();
-        if state.transfer_id == 0 {
-            continue;
+        tokio::select! {
+            _ = sample.tick() => {
+                status.multicast_sample(slot, progress.borrow().clone(), SAMPLE_INTERVAL);
+            }
+            _ = log.tick() => log_progress(port, &progress.borrow()),
         }
-
-        info!(
-            port,
-            progress = %state.progress(),
-            received = %state.received(),
-            rate = %state.rate(),
-            eta = %state.eta(),
-            naks = state.naks,
-            "multicast transfer progress"
-        );
     }
 }
 
+fn log_progress(port: u16, state: &ReceiveState) {
+    if state.transfer_id == 0 {
+        return;
+    }
+    info!(
+        port,
+        progress = %state.progress(),
+        received = %state.received(),
+        rate = %state.rate(),
+        eta = %state.eta(),
+        naks = state.naks,
+        "multicast transfer progress"
+    );
+}
+
 pub fn multicast_stream(
+    status: &Status,
     task_id: i64,
     slot: i64,
 ) -> anyhow::Result<impl AsyncBufRead + Send + Unpin + 'static> {
     receiver_stream(
+        status.clone(),
+        slot,
         local_ipv4()?,
         multicast_group(task_id),
         get_multicast_port(slot),
@@ -57,6 +69,8 @@ pub fn multicast_stream(
 }
 
 fn receiver_stream(
+    status: Status,
+    slot: i64,
     local_ip: Ipv4Addr,
     group: Ipv4Addr,
     port: u16,
@@ -66,7 +80,12 @@ fn receiver_stream(
         .map_err(|e| anyhow::anyhow!("failed to bind multicast receiver on {group}:{port}: {e}"))?
         .max_wait(JOIN_TIMEOUT)
         .build();
-    let reporter = AbortOnDropHandle::new(tokio::spawn(log_progress(port, receiver.progress())));
+    let reporter = AbortOnDropHandle::new(tokio::spawn(report(
+        status,
+        slot,
+        port,
+        receiver.progress(),
+    )));
     info!(%group, port, "joining multicast group");
 
     let blocks = stream::unfold(
@@ -103,10 +122,20 @@ fn receiver_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status::Identity;
     use scuttlecast::sender::Sender;
     use tokio::io::AsyncReadExt;
 
     const GROUP: Ipv4Addr = Ipv4Addr::new(239, 192, 0, 1);
+
+    fn stream(port: u16) -> impl AsyncBufRead + Send + Unpin + 'static {
+        let status = Status::new(Identity {
+            mac: "52:54:00:12:34:56".to_string(),
+            ip: None,
+            server: "http://127.0.0.1".to_string(),
+        });
+        receiver_stream(status, 1, Ipv4Addr::LOCALHOST, GROUP, port).expect("bind receiver")
+    }
 
     fn sender(port: u16) -> Sender {
         Sender::builder()
@@ -123,7 +152,7 @@ mod tests {
         const PAYLOAD_BYTES: usize = 128 * 1024;
         let payload: Vec<u8> = (0..PAYLOAD_BYTES).map(|i| (i % 251) as u8).collect();
 
-        let mut stream = receiver_stream(Ipv4Addr::LOCALHOST, GROUP, PORT).expect("bind receiver");
+        let mut stream = stream(PORT);
         let sending = sender(PORT).send_stream(
             std::io::Cursor::new(payload.clone()),
             Some(PAYLOAD_BYTES as u64),
@@ -145,7 +174,7 @@ mod tests {
         let payload = vec![0xA5u8; 4 * 1024 * 1024];
         let announced = payload.len() as u64;
 
-        let mut stream = receiver_stream(Ipv4Addr::LOCALHOST, GROUP, PORT).expect("bind receiver");
+        let mut stream = stream(PORT);
         let sending = sender(PORT).send_stream(std::io::Cursor::new(payload), Some(announced));
         let kicker = sending.kicker();
         let mut progress = sending.progress();
