@@ -11,6 +11,7 @@ members = [
     "crates/e2e",
     "crates/model",
     "crates/pack",
+    "crates/proxy",
     "crates/server",
     "crates/web",
 ]
@@ -29,6 +30,7 @@ imaged-core = { path = "crates/core" }
 imaged-api-agent = { path = "crates/api/agent" }
 imaged-agent = { path = "crates/agent" }
 imaged-pack = { path = "crates/pack" }
+imaged-proxy = { path = "crates/proxy" }
 injectable = "0.1.0"
 tokio-stream = { version = "0.1", features = ["sync"] }
 derive_more = { version = "2.1.1", features = ["constructor"] }

@@ -2,6 +2,8 @@
   lib,
   stdenv,
   craneLib,
+  src,
+  version,
   pkg-config,
   sqlite,
   dioxus-cli,
@@ -12,25 +14,9 @@
 }:
 
 let
-  # sqlx::migrate! reads crates/core/migrations, the offline query cache lives
-  # in crates/core/.sqlx, tailwind reads crates/web/input.css and dx reads
-  # crates/server/Dioxus.toml, so the cargo source filter has to let those
-  # through. imaged-boot embeds the boot assets from IMAGED_BOOT_ASSETS.
-  src = lib.fileset.toSource {
-    root = ../..;
-    fileset = lib.fileset.unions [
-      (craneLib.fileset.commonCargoSources ../..)
-      ../../crates/core/migrations
-      ../../crates/core/.sqlx
-      ../../crates/web/input.css
-      ../../crates/server/Dioxus.toml
-    ];
-  };
-
   commonArgs = {
     pname = "imaged-server";
-    version = "0.1.0";
-    inherit src;
+    inherit src version;
     strictDeps = true;
 
     nativeBuildInputs = [
@@ -49,8 +35,6 @@ in
 craneLib.mkCargoDerivation (
   commonArgs
   // {
-    # The two cargo invocations `dx bundle --release` makes, so dx finds every
-    # dependency of the server and the wasm client already compiled.
     cargoArtifacts = craneLib.buildDepsOnly (
       commonArgs
       // {
@@ -72,7 +56,14 @@ craneLib.mkCargoDerivation (
       }
     );
 
+    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+      craneLib.removeReferencesToVendoredSourcesHook
+      craneLib.removeReferencesToRustToolchainHook
+    ];
+
     IMAGED_BOOT_ASSETS = bootAssets;
+
+    doInstallCargoArtifacts = false;
 
     buildPhaseCargoCommand = ''
       export HOME=$TMPDIR
@@ -87,9 +78,10 @@ craneLib.mkCargoDerivation (
 
     meta = {
       description = "imaged server backend and Dioxus dashboard";
-      homepage = "https://github.com/luuk/imaged";
+      homepage = "https://github.com/LuukBlankenstijn/imaged";
       license = lib.licenses.mit;
       platforms = lib.platforms.linux;
+      mainProgram = "imaged-server";
     };
   }
 )

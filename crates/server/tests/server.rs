@@ -57,6 +57,7 @@ fn listeners(machine: SocketAddr, tftp: Option<SocketAddr>, dashboard: Dashboard
         machine,
         public_url: PUBLIC_URL.to_string(),
         tftp,
+        proxy: None,
         dashboard,
     }
 }

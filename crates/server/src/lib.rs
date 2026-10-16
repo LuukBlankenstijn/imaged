@@ -46,6 +46,7 @@ pub struct Listeners {
     pub machine: SocketAddr,
     pub public_url: String,
     pub tftp: Option<SocketAddr>,
+    pub proxy: Option<SocketAddr>,
     pub dashboard: Dashboard,
 }
 
@@ -128,6 +129,12 @@ impl Imaged {
             Some(address) => Some(imaged_boot::tftp::bind(address).await?),
             None => None,
         };
+        let proxy = match listeners.proxy {
+            Some(address) => {
+                Some(imaged_proxy::Proxy::bind(imaged_proxy::Config::new(address)).await?)
+            }
+            None => None,
+        };
 
         let mut server = Server {
             shutdown: CancellationToken::new(),
@@ -143,12 +150,21 @@ impl Imaged {
         if let Some(tftp) = tftp {
             server.spawn(|shutdown| tftp.serve(shutdown));
         }
+        if let Some(proxy) = proxy {
+            server.spawn(|shutdown| async move {
+                tokio::select! {
+                    () = proxy.serve() => Err(io::Error::other("the proxy stopped accepting connections")),
+                    () = shutdown => Ok(()),
+                }
+            });
+        }
 
         tracing::info!(
             machine = %listeners.machine,
             public_url = %listeners.public_url,
             dashboard = ?listeners.dashboard,
             tftp = ?listeners.tftp,
+            proxy = ?listeners.proxy,
             "imaged serving"
         );
         Ok(server)

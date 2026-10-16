@@ -1,6 +1,7 @@
 {
   lib,
   craneLib,
+  version,
   makeWrapper,
   imagingTools,
 }:
@@ -8,7 +9,7 @@
 let
   commonArgs = {
     pname = "imaged-pack";
-    version = "0.1.0";
+    inherit version;
     src = craneLib.cleanCargoSource ../..;
     strictDeps = true;
     cargoExtraArgs = "-p imaged-pack";

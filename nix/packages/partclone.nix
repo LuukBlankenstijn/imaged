@@ -28,4 +28,9 @@
     nativeBuildInputs = (oldAttrs.nativeBuildInputs or [ ]) ++ [
       pkg-config
     ];
+
+    postFixup = (oldAttrs.postFixup or "") + ''
+      rm "$out/nix-support/propagated-build-inputs"
+      rmdir "$out/nix-support"
+    '';
   })

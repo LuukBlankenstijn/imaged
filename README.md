@@ -120,9 +120,18 @@ Binary and library package that wires `imaged-core`, `imaged-boot`,
 agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
 and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 
+`--proxy-bind-address 192.168.100.1:3128` also runs an HTTP proxy (the
+`imaged-proxy` crate) so post-install scripts can reach the internet from a
+network without a router. It tunnels `CONNECT` to ports 443 and 22 (SSH via
+`ProxyCommand`), forwards plain HTTP to port 80 only and refuses private
+targets and its own address. Without `--script-proxy`, scripts get it as
+`http_proxy`: the bind address, or the `--public-base` host when bound to an
+unspecified address. Bind it to the netboot interface: anyone who reaches the
+port can use it.
+
 With the `server` feature it is also a library for embedding imaged in another
 program: `Imaged::open(Config { data_dir, multicast_interface, script_proxy, script_variables })` once per
-process, then `imaged.serve(Listeners { machine, public_url, tftp, dashboard })`
+process, then `imaged.serve(Listeners { machine, public_url, tftp, proxy, dashboard })`
 returns a `Server`. `stop()` disconnects every agent, gives open requests a
 short grace period and then cuts off whatever connection is left, after which
 `serve` can be called again with new addresses; one `Server` runs at a time. The
@@ -289,6 +298,34 @@ cargo test --workspace
 CI runs the same suite as `nix build .#checks.x86_64-linux.tests`, which
 embeds placeholder boot assets so it builds neither the agent nor the
 initramfs.
+
+## Nix packages and NixOS
+
+`nix build` builds `imaged-server` (the default package: binary plus the
+dashboard's `public/` next to it); `.#imaged-pack`, `.#imaged-agent` and
+`.#boot-assets` build the rest. `overlays.default` adds `imaged-server` and
+`imaged-pack` to nixpkgs.
+
+`nixosModules.default` runs the server as a hardened systemd service and adds
+the cachix substituter:
+
+```nix
+services.imaged.server = {
+  enable = true;
+  bindAddress = "0.0.0.0:8080";
+  publicBase = "192.168.100.1:8080";
+  multicastInterface = "br-netboot";
+  tftpBindAddress = "192.168.100.1:69";
+  proxyBindAddress = "192.168.100.1:3128";
+  openFirewall = true;
+};
+```
+
+`openFirewall` opens the HTTP, dashboard, proxy and TFTP ports on
+`multicastInterface`; the multicast UDP range is always open there. The
+service waits for `network-online.target`, which does not cover a bridge that
+comes up later (such as a Docker network): it restarts every 5 s until its
+addresses can be bound.
 
 ## Network boot
 

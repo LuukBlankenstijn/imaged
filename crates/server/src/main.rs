@@ -32,16 +32,31 @@ async fn main() -> std::io::Result<()> {
         use_https: bool,
         #[arg(long, env = "SCRIPT_PROXY")]
         script_proxy: Option<String>,
+        #[arg(long, env = "PROXY_BIND_ADDRESS")]
+        proxy_bind_address: Option<SocketAddr>,
     }
 
     let args = Args::parse();
-    imaged_model::setup_logging!(args.log_level, ["imaged_core", "imaged_boot"]);
+    imaged_model::setup_logging!(
+        args.log_level,
+        ["imaged_core", "imaged_boot", "imaged_proxy"]
+    );
 
     let scheme = if args.use_https { "https" } else { "http" };
+    let script_proxy = match (args.script_proxy, args.proxy_bind_address) {
+        (Some(external), _) => Some(external),
+        (None, Some(bind)) if bind.ip().is_unspecified() => {
+            let public_base: axum::http::uri::Authority =
+                args.public_base.parse().map_err(std::io::Error::other)?;
+            Some(format!("http://{}:{}", public_base.host(), bind.port()))
+        }
+        (None, Some(bind)) => Some(format!("http://{bind}")),
+        (None, None) => None,
+    };
     let imaged = Imaged::open(Config {
         data_dir: args.data_dir,
         multicast_interface: args.multicast_interface,
-        script_proxy: args.script_proxy,
+        script_proxy,
         script_variables: Default::default(),
     })
     .await?;
@@ -50,6 +65,7 @@ async fn main() -> std::io::Result<()> {
             machine: args.bind_address,
             public_url: format!("{scheme}://{}", args.public_base),
             tftp: args.tftp_bind_address,
+            proxy: args.proxy_bind_address,
             dashboard: args
                 .web_bind_address
                 .map_or(Dashboard::OnMachineListener, Dashboard::Separate),

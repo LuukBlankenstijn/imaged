@@ -36,6 +36,8 @@
 
         inherit (pkgs) lib;
 
+        version = (lib.importTOML ./Cargo.toml).workspace.package.version;
+
         mkTarget =
           {
             targetPkgs,
@@ -46,6 +48,7 @@
           let
             partclone = targetPkgs.callPackage ./nix/packages/partclone.nix { };
             imaged-agent = muslPkgs.callPackage ./nix/packages/imaged-agent.nix {
+              inherit version;
               craneLib = (crane.mkLib muslPkgs).overrideToolchain (
                 pkgs.rust-bin.stable.latest.minimal.override {
                   targets = [ muslPkgs.stdenv.hostPlatform.rust.rustcTarget ];
@@ -176,10 +179,34 @@
         setup-net = pkgs.callPackage ./nix/scripts/setup-net.nix { };
         teardown-net = pkgs.callPackage ./nix/scripts/teardown-net.nix { };
 
+        imagedSrc = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources ./.)
+            ./crates/core/migrations
+            ./crates/core/.sqlx
+            ./crates/web/input.css
+            ./crates/server/Dioxus.toml
+          ];
+        };
+
         imaged-tests = pkgs.callPackage ./nix/packages/imaged-tests.nix {
-          inherit craneLib;
+          inherit craneLib version;
+          src = imagedSrc;
           bootAssets = placeholderBootAssets;
           testTools = diskBuildTools;
+        };
+        imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
+          inherit
+            bootAssets
+            wasm-bindgen-cli
+            craneLib
+            version
+            ;
+          src = imagedSrc;
+        };
+        imaged-pack = pkgs.callPackage ./nix/packages/imaged-pack.nix {
+          inherit craneLib imagingTools version;
         };
 
         devShell = pkgs.callPackage ./nix/devshell.nix {
@@ -220,18 +247,11 @@
             ;
           boot-assets = bootAssets;
           ipxe-assets = ipxeAssets;
-          imaged-server = pkgs.callPackage ./nix/packages/imaged-server.nix {
-            inherit
-              bootAssets
-              wasm-bindgen-cli
-              craneLib
-              ;
-          };
+          inherit imaged-server;
+          default = imaged-server;
         }
         // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          imaged-pack = pkgs.callPackage ./nix/packages/imaged-pack.nix {
-            inherit craneLib imagingTools;
-          };
+          inherit imaged-pack;
         };
 
         devShells.default = devShell;
@@ -248,6 +268,14 @@
       }
     )
     // {
+      overlays.default =
+        _final: prev:
+        let
+          packages = self.packages.${prev.stdenv.hostPlatform.system};
+        in
+        { inherit (packages) imaged-server; }
+        // nixpkgs.lib.optionalAttrs (packages ? imaged-pack) { inherit (packages) imaged-pack; };
+
       nixosModules.default =
         {
           pkgs,

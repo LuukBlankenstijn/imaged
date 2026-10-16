@@ -2,6 +2,7 @@
   stdenv,
   musl,
   craneLib,
+  version,
 }:
 
 let
@@ -15,7 +16,7 @@ let
   # real stub.
   commonArgs = {
     pname = "imaged-agent";
-    version = "0.1.0";
+    inherit version;
     src = craneLib.cleanCargoSource ../..;
     strictDeps = true;
     cargoExtraArgs = "-p imaged-agent";

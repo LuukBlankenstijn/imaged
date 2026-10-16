@@ -1,0 +1,9 @@
+[package]
+name = "imaged-proxy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+httparse = "1.10"
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time"] }
+tracing.workspace = true

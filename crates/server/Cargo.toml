@@ -16,6 +16,7 @@ imaged-api-agent = { workspace = true, optional = true }
 imaged-core = { path = "../core", optional = true }
 imaged-boot = { workspace = true, optional = true }
 imaged-model = { workspace = true, features = ["logging"], optional = true }
+imaged-proxy = { workspace = true, optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { workspace = true, features = ["signal", "time"], optional = true }
 tokio-util = { workspace = true, optional = true }
@@ -33,6 +34,7 @@ server = [
     "dep:imaged-core",
     "dep:imaged-boot",
     "dep:imaged-model",
+    "dep:imaged-proxy",
     "dep:axum",
     "dep:tokio",
     "dep:tokio-util",
