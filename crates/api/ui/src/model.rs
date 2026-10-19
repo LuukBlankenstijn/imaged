@@ -7,7 +7,7 @@ pub use imaged_model::host::{ConnectionChange, HostConnectionEvent};
 pub use imaged_model::image::{ImagePartition, ImageStatus};
 pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
 pub use imaged_model::progress::{HostProgress, Stage};
-pub use imaged_model::script::{DeployInputs, InputKind};
+pub use imaged_model::script::{DeployInputs, InputKind, InputSource, InputSources};
 pub use imaged_model::task::TaskState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

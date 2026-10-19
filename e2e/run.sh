@@ -249,7 +249,7 @@ deploy_image() {
     DEPLOY_VM=$name
     DEPLOY_TASK_ID=$(api_post /api/ui/hosts/deploy \
         "$(jq -nc --argjson host "$host_id" --argjson image "$image_id" --arg hostname "$hostname" \
-            '{req: {id: $host, image_id: $image, inputs: {shared: {}, per_machine: {($host | tostring): {hostname: $hostname}}}}}')" |
+            '{req: {id: $host, image_id: $image, inputs: {shared: {}, per_machine: {($host | tostring): {hostname: {value: $hostname}}}}}}')" |
         jq -r .id)
     log "deploy task $DEPLOY_TASK_ID dispatched: image $image_id to host $host_id with hostname $hostname"
     unwatch "$name"

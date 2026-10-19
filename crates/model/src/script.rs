@@ -41,11 +41,57 @@ pub struct ScriptInput {
 
 pub type InputValues = BTreeMap<String, String>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputSource {
+    Value(String),
+    Variable(String),
+}
+
+pub type InputSources = BTreeMap<String, InputSource>;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeployInputs {
     #[serde(default)]
-    pub shared: InputValues,
+    pub shared: InputSources,
     #[serde(default)]
+    pub per_machine: BTreeMap<i64, InputSources>,
+}
+
+impl DeployInputs {
+    pub fn resolve(&self, variables: &BTreeMap<String, String>) -> Result<ResolvedInputs> {
+        let resolve = |sources: &InputSources| -> Result<InputValues> {
+            sources
+                .iter()
+                .map(|(name, source)| {
+                    let value = match source {
+                        InputSource::Value(value) => value.clone(),
+                        InputSource::Variable(variable) => {
+                            variables.get(variable).cloned().ok_or_else(|| {
+                                AppError::InvalidArgument(format!(
+                                    "input `{name}` uses script variable `{variable}`, which is not configured"
+                                ))
+                            })?
+                        }
+                    };
+                    Ok((name.clone(), value))
+                })
+                .collect()
+        };
+        Ok(ResolvedInputs {
+            shared: resolve(&self.shared)?,
+            per_machine: self
+                .per_machine
+                .iter()
+                .map(|(&host_id, sources)| Ok((host_id, resolve(sources)?)))
+                .collect::<Result<_>>()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResolvedInputs {
+    pub shared: InputValues,
     pub per_machine: BTreeMap<i64, InputValues>,
 }
 

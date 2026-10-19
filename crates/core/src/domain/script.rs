@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use imaged_model::script::{InputValues, ScriptInput, validate_script};
 
 use imaged_model::error::{AppError, Result};
-use imaged_model::script::DeployInputs;
+use imaged_model::script::ResolvedInputs;
 
 #[derive(Debug, Clone)]
 pub struct Script {
@@ -31,7 +31,7 @@ impl NewScript {
 pub fn resolve_inputs(
     scripts: &[Script],
     host_ids: &[i64],
-    inputs: &DeployInputs,
+    inputs: &ResolvedInputs,
 ) -> Result<BTreeMap<i64, InputValues>> {
     let declared: Vec<&ScriptInput> = scripts.iter().flat_map(|s| &s.inputs).collect();
     let declaration = |name: &str| declared.iter().find(|input| input.name == name);
@@ -183,7 +183,7 @@ mod tests {
         let resolved = resolve_inputs(
             &scripts,
             &[1, 2],
-            &DeployInputs {
+            &ResolvedInputs {
                 shared: values(&[("site", "lab")]),
                 per_machine: BTreeMap::from([
                     (1, values(&[("hostname", "pc-1")])),
@@ -208,7 +208,7 @@ mod tests {
         let mut hostname = input("hostname", InputKind::Text);
         hostname.per_machine = true;
         hostname.required = true;
-        let inputs = DeployInputs {
+        let inputs = ResolvedInputs {
             shared: InputValues::new(),
             per_machine: BTreeMap::from([(1, values(&[("hostname", "pc-1")]))]),
         };
@@ -230,7 +230,7 @@ mod tests {
         let resolved = resolve_inputs(
             &[script(vec![timezone, optional])],
             &[1],
-            &DeployInputs {
+            &ResolvedInputs {
                 shared: values(&[("timezone", ""), ("note", "")]),
                 per_machine: BTreeMap::new(),
             },
@@ -250,7 +250,7 @@ mod tests {
             resolve_inputs(
                 &scripts,
                 &[1],
-                &DeployInputs {
+                &ResolvedInputs {
                     shared: values(pairs),
                     per_machine: BTreeMap::new(),
                 },
@@ -274,7 +274,7 @@ mod tests {
             resolve_inputs(
                 &scripts,
                 &[1],
-                &DeployInputs {
+                &ResolvedInputs {
                     shared,
                     per_machine,
                 },
@@ -305,7 +305,7 @@ mod tests {
             resolve_inputs(
                 &scripts,
                 &[1],
-                &DeployInputs {
+                &ResolvedInputs {
                     shared: values(&[("level", level)]),
                     per_machine: BTreeMap::new(),
                 },
@@ -322,8 +322,12 @@ mod tests {
             script(vec![per_machine]),
         ];
         assert!(
-            rejected(resolve_inputs(&conflicting, &[1], &DeployInputs::default()))
-                .contains("both shared and per machine")
+            rejected(resolve_inputs(
+                &conflicting,
+                &[1],
+                &ResolvedInputs::default()
+            ))
+            .contains("both shared and per machine")
         );
     }
 }

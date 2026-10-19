@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
-
 use dioxus::prelude::*;
 
-use crate::api::scripts::get_image_scripts;
+use crate::api::scripts::{get_image_scripts, get_script_variable_names};
 use crate::components::icons::Icon;
 use crate::components::ui::{FIELD_CLASSES, Spinner};
-use crate::model::{DeployInputs, Host, Image, InputKind, Script, ScriptInput};
+use crate::model::{
+    DeployInputs, Host, Image, InputKind, InputSource, InputSources, Script, ScriptInput,
+};
 
 pub(crate) fn form_fields(scripts: &[Script]) -> Vec<ScriptInput> {
     let mut fields: Vec<ScriptInput> = Vec::new();
@@ -18,11 +18,11 @@ pub(crate) fn form_fields(scripts: &[Script]) -> Vec<ScriptInput> {
 }
 
 pub(crate) fn initial_inputs(fields: &[ScriptInput], host_ids: &[i64]) -> DeployInputs {
-    let defaults = |per_machine: bool| -> BTreeMap<String, String> {
+    let defaults = |per_machine: bool| -> InputSources {
         fields
             .iter()
             .filter(|f| f.per_machine == per_machine)
-            .filter_map(|f| Some((f.name.clone(), f.default_value.clone()?)))
+            .filter_map(|f| Some((f.name.clone(), InputSource::Value(f.default_value.clone()?))))
             .collect()
     };
     let per_host = defaults(true);
@@ -33,11 +33,11 @@ pub(crate) fn initial_inputs(fields: &[ScriptInput], host_ids: &[i64]) -> Deploy
 }
 
 pub(crate) fn submitted_inputs(form: &DeployInputs) -> DeployInputs {
-    let filled = |values: &BTreeMap<String, String>| -> BTreeMap<String, String> {
-        values
+    let filled = |sources: &InputSources| -> InputSources {
+        sources
             .iter()
-            .filter(|(_, value)| !value.is_empty())
-            .map(|(name, value)| (name.clone(), value.clone()))
+            .filter(|(_, source)| **source != InputSource::Value(String::new()))
+            .map(|(name, source)| (name.clone(), source.clone()))
             .collect()
     };
     DeployInputs {
@@ -45,8 +45,8 @@ pub(crate) fn submitted_inputs(form: &DeployInputs) -> DeployInputs {
         per_machine: form
             .per_machine
             .iter()
-            .map(|(&host_id, values)| (host_id, filled(values)))
-            .filter(|(_, values)| !values.is_empty())
+            .map(|(&host_id, sources)| (host_id, filled(sources)))
+            .filter(|(_, sources)| !sources.is_empty())
             .collect(),
     }
 }
@@ -69,6 +69,7 @@ pub fn DeployInputsForm(
         let image_id = image.read().id;
         async move { get_image_scripts(image_id).await }
     });
+    let variables = use_resource(get_script_variable_names);
     let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
 
     use_effect(move || {
@@ -93,6 +94,10 @@ pub fn DeployInputsForm(
                 fields.iter().filter(|f| f.per_machine).cloned().collect();
             let names: Vec<String> = list.iter().map(|s| s.name.clone()).collect();
             let values = inputs().unwrap_or_default();
+            let variables: Vec<String> = match &*variables.read() {
+                Some(Ok(names)) => names.clone(),
+                _ => Vec::new(),
+            };
             rsx! {
                 div { class: "mt-5 flex flex-col gap-4 border-t border-line pt-4",
                     div { class: "flex flex-wrap items-center gap-1.5 text-xs text-fog-500",
@@ -113,13 +118,14 @@ pub fn DeployInputsForm(
                                     FieldLabel { input: field.clone() }
                                     FieldControl {
                                         input: field.clone(),
-                                        value: values.shared.get(&field.name).cloned().unwrap_or_default(),
+                                        variables: variables.clone(),
+                                        source: values.shared.get(&field.name).cloned(),
                                         onchange: {
                                             let name = field.name.clone();
-                                            move |value: String| {
+                                            move |source: InputSource| {
                                                 let mut inputs = inputs;
                                                 if let Some(form) = inputs.write().as_mut() {
-                                                    form.shared.insert(name.clone(), value);
+                                                    form.shared.insert(name.clone(), source);
                                                 }
                                             }
                                         },
@@ -156,22 +162,22 @@ pub fn DeployInputsForm(
                                                     td { key: "{field.name}", class: "px-3 py-1.5",
                                                         FieldControl {
                                                             input: field.clone(),
-                                                            value: values
+                                                            variables: variables.clone(),
+                                                            source: values
                                                                 .per_machine
                                                                 .get(&host.id)
                                                                 .and_then(|v| v.get(&field.name))
-                                                                .cloned()
-                                                                .unwrap_or_default(),
+                                                                .cloned(),
                                                             onchange: {
                                                                 let name = field.name.clone();
                                                                 let host_id = host.id;
-                                                                move |value: String| {
+                                                                move |source: InputSource| {
                                                                     let mut inputs = inputs;
                                                                     if let Some(form) = inputs.write().as_mut() {
                                                                         form.per_machine
                                                                             .entry(host_id)
                                                                             .or_default()
-                                                                            .insert(name.clone(), value);
+                                                                            .insert(name.clone(), source);
                                                                     }
                                                                 }
                                                             },
@@ -216,11 +222,64 @@ fn FieldLabel(input: ScriptInput) -> Element {
 }
 
 #[component]
-fn FieldControl(input: ScriptInput, value: String, onchange: EventHandler<String>) -> Element {
+fn FieldControl(
+    input: ScriptInput,
+    variables: Vec<String>,
+    source: Option<InputSource>,
+    onchange: EventHandler<InputSource>,
+) -> Element {
+    let (variable, value) = match source {
+        Some(InputSource::Variable(name)) => (Some(name), String::new()),
+        Some(InputSource::Value(value)) => (None, value),
+        None => (None, String::new()),
+    };
+    rsx! {
+        div { class: "flex items-start gap-2",
+            if !variables.is_empty() {
+                select {
+                    class: "{FIELD_CLASSES} w-28 shrink-0 text-xs",
+                    title: "Take the value from a script variable",
+                    onchange: move |e| {
+                        let picked = e.value();
+                        onchange.call(if picked.is_empty() {
+                            InputSource::Value(String::new())
+                        } else {
+                            InputSource::Variable(picked)
+                        });
+                    },
+                    option { value: "", selected: variable.is_none(), "value" }
+                    for name in variables.iter() {
+                        option {
+                            key: "{name}",
+                            value: "{name}",
+                            selected: variable.as_deref() == Some(name.as_str()),
+                            "${name}"
+                        }
+                    }
+                }
+            }
+            ValueControl {
+                input,
+                value,
+                disabled: variable.is_some(),
+                onchange: move |value: String| onchange.call(InputSource::Value(value)),
+            }
+        }
+    }
+}
+
+#[component]
+fn ValueControl(
+    input: ScriptInput,
+    value: String,
+    disabled: bool,
+    onchange: EventHandler<String>,
+) -> Element {
     match input.kind {
         InputKind::Choice => rsx! {
             select {
                 class: "{FIELD_CLASSES} w-full min-w-28",
+                disabled,
                 value: "{value}",
                 onchange: move |e| onchange.call(e.value()),
                 option { value: "", selected: value.is_empty(), "\u{2014}" }
@@ -237,6 +296,7 @@ fn FieldControl(input: ScriptInput, value: String, onchange: EventHandler<String
         InputKind::Number => rsx! {
             input {
                 class: "{FIELD_CLASSES} w-full min-w-24 font-mono",
+                disabled,
                 r#type: "number",
                 value: "{value}",
                 oninput: move |e| onchange.call(e.value()),
@@ -245,6 +305,7 @@ fn FieldControl(input: ScriptInput, value: String, onchange: EventHandler<String
         InputKind::Text => rsx! {
             input {
                 class: "{FIELD_CLASSES} w-full min-w-32 font-mono",
+                disabled,
                 r#type: "text",
                 value: "{value}",
                 oninput: move |e| onchange.call(e.value()),
@@ -253,6 +314,7 @@ fn FieldControl(input: ScriptInput, value: String, onchange: EventHandler<String
         InputKind::Secret => rsx! {
             textarea {
                 class: "{FIELD_CLASSES} w-full min-w-32 font-mono",
+                disabled,
                 style: "-webkit-text-security: disc",
                 rows: 2,
                 autocomplete: "off",

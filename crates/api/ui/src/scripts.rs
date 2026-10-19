@@ -8,7 +8,7 @@ use crate::model::{
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{ImageRepo, ScriptRepo};
+use imaged_core::di::{ImageRepo, ScriptRepo, ScriptVariables};
 use imaged_model::error::Result;
 
 #[get("/api/ui/scripts")]
@@ -16,6 +16,12 @@ use imaged_model::error::Result;
 pub async fn get_all_scripts() -> Result<Vec<Script>> {
     let scripts = script_repo.get_all().await?;
     Ok(scripts.into_iter().map(Into::into).collect())
+}
+
+#[get("/api/ui/scripts/variables")]
+#[inject(script_variables: ScriptVariables)]
+pub async fn get_script_variable_names() -> Result<Vec<String>> {
+    Ok(script_variables.keys().cloned().collect())
 }
 
 #[post("/api/ui/scripts/create")]

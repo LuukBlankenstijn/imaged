@@ -6,7 +6,9 @@ use crate::model::{DeployRequest, Host, Task, UpdateName};
 use injectable::inject;
 
 #[cfg(feature = "server")]
-use imaged_core::di::{HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, TaskRepo};
+use imaged_core::di::{
+    HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, ScriptVariables, TaskRepo,
+};
 #[cfg(feature = "server")]
 use imaged_core::domain::script::resolve_inputs;
 #[cfg(feature = "server")]
@@ -109,7 +111,7 @@ pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
 }
 
 #[cfg(feature = "server")]
-#[inject(image_repo: ImageRepo, script_repo: ScriptRepo)]
+#[inject(image_repo: ImageRepo, script_repo: ScriptRepo, script_variables: ScriptVariables)]
 pub(crate) async fn host_inputs(
     image_id: i64,
     host_ids: &[i64],
@@ -123,5 +125,5 @@ pub(crate) async fn host_inputs(
             image.name
         )));
     }
-    resolve_inputs(&scripts, host_ids, &inputs)
+    resolve_inputs(&scripts, host_ids, &inputs.resolve(&script_variables)?)
 }

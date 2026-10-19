@@ -12,7 +12,8 @@ use crate::components::ui::{
 };
 use crate::format::{format_bytes, format_relative};
 use crate::model::{
-    DeployInputs, ImageStatus, InputKind, Script, ScriptInput, TaskState, TaskType,
+    DeployInputs, ImageStatus, InputKind, InputSource, InputSources, Script, ScriptInput,
+    TaskState, TaskType,
 };
 use crate::views::groups::{all_selected, toggle_visible};
 use crate::views::scripts::InputDraft;
@@ -248,10 +249,10 @@ fn script(id: i64, inputs: Vec<ScriptInput>) -> Script {
     }
 }
 
-fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+fn values(pairs: &[(&str, &str)]) -> InputSources {
     pairs
         .iter()
-        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .map(|(name, value)| (name.to_string(), InputSource::Value(value.to_string())))
         .collect()
 }
 
@@ -300,8 +301,10 @@ fn the_deploy_form_prefills_defaults_shared_once_and_per_machine_for_every_host(
 
 #[test]
 fn submitting_the_deploy_form_leaves_out_cleared_values_and_hosts_without_any() {
+    let mut shared = values(&[("site", "hq"), ("role", "")]);
+    shared.insert("key".into(), InputSource::Variable("HOST_KEY".into()));
     let form = DeployInputs {
-        shared: values(&[("site", "hq"), ("role", "")]),
+        shared,
         per_machine: BTreeMap::from([
             (4, values(&[("hostname", "pc-4"), ("seat", "")])),
             (7, values(&[("hostname", "")])),
@@ -310,7 +313,9 @@ fn submitting_the_deploy_form_leaves_out_cleared_values_and_hosts_without_any() 
 
     let sent = submitted_inputs(&form);
 
-    assert_eq!(sent.shared, values(&[("site", "hq")]));
+    let mut expected = values(&[("site", "hq")]);
+    expected.insert("key".into(), InputSource::Variable("HOST_KEY".into()));
+    assert_eq!(sent.shared, expected);
     assert_eq!(
         sent.per_machine,
         BTreeMap::from([(4, values(&[("hostname", "pc-4")]))])

@@ -823,7 +823,7 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
         .unwrap();
     let rejected = post(
         "/api/ui/hosts/deploy",
-        serde_json::json!({ "req": { "id": host.id, "image_id": image.id, "inputs": { "shared": { "colour": "red" } } } }),
+        serde_json::json!({ "req": { "id": host.id, "image_id": image.id, "inputs": { "shared": { "colour": { "value": "red" } } } } }),
     )
     .await;
     assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
@@ -1396,6 +1396,13 @@ fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn typed(pairs: &[(&str, &str)]) -> model::InputSources {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), model::InputSource::Value(v.to_string())))
+        .collect()
+}
+
 #[tokio::test]
 async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_without_a_task() {
     let (c, _guard) = container().await;
@@ -1425,11 +1432,11 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
         ],
     )
     .await;
-    let request = |per_machine: BTreeMap<i64, BTreeMap<String, String>>| model::MulticastRequest {
+    let request = |per_machine: BTreeMap<i64, model::InputSources>| model::MulticastRequest {
         host_ids: vec![a, b],
         image_id: image,
         inputs: model::DeployInputs {
-            shared: values(&[("site", "lab")]),
+            shared: typed(&[("site", "lab")]),
             per_machine,
         },
     };
@@ -1438,7 +1445,7 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
         c.clone(),
         crate::groups::multicast(request(BTreeMap::from([(
             a,
-            values(&[("hostname", "pc-a")]),
+            typed(&[("hostname", "pc-a")]),
         )]))),
     )
     .await
@@ -1449,8 +1456,8 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
     core::di::scope(
         c.clone(),
         crate::groups::multicast(request(BTreeMap::from([
-            (a, values(&[("hostname", "pc-a")])),
-            (b, values(&[("hostname", "pc-b")])),
+            (a, typed(&[("hostname", "pc-a")])),
+            (b, typed(&[("hostname", "pc-b")])),
         ]))),
     )
     .await
@@ -1464,6 +1471,61 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
     assert_eq!(
         c.task_repo.get_inputs(task.id, b).await.unwrap(),
         values(&[("hostname", "pc-b"), ("mode", "safe"), ("site", "lab")])
+    );
+}
+
+#[tokio::test]
+async fn an_input_taken_from_a_script_variable_stores_the_variables_value() {
+    let (mut c, _guard) = container().await;
+    c.script_variables = std::sync::Arc::new(BTreeMap::from([(
+        "HOST_KEY".to_string(),
+        "line one\nline two\n".to_string(),
+    )]));
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:44".into(), 1_000_000, None)
+        .await
+        .unwrap()
+        .id;
+    let mut key = text_input("host_key", true);
+    key.kind = InputKind::Secret;
+    let image = scripted_image(&c, Some(2), vec![key]).await;
+    let request = |variable: &str| model::DeployRequest {
+        id: host,
+        image_id: image,
+        inputs: model::DeployInputs {
+            shared: BTreeMap::new(),
+            per_machine: BTreeMap::from([(
+                host,
+                BTreeMap::from([(
+                    "host_key".to_string(),
+                    model::InputSource::Variable(variable.to_string()),
+                )]),
+            )]),
+        },
+    };
+
+    let err = core::di::scope(c.clone(), crate::hosts::deploy(request("NOPE")))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, AppError::InvalidArgument(m) if m.contains("`NOPE`")),
+        "{err:?}"
+    );
+    assert!(c.task_repo.get_all().await.unwrap().is_empty());
+
+    let task = core::di::scope(c.clone(), crate::hosts::deploy(request("HOST_KEY")))
+        .await
+        .unwrap();
+    assert_eq!(
+        c.task_repo.get_inputs(task.id, host).await.unwrap(),
+        values(&[("host_key", "line one\nline two\n")])
+    );
+    assert_eq!(
+        core::di::scope(c.clone(), crate::scripts::get_script_variable_names())
+            .await
+            .unwrap(),
+        ["HOST_KEY"]
     );
 }
 

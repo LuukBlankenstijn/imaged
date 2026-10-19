@@ -383,14 +383,18 @@ partition, otherwise it is left unset for the dashboard to choose.
 
 A deploy (`POST /api/ui/hosts/deploy`) or multicast
 (`POST /api/ui/groups/multicast`) of an image with scripts takes the input
-values as `inputs: { shared: { name: value }, per_machine: { host_id: { name:
-value } } }`: shared inputs come from `shared`, per-machine inputs from each
-host's entry. Before any task is created the values are checked (unknown or
-misplaced names, required values, numbers, choices) and an empty value falls
-back to the input's default; a rejected request is a 400, and an image with
-scripts but no root partition is refused with a 412. The resolved values are
-stored with each task host, so a retried or reconnecting host gets the same
-ones.
+values as `inputs: { shared: { name: source }, per_machine: { host_id: { name:
+source } } }`: shared inputs come from `shared`, per-machine inputs from each
+host's entry. A source is `{ "value": "…" }` for a typed value or
+`{ "variable": "NAME" }` to take the value of a `[script_variables]` entry;
+`GET /api/ui/scripts/variables` lists the variable names (never their
+values), and the deploy and multicast dialogs offer them next to each field.
+Before any task is created the sources are resolved and checked (unknown
+variables, unknown or misplaced names, required values, numbers, choices) and
+an empty value falls back to the input's default; a rejected request is a 400,
+and an image with scripts but no root partition is refused with a 412. The
+resolved values are stored with each task host, so a retried or reconnecting
+host gets the same ones, even if the variable changes later.
 
 After a deploy or multicast has restored every partition, the agent fetches
 the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
