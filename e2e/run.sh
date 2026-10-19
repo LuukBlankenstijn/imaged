@@ -117,36 +117,6 @@ EOF
     wait_until 60 "imaged-server to answer on $IMAGED_URL" imaged_answers
 }
 
-write_dnsmasq_config() {
-    cat >"$OUT_DIR/dnsmasq.conf" <<EOF
-interface=br0
-bind-interfaces
-port=0
-dhcp-range=$CABLE_NET.100,$CABLE_NET.199,255.255.255.0,1h
-dhcp-authoritative
-dhcp-leasefile=$OUT_DIR/dnsmasq.leases
-dhcp-userclass=set:ipxe,iPXE
-dhcp-match=set:bios,option:client-arch,0
-dhcp-match=set:efi32,option:client-arch,6
-dhcp-match=set:efibc,option:client-arch,7
-dhcp-match=set:efi64,option:client-arch,9
-dhcp-match=set:efiarm64,option:client-arch,11
-dhcp-boot=tag:!ipxe,tag:bios,undionly.kpxe,,$SERVER_IP
-dhcp-boot=tag:!ipxe,tag:efi32,ipxe.efi,,$SERVER_IP
-dhcp-boot=tag:!ipxe,tag:efibc,ipxe.efi,,$SERVER_IP
-dhcp-boot=tag:!ipxe,tag:efi64,ipxe.efi,,$SERVER_IP
-dhcp-boot=tag:!ipxe,tag:efiarm64,ipxe-arm64.efi,,$SERVER_IP
-dhcp-boot=tag:ipxe,$IMAGED_URL/boot/boot.ipxe
-log-dhcp
-EOF
-}
-
-start_dhcp_server() {
-    write_dnsmasq_config
-    start_background dnsmasq "$OUT_DIR/dnsmasq.log" \
-        dnsmasq --no-daemon --user=root --pid-file --conf-file="$OUT_DIR/dnsmasq.conf"
-}
-
 assert_root_partition() {
     local id=$1 what=$2 root
     root=$(image_field "$id" .root_partition)

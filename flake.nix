@@ -295,5 +295,18 @@
             lib.mkDefault
               self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
         };
+
+      nixosModules.image =
+        {
+          pkgs,
+          lib,
+          ...
+        }:
+        {
+          imports = [ ./nix/modules/image.nix ];
+          imaged.image.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.buildPlatform.system}.imaged-pack;
+        };
     };
 }

@@ -445,9 +445,87 @@ with an initramfs built from this tree (`build-initramfs x86_64`). The script:
 6. exports the captured image and compares its structure with the packed
    archive,
 7. deploys both images with a hostname input and checks each deployed disk:
-   the same GPT, a clean fsck, the same files, and `/etc/hostname` set by the
-   script.
+   the same GPT, a clean fsck, the same files, the restored swap header, and
+   `/etc/hostname` set by the script.
 
 `E2E_FIRMWARE` picks `bios` or `uefi`, `E2E_OUT` the directory for logs, disks
 and archives (default `e2e/out`); `CARGO_TARGET_DIR` and `IMAGED_BOOT_ASSETS`
 are honoured, and the assets the script checks are the ones it compiles in.
+
+```sh
+nix develop .#e2e -c e2e/nixos.sh
+```
+
+tests the NixOS image module with the configurations in
+`e2e/nixos/configurations.nix` (disko is pinned in the script). It checks that
+every configuration under `invalid` fails to evaluate with its assertion, builds
+the `imaged` image of each case, imports it into a server whose
+`[script_variables]` holds an age key, deploys it to a blank 8 GiB disk with two
+typed per-machine secrets and the shared one taken from the variable, boots the
+disk and checks what the system reports: every secret with its owner, mode and
+content and readable by its owner, the root filesystem grown to the disk, the
+firmware, and for disko an active swap partition. `E2E_NIXOS_CASES` picks the
+cases (default `sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi
+disko:uefi`), `E2E_OUT` defaults to `e2e/out/nixos`.
+
+## NixOS images
+
+`nixosModules.image` adds an `imaged` variant to a NixOS configuration's
+images, so the configuration builds into an archive that imports and deploys
+like a captured image:
+
+```sh
+nixos-rebuild build-image --image-variant imaged --flake .#my-host
+# or: nix build .#nixosConfigurations.my-host.config.system.build.images.imaged
+```
+
+```nix
+{
+  imports = [ imaged.nixosModules.image ];
+  imaged.image.secrets.age_key = {
+    path = config.sops.age.keyFile;
+    description = "Key that decrypts this machine's sops secrets";
+  };
+  imaged.image.secrets.app_token = {
+    path = "/var/lib/app/token";
+    owner = "app";
+    group = "app";
+    mode = "0440";
+  };
+}
+```
+
+The disk comes from disko when the configuration has `disko.devices.disk`,
+otherwise from nixpkgs' `make-disk-image` with an ESP (`efi`, the default), an
+ESP and a BIOS boot partition (`hybrid`) or a BIOS boot partition only
+(`legacy+gpt`), set with `imaged.image.partitionTableType`, then an ext4 root;
+without disko the image overrides `fileSystems."/"` and `/boot` with the image's
+labels. Both builders install the system in a VM during the build, which only
+sees the image file. The root partition grows to fill the target disk on first
+boot (`boot.growPartition`, `autoResize`). `imaged-pack` then packs the disk
+inside the build.
+
+The archive carries one post-install script, `imaged-nixos`. It writes every
+secret and installs the bootloader with the system's own
+`system.build.installBootLoader`; it does not run activation. Each attribute of
+`imaged.image.secrets` becomes a required, masked `secret` input of that script
+(`label`, `description`, `perMachine` default true, `required` default true),
+and the deploy writes its value once, verbatim, to `path` with `owner`, `group`
+and `mode` (default `root`, `root`, `0400`); the value never enters the Nix
+store or the archive. A GRUB device that does not exist on the deploying
+machine (such as `/dev/disk/by-id/...` of the build host) is linked to the
+target disk; one that exists and is another disk stops the deploy.
+
+Evaluation fails when imaged cannot deploy the configuration:
+
+- disko with more than one disk, LVM, mdadm, ZFS or bcachefs devices, a table
+  other than GPT, a filesystem other than ext2/3/4, vfat or swap, or a root
+  partition that is not the last one (`size = "100%"`);
+- without disko, other block-device `fileSystems` than `/` and `/boot`;
+- a secret name that is not `[a-z0-9_]+`, a relative path, a path under `/run`,
+  `/tmp`, `/dev`, `/proc`, `/sys`, `/nix/store` or a tmpfs mount, or a path
+  that `environment.etc` also manages;
+- an `owner` or `group` other than `root` that is not declared in `users.users`
+  or `users.groups`, or one at all when `services.userborn` or
+  `systemd.sysusers` creates users at boot: the deploy runs before the first
+  boot, so it can only chown to users the build already created.
