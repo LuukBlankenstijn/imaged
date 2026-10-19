@@ -103,13 +103,17 @@ pack_source_disk() {
 }
 
 start_imaged_server() {
+    cat >"$OUT_DIR/imaged.toml" <<EOF
+data_dir = "$IMAGED_DATA"
+multicast_interface = "br0"
+public_url = "http://$SERVER_IP:8080"
+
+[listen]
+machine = "$SERVER_IP:8080"
+tftp = "$SERVER_IP:69"
+EOF
     start_background imaged-server "$OUT_DIR/imaged-server.log" \
-        "$IMAGED_SERVER" \
-        --bind-address "$SERVER_IP:8080" \
-        --tftp-bind-address "$SERVER_IP:69" \
-        --public-base "$SERVER_IP:8080" \
-        --multicast-interface br0 \
-        --data-dir "$IMAGED_DATA"
+        "$IMAGED_SERVER" --config "$OUT_DIR/imaged.toml"
     wait_until 60 "imaged-server to answer on $IMAGED_URL" imaged_answers
 }
 

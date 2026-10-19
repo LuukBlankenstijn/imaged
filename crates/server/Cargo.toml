@@ -22,6 +22,8 @@ tokio = { workspace = true, features = ["signal", "time"], optional = true }
 tokio-util = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+toml-file-refs = { version = "0.1", optional = true }
 
 [features]
 default = []
@@ -40,6 +42,8 @@ server = [
     "dep:tokio-util",
     "dep:clap",
     "dep:tracing",
+    "dep:serde",
+    "dep:toml-file-refs",
 ]
 web = ["dioxus/web", "imaged-web/web"]
 

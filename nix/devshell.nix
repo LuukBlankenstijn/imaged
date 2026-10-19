@@ -34,12 +34,11 @@ mkShell {
 
   env = {
     DATABASE_URL = "sqlite://imaged.db";
-    MULTICAST_INTERFACE = "br-netboot";
-    PUBLIC_BASE = "192.168.100.1:8080";
   };
 
   shellHook = ''
     mkdir -p assets
     cp -rfL --no-preserve=mode ${ipxeAssets}/. ${kernels}/. ./assets/
+    export IMAGED_CONFIG="$PWD/dev/imaged.toml"
   '';
 }

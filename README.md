@@ -117,15 +117,15 @@ headers and the JSON events sent over the websocket) lives in
 
 Binary and library package that wires `imaged-core`, `imaged-boot`,
 `imaged-web` and the two API crates together behind axum. By default it serves the dashboard and the
-agent API from a single binary; `--web-bind-address` splits the dashboard UI/API
+agent API from a single binary; `listen.dashboard` splits the dashboard UI/API
 and the agent API onto two separate sockets. Styled with Tailwind CSS v4.
 
-`--proxy-bind-address 192.168.100.1:3128` also runs an HTTP proxy (the
+`listen.proxy = "192.168.100.1:3128"` also runs an HTTP proxy (the
 `imaged-proxy` crate) so post-install scripts can reach the internet from a
 network without a router. It tunnels `CONNECT` to ports 443 and 22 (SSH via
 `ProxyCommand`), forwards plain HTTP to port 80 only and refuses private
-targets and its own address. Without `--script-proxy`, scripts get it as
-`http_proxy`: the bind address, or the `--public-base` host when bound to an
+targets and its own address. Without `script_proxy`, scripts get it as
+`http_proxy`: the bind address, or the `public_url` host when bound to an
 unspecified address. Bind it to the netboot interface: anyone who reaches the
 port can use it.
 
@@ -163,12 +163,31 @@ Bundle (production):
 dx bundle --release --platform web --package imaged-server
 ```
 
-Listens on `--bind-address` (the NixOS module defaults to `0.0.0.0:8080`); an
-optional `--web-bind-address` serves the dashboard on a separate socket. The
-database and images live in `--data-dir` (default: the working directory). iPXE
-scripts point machines at `--public-base` (`PUBLIC_BASE`, default
-`localhost:8080`), over HTTPS when `--use-https` is passed or `USE_HTTPS` is
-truthy (anything but empty, `0`, `f`, `false`, `n`, `no` or `off`).
+The binary takes one option, `--config <FILE>` (`IMAGED_CONFIG`); without it
+every setting has its default. Keys ending in `_file` or `_file_contents` are
+read from that file ([toml-file-refs](https://crates.io/crates/toml-file-refs)),
+relative to the config file; unknown keys are an error.
+
+```toml
+log_level = "info"                    # default "info"
+data_dir = "/var/lib/imaged"          # database and images; default "."
+multicast_interface = "eth0"          # default "lo"
+public_url = "http://10.0.0.1:8080"   # what iPXE scripts point machines at; default "http://localhost:8080"
+script_proxy = "http://10.0.0.1:3128" # optional
+
+[listen]
+machine = "0.0.0.0:8080"              # PXE and agent API; default dx's address or localhost:8080
+dashboard = "127.0.0.1:8081"          # optional; the dashboard shares `machine` without it
+tftp = "0.0.0.0:69"                   # optional built-in TFTP server
+proxy = "192.168.100.1:3128"          # optional HTTP proxy for post-install scripts
+
+[script_variables]
+NTP_SERVER = "10.0.0.1"
+SITE_NAME_file = "/etc/imaged/site-name" # every entry is handed to every post-install script
+```
+
+The dev shell sets `IMAGED_CONFIG` to `dev/imaged.toml` in the checkout. The NixOS module writes
+the file from its options.
 
 ### `crates/agent` — `imaged-agent`
 
@@ -313,7 +332,7 @@ the cachix substituter:
 services.imaged.server = {
   enable = true;
   bindAddress = "0.0.0.0:8080";
-  publicBase = "192.168.100.1:8080";
+  publicUrl = "http://192.168.100.1:8080";
   multicastInterface = "br-netboot";
   tftpBindAddress = "192.168.100.1:69";
   proxyBindAddress = "192.168.100.1:3128";
@@ -336,7 +355,7 @@ and `ipxe-arm64.efi` for arm64 UEFI (11). iPXE then chains
 with the matching kernel and initramfs. See `dev/dnsmasq.conf` (run with
 `docker compose -f dev/compose.yaml up`) for a working setup.
 
-`imaged-server --tftp-bind-address 0.0.0.0:69` also serves the iPXE binaries,
+`listen.tftp = "0.0.0.0:69"` also serves the iPXE binaries,
 kernels and initramfs over TFTP, so no separate TFTP server is needed.
 
 ## Post-install scripts
@@ -389,11 +408,11 @@ its shebang or `/bin/sh` without one, with these variables:
 - `IMAGED_INPUT_<NAME>` for each of its inputs that has a value (the name
   uppercased),
 - `IMAGED_MAC`, `IMAGED_IP` and `IMAGED_SERVER` of the agent,
-- `http_proxy`, `https_proxy`, `HTTP_PROXY` and `HTTPS_PROXY` when the server
-  runs with `--script-proxy <url>` (`SCRIPT_PROXY`, `Config::script_proxy`).
-- every entry of `Config::script_variables`, which an embedding program uses to
-  hand scripts values such as credentials; names must be shell identifiers and
-  cannot be one of the variables above.
+- `http_proxy`, `https_proxy`, `HTTP_PROXY` and `HTTPS_PROXY` when
+  `script_proxy` is set (`Config::script_proxy` for embedding programs).
+- every entry of `[script_variables]` in the config file
+  (`Config::script_variables`); names must be shell identifiers and cannot be
+  one of the variables above.
 
 Stdout and stderr go to the agent log and, as the script runs, to the server,
 which keeps the full output and exit code of every run per task host

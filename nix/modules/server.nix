@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   utils,
   ...
 }:
@@ -21,23 +22,21 @@ let
   udpPorts = optional (cfg.tftpBindAddress != null) (portOf cfg.tftpBindAddress);
   bindsPrivilegedPort = any (port: port < 1024) (tcpPorts ++ udpPorts);
 
-  optionalFlag = flag: value: optionals (value != null) [ flag value ];
-  args = [
-    "--data-dir"
-    cfg.dataDir
-    "--bind-address"
-    cfg.bindAddress
-    "--log-level"
-    cfg.logLevel
-    "--multicast-interface"
-    cfg.multicastInterface
-  ]
-  ++ optionalFlag "--web-bind-address" cfg.webBindAddress
-  ++ optionalFlag "--tftp-bind-address" cfg.tftpBindAddress
-  ++ optionalFlag "--public-base" cfg.publicBase
-  ++ optionalFlag "--script-proxy" cfg.scriptProxy
-  ++ optionalFlag "--proxy-bind-address" cfg.proxyBindAddress
-  ++ optional cfg.useHttps "--use-https";
+  configFile = (pkgs.formats.toml { }).generate "imaged.toml" (
+    {
+      log_level = cfg.logLevel;
+      data_dir = cfg.dataDir;
+      multicast_interface = cfg.multicastInterface;
+      listen = {
+        machine = cfg.bindAddress;
+      }
+      // optionalAttrs (cfg.webBindAddress != null) { dashboard = cfg.webBindAddress; }
+      // optionalAttrs (cfg.tftpBindAddress != null) { tftp = cfg.tftpBindAddress; }
+      // optionalAttrs (cfg.proxyBindAddress != null) { proxy = cfg.proxyBindAddress; };
+    }
+    // optionalAttrs (cfg.publicUrl != null) { public_url = cfg.publicUrl; }
+    // optionalAttrs (cfg.scriptProxy != null) { script_proxy = cfg.scriptProxy; }
+  );
 in
 {
   options.services.imaged.server = {
@@ -76,16 +75,11 @@ in
       example = "0.0.0.0:69";
       description = "host:port for the built-in TFTP server serving iPXE, kernels and initramfs; disabled when null.";
     };
-    publicBase = mkOption {
+    publicUrl = mkOption {
       type = types.nullOr types.str;
       default = null;
-      example = "192.168.100.1:8080";
-      description = "host:port that iPXE scripts point booting machines at; the binary's default (localhost:8080) when null.";
-    };
-    useHttps = mkOption {
-      type = types.bool;
-      default = false;
-      description = "Point booting machines at https://publicBase instead of http://, for a TLS-terminating reverse proxy in front.";
+      example = "http://192.168.100.1:8080";
+      description = "URL that iPXE scripts point booting machines at; the binary's default (http://localhost:8080) when null.";
     };
     proxyBindAddress = mkOption {
       type = types.nullOr types.str;
@@ -124,7 +118,11 @@ in
       after = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = utils.escapeSystemdExecArgs ([ (getExe cfg.package) ] ++ args);
+        ExecStart = utils.escapeSystemdExecArgs [
+          (getExe cfg.package)
+          "--config"
+          configFile
+        ];
         WorkingDirectory = cfg.dataDir;
         StateDirectory = "imaged";
         User = "imaged-server";
