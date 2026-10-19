@@ -250,5 +250,16 @@ fn FieldControl(input: ScriptInput, value: String, onchange: EventHandler<String
                 oninput: move |e| onchange.call(e.value()),
             }
         },
+        InputKind::Secret => rsx! {
+            textarea {
+                class: "{FIELD_CLASSES} w-full min-w-32 font-mono",
+                style: "-webkit-text-security: disc",
+                rows: 2,
+                autocomplete: "off",
+                spellcheck: false,
+                value: "{value}",
+                oninput: move |e| onchange.call(e.value()),
+            }
+        },
     }
 }

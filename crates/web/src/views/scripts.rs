@@ -192,7 +192,10 @@ impl From<&ScriptInput> for InputDraft {
 
 impl From<&InputDraft> for ScriptInput {
     fn from(draft: &InputDraft) -> Self {
-        let default_value = draft.default_value.trim();
+        let default_value = match draft.kind {
+            InputKind::Secret => "",
+            InputKind::Text | InputKind::Number | InputKind::Choice => draft.default_value.trim(),
+        };
         let choices = match draft.kind {
             InputKind::Choice => draft
                 .choices
@@ -201,7 +204,7 @@ impl From<&InputDraft> for ScriptInput {
                 .filter(|choice| !choice.is_empty())
                 .map(str::to_string)
                 .collect(),
-            InputKind::Text | InputKind::Number => Vec::new(),
+            InputKind::Text | InputKind::Number | InputKind::Secret => Vec::new(),
         };
         Self {
             name: draft.name.trim().to_string(),
@@ -221,6 +224,7 @@ fn kind_value(kind: InputKind) -> &'static str {
         InputKind::Text => "text",
         InputKind::Number => "number",
         InputKind::Choice => "choice",
+        InputKind::Secret => "secret",
     }
 }
 
@@ -228,6 +232,7 @@ fn parse_kind(value: &str) -> InputKind {
     match value {
         "number" => InputKind::Number,
         "choice" => InputKind::Choice,
+        "secret" => InputKind::Secret,
         _ => InputKind::Text,
     }
 }
@@ -413,12 +418,15 @@ fn InputRow(
                     option { value: "text", selected: draft.kind == InputKind::Text, "text" }
                     option { value: "number", selected: draft.kind == InputKind::Number, "number" }
                     option { value: "choice", selected: draft.kind == InputKind::Choice, "choice" }
+                    option { value: "secret", selected: draft.kind == InputKind::Secret, "secret" }
                 }
             }
             td { class: "px-2 py-1.5",
                 input {
                     class: "{FIELD_CLASSES} w-24 font-mono text-xs",
-                    value: "{draft.default_value}",
+                    disabled: draft.kind == InputKind::Secret,
+                    placeholder: if draft.kind == InputKind::Secret { "none" } else { "" },
+                    value: if draft.kind == InputKind::Secret { "" } else { "{draft.default_value}" },
                     oninput: move |e| inputs.write()[index].default_value = e.value(),
                 }
             }

@@ -346,9 +346,13 @@ digits, `-`, `_`, `.`), a body and a list of declared inputs. An input has a
 name (`[a-z0-9_]+`), a label, an optional description (at most 1000
 characters, shown under the field wherever its value is entered: the
 dashboard's deploy and multicast dialogs and the provisioner), a kind (`text`,
-`number` or `choice` with its choices), whether it is required, an optional
-default and whether its value is given per machine or shared by every machine
-of a deployment. An image keeps an
+`number`, `choice` with its choices, or `secret`), whether it is required, an
+optional default and whether its value is given per machine or shared by every
+machine of a deployment. A `secret` input has no default and no choices; the
+dashboard enters it in a masked multi-line field, and like every input value it
+is stored with the task host and only handed to the agent, never returned by
+`/api/ui/*`. A script that prints it puts it in the stored script output. An
+image keeps an
 ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
 current version; a script that an image still uses cannot be deleted. Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the

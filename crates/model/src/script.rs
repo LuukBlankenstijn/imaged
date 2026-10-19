@@ -14,6 +14,7 @@ pub enum InputKind {
     Text,
     Number,
     Choice,
+    Secret,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +58,7 @@ impl ScriptInput {
             return Err(format!("input `{}` cannot contain NUL bytes", self.name));
         }
         match self.kind {
-            InputKind::Text => Ok(()),
+            InputKind::Text | InputKind::Secret => Ok(()),
             InputKind::Number => match value.trim().parse::<f64>() {
                 Ok(number) if number.is_finite() => Ok(()),
                 _ => Err(format!("input `{}` must be a number", self.name)),
@@ -93,7 +94,7 @@ impl ScriptInput {
                     self.name
                 )));
             }
-            InputKind::Text | InputKind::Number if !self.choices.is_empty() => {
+            InputKind::Text | InputKind::Number | InputKind::Secret if !self.choices.is_empty() => {
                 return Err(AppError::InvalidArgument(format!(
                     "{} input `{}` cannot have choices",
                     self.kind, self.name
@@ -122,6 +123,12 @@ impl ScriptInput {
         {
             return Err(AppError::InvalidArgument(format!(
                 "input `{}` description cannot contain NUL bytes",
+                self.name
+            )));
+        }
+        if self.kind.is_secret() && self.default_value.is_some() {
+            return Err(AppError::InvalidArgument(format!(
+                "secret input `{}` cannot have a default value",
                 self.name
             )));
         }
@@ -283,6 +290,21 @@ mod tests {
         choice.choices = vec!["fast".into(), "safe".into()];
         choice.default_value = Some("slow".into());
         rejected(validate("s", &[choice]));
+    }
+
+    #[test]
+    fn a_secret_has_neither_a_default_nor_choices() {
+        let secret = input("host_key", InputKind::Secret);
+        validate("s", &[secret.clone()]).unwrap();
+        secret.check("-----BEGIN KEY-----\nline\n").unwrap();
+
+        let mut with_default = secret.clone();
+        with_default.default_value = Some("leaked".into());
+        assert!(rejected(validate("s", &[with_default])).contains("cannot have a default"));
+
+        let mut with_choices = secret;
+        with_choices.choices = vec!["a".into()];
+        rejected(validate("s", &[with_choices]));
     }
 
     #[test]
