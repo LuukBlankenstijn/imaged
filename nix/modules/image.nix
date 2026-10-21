@@ -250,25 +250,35 @@ let
         message = "imaged can image ext2/3/4, vfat and swap partitions and partitions without content, not: ${lib.concatMapStringsSep ", " describe unsupported}";
       }
       {
-        assertion = root.content != null && root.content.mountpoint or null == "/";
+        assertion = partitions != [ ] && root.content != null && root.content.mountpoint or null == "/";
         message = "the root partition must be the last partition of disko disk `${disk.name}` (size = \"100%\") so a deployed disk can grow it to fill a larger disk";
       }
     ];
 
-  makeDiskImageAssertions = imageConfig: [
-    {
-      assertion = lib.all (
-        fs: lib.elem fs.mountPoint [ "/" "/boot" ] || !lib.hasPrefix "/dev/" (toString fs.device)
-      ) (lib.attrValues imageConfig.fileSystems);
-      message = "without disko the imaged image has only / and /boot, but fileSystems also mounts ${
-        lib.concatMapStringsSep ", " (fs: fs.mountPoint) (
-          lib.filter (
-            fs: !lib.elem fs.mountPoint [ "/" "/boot" ] && lib.hasPrefix "/dev/" (toString fs.device)
-          ) (lib.attrValues imageConfig.fileSystems)
-        )
-      }; describe the disk with disko instead";
-    }
-  ];
+  makeDiskImageAssertions =
+    imageConfig: efi:
+    let
+      imaged = [ "/" ] ++ lib.optional efi "/boot";
+      onDisk = device: lib.hasPrefix "/dev/" (toString device);
+      extraMounts = lib.filter (fs: !lib.elem fs.mountPoint imaged && onDisk fs.device) (
+        lib.attrValues imageConfig.fileSystems
+      );
+      swaps = lib.filter (swap: onDisk swap.device) imageConfig.swapDevices;
+    in
+    [
+      {
+        assertion = extraMounts == [ ];
+        message = "without disko the imaged image has only ${lib.concatStringsSep " and " imaged} (partitionTableType = \"${cfg.partitionTableType}\"), but fileSystems also mounts ${
+          lib.concatMapStringsSep ", " (fs: "${fs.mountPoint} from ${toString fs.device}") extraMounts
+        }; describe the disk with disko instead";
+      }
+      {
+        assertion = swaps == [ ];
+        message = "without disko the imaged image has no swap partition, but swapDevices uses ${
+          lib.concatMapStringsSep ", " (swap: toString swap.device) swaps
+        }; describe the disk with disko instead or use a swap file";
+      }
+    ];
 in
 {
   options.imaged.image = {
@@ -344,7 +354,7 @@ in
         {
           assertions =
             secretAssertions config
-            ++ (if disko then diskoAssertions config else makeDiskImageAssertions config);
+            ++ (if disko then diskoAssertions config else makeDiskImageAssertions config efi);
           boot.growPartition = lib.mkDefault true;
           fileSystems."/".autoResize = lib.mkDefault true;
           image.extension = "imaged";

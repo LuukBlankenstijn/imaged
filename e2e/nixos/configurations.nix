@@ -195,6 +195,34 @@ in
         };
       })
     ];
+    "has only / (partitionTableType" = host "legacy-boot" [
+      {
+        boot.loader.grub = {
+          enable = true;
+          device = "/dev/disk/by-id/imaged-e2e-disk";
+        };
+        imaged.image.partitionTableType = "legacy+gpt";
+        fileSystems."/boot" = {
+          device = "/dev/disk/by-uuid/1234-ABCD";
+          fsType = "vfat";
+        };
+      }
+    ];
+    "has no swap partition" = host "swap-device" [
+      {
+        boot.loader.systemd-boot.enable = true;
+        swapDevices = [ { device = "/dev/disk/by-uuid/5d1f7a3e-2b4c-4e8f-9a61-0c3b7d2e9f14"; } ];
+      }
+    ];
+    "must be the last partition of disko disk `main`" = host "no-partitions" [
+      (diskoRoot { })
+      {
+        fileSystems."/" = {
+          device = "/dev/disk/by-label/elsewhere";
+          fsType = "ext4";
+        };
+      }
+    ];
     "hold one disk" = host "two-disks" [
       (diskoRoot { root = rootPartition; })
       {

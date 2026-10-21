@@ -520,8 +520,9 @@ Evaluation fails when imaged cannot deploy the configuration:
 
 - disko with more than one disk, LVM, mdadm, ZFS or bcachefs devices, a table
   other than GPT, a filesystem other than ext2/3/4, vfat or swap, or a root
-  partition that is not the last one (`size = "100%"`);
-- without disko, other block-device `fileSystems` than `/` and `/boot`;
+  partition that is not the last one (`size = "100%"`) or no partitions;
+- without disko, block-device `fileSystems` other than `/` and, with an ESP,
+  `/boot`, or block-device `swapDevices` (a swap file is fine);
 - a secret name that is not `[a-z0-9_]+`, a relative path, a path under `/run`,
   `/tmp`, `/dev`, `/proc`, `/sys`, `/nix/store` or a tmpfs mount, or a path
   that `environment.etc` also manages;
