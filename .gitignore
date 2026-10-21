@@ -10,3 +10,4 @@ images
 
 crates/web/assets/tailwind.css
 /e2e/out
+/dev/out

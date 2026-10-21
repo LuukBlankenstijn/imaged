@@ -40,6 +40,22 @@ let
     };
   };
 
+  hardwareTest =
+    { lib, ... }:
+    {
+      boot.kernelParams = lib.mkAfter [ "console=tty0" ];
+      boot.initrd.systemd.emergencyAccess = true;
+      systemd.services.imaged-e2e-report.serviceConfig.TTYPath = lib.mkForce "/dev/tty1";
+      users.users.root.initialPassword = "imaged";
+      networking.hostName = "imaged-hardware";
+      networking.useDHCP = lib.mkForce true;
+      services.openssh = {
+        enable = true;
+        settings.PermitRootLogin = "yes";
+        settings.PasswordAuthentication = true;
+      };
+    };
+
   common =
     {
       config,
@@ -134,6 +150,27 @@ in
         device = "/dev/disk/by-id/imaged-e2e-disk";
       };
       imaged.image.partitionTableType = "legacy+gpt";
+    }
+  ];
+
+  hardware = host "hardware" [
+    hardwareTest
+    {
+      boot.loader.grub = {
+        enable = true;
+        efiSupport = true;
+        efiInstallAsRemovable = true;
+        device = "/dev/vda";
+      };
+      imaged.image.partitionTableType = "hybrid";
+    }
+  ];
+
+  hardware-sdboot = host "hardware-sdboot" [
+    hardwareTest
+    {
+      boot.loader.systemd-boot.enable = true;
+      boot.loader.efi.canTouchEfiVariables = true;
     }
   ];
 

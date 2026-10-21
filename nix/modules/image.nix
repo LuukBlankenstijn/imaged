@@ -51,7 +51,9 @@ let
       };
     };
 
-  scriptName = "imaged-nixos";
+  scriptName =
+    imageConfig:
+    "imaged-nixos-${builtins.substring 0 12 (builtins.baseNameOf imageConfig.system.build.toplevel)}";
 
   scriptInputs = lib.mapAttrsToList (name: secret: {
     inherit name;
@@ -90,7 +92,7 @@ let
       #!${pkgs.runtimeShell}
       set -euo pipefail
       export PATH=${systemPath}/bin:${systemPath}/sbin
-      log() { echo "${scriptName}: $*"; }
+      log() { echo "imaged-nixos: $*"; }
 
       umask 077
       ${lib.concatStrings (lib.mapAttrsToList writeSecret cfg.secrets)}
@@ -118,7 +120,8 @@ let
   packArchive =
     imageConfig: raw:
     let
-      script = pkgs.writeText "${scriptName}.sh" (postInstall imageConfig);
+      name = scriptName imageConfig;
+      script = pkgs.writeText "${name}.sh" (postInstall imageConfig);
       closure = pkgs.closureInfo { rootPaths = [ imageConfig.system.build.toplevel ]; };
     in
     pkgs.runCommand imageConfig.image.fileName
@@ -137,10 +140,10 @@ let
           exit 1
         fi
         mkdir -p $out scripts
-        cp ${script} scripts/${scriptName}.sh
-        cp ${pkgs.writeText "inputs.json" (builtins.toJSON scriptInputs)} scripts/${scriptName}.inputs.json
+        cp ${script} scripts/${name}.sh
+        cp ${pkgs.writeText "inputs.json" (builtins.toJSON scriptInputs)} scripts/${name}.inputs.json
         imaged-pack ${raw} --name ${lib.escapeShellArg cfg.name} \
-          --script scripts/${scriptName}.sh -o $out/${imageConfig.image.fileName}
+          --script scripts/${name}.sh -o $out/${imageConfig.image.fileName}
       '';
 
   volatile = [

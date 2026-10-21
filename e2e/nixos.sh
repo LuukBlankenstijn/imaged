@@ -93,6 +93,9 @@ import_image() {
     wait_until 300 "image ${IMAGE_IDS[$config]} to become ready" image_ready "${IMAGE_IDS[$config]}"
     local kinds
     kinds=$(api_get "/api/ui/images/${IMAGE_IDS[$config]}/scripts" | jq -c '[.[].inputs[] | "\(.name):\(.kind):\(.per_machine)"] | sort')
+    local script
+    script=$(api_get "/api/ui/images/${IMAGE_IDS[$config]}/scripts" | jq -r ".[].name")
+    [[ $script == imaged-nixos-* ]] || fail "image $config runs script $script"
     [[ $kinds == '["age_key:secret:false","app_token:secret:true","nested:secret:true"]' ]] ||
         fail "image $config declares unexpected inputs: $kinds"
     log "imported $config as image ${IMAGE_IDS[$config]} with secret inputs $kinds"
@@ -176,6 +179,13 @@ verify_case() {
     log "$name ($config, $FIRMWARE): secrets written with their owners and modes, root grew to $root bytes$([[ $config == disko ]] && echo ", swap active")"
 }
 
+import_all_images() {
+    local spec
+    for spec in "${CASES[@]}"; do
+        import_image "${spec%%:*}"
+    done
+}
+
 run_case() {
     local index=$1 spec=$2
     local config=${spec%%:*}
@@ -204,6 +214,7 @@ fi
 enter_cable_namespace "$0" "$@"
 run_step network setup_cable_bridge
 run_step server start_server
+run_step import import_all_images
 index=0
 for spec in "${CASES[@]}"; do
     index=$((index + 1))
