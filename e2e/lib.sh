@@ -248,7 +248,7 @@ image_field() {
 }
 
 task_field() {
-    api_get /api/ui/tasks | jq -r --argjson id "$1" ".[] | select(.id == \$id) | $2"
+    api_get "/api/ui/tasks?limit=200" | jq -r --argjson id "$1" ".tasks[] | select(.id == \$id) | $2"
 }
 
 image_ready() {

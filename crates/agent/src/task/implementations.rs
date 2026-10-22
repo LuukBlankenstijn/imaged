@@ -8,14 +8,20 @@ pub use deploy::DeployTask;
 pub use multicast::MulticastTask;
 pub use reboot::RebootTask;
 
+use std::time::Duration;
+
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
+use imaged_disk::Progress;
 
 use crate::agent::Agent;
-use crate::status::{Outcome, PartitionProgress};
+use crate::server::Rejected;
+use crate::status::{Outcome, PartitionProgress, Phase, Step};
 use crate::sys::disk::{BlockDevice, PartitionTarget};
 
 const PARTCLONE_LOG: &str = "/tmp/partclone-log";
+const REPORT_RETRY_START: Duration = Duration::from_secs(1);
+const REPORT_RETRY_CAP: Duration = Duration::from_secs(30);
 
 #[allow(
     async_fn_in_trait,
@@ -26,6 +32,14 @@ pub trait ClientTaskExt: std::fmt::Display {
     fn task_id(&self) -> i64;
 
     fn agent(&self) -> &Agent;
+
+    async fn run(&self) -> anyhow::Result<()> {
+        image_target_disk(self).await
+    }
+
+    async fn target_disk(&self) -> anyhow::Result<BlockDevice> {
+        crate::sys::disk::find_target_disk().await
+    }
 
     async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {
         Ok(())
@@ -53,15 +67,61 @@ pub trait ClientTaskExt: std::fmt::Display {
 
     async fn finalize_error(&self, err: &str) -> anyhow::Result<()> {
         tracing::error!(task=%self, error=%err, "did not finish task successfully");
+        report(self, || {
+            self.agent().server.mark_failed(self.task_id(), err)
+        })
+        .await?;
         self.agent()
             .status
             .task_ended(Outcome::Failed(err.to_string()));
-        self.agent().server.mark_failed(self.task_id(), err).await
+        Ok(())
+    }
+}
+
+async fn image_target_disk(task: &(impl ClientTaskExt + ?Sized)) -> anyhow::Result<()> {
+    let status = &task.agent().status;
+    let disk = task.target_disk().await?;
+
+    status.update_task(|task| task.step = Step::PartitionTable);
+    task.handle_partition_table(&disk.get_device()).await?;
+
+    let disk = task.target_disk().await?;
+
+    let partitions = task.plan_partitions(&disk).await?;
+    let progress = status.partitions(&partitions);
+    for (index, (partition, progress)) in partitions.iter().zip(progress).enumerate() {
+        progress.report(Progress::default());
+        task.handle_partition(partition.clone(), progress).await?;
+        status.update_task(|task| task.partitions[index].phase = Phase::Done);
+    }
+
+    status.update_task(|task| task.step = Step::Finishing);
+    task.after_partitions(&partitions).await
+}
+
+async fn report<Report>(
+    task: &(impl ClientTaskExt + ?Sized),
+    send: impl Fn() -> Report,
+) -> anyhow::Result<()>
+where
+    Report: Future<Output = anyhow::Result<()>>,
+{
+    let mut delay = REPORT_RETRY_START;
+    loop {
+        match send().await {
+            Ok(()) => return Ok(()),
+            Err(e) if Rejected::is_final(&e) => return Err(e),
+            Err(e) => {
+                tracing::warn!(task=%task, error=%format_args!("{e:#}"), retry_in=?delay, "could not report the result, retrying");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(REPORT_RETRY_CAP);
+            }
+        }
     }
 }
 
 async fn report_finished(task: &(impl ClientTaskExt + ?Sized)) -> anyhow::Result<()> {
-    task.agent().server.mark_finished(task.task_id()).await?;
+    report(task, || task.agent().server.mark_finished(task.task_id())).await?;
     task.agent().status.task_ended(Outcome::Done);
     tracing::info!(task=%task, "finished task successfully");
     Ok(())
@@ -77,11 +137,12 @@ async fn image_partitions(
     task_id: i64,
     disk: &BlockDevice,
 ) -> anyhow::Result<Vec<PartitionTarget>> {
-    let partitions = agent.server.partitions(task_id).await?;
-    if partitions.is_empty() {
+    let layout = agent.server.image_layout(task_id).await?;
+    if layout.partitions.is_empty() {
         anyhow::bail!("image for task {task_id} has no partitions to restore");
     }
-    partitions
+    layout
+        .partitions
         .into_iter()
         .map(|p| disk.partition_target(p.partition_number, p.fstype))
         .collect()

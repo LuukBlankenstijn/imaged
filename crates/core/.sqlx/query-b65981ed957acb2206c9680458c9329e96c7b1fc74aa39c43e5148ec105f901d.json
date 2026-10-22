@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 position,\n                 script_name,\n                 output,\n                 exit_code,\n                 started_at as \"started_at: DateTime<Utc>\",\n                 finished_at as \"finished_at: DateTime<Utc>\"\n               FROM script_runs\n               WHERE task_id = ? AND host_id = ?\n               ORDER BY position",
+  "query": "SELECT\n                 position,\n                 script_name,\n                 exit_code,\n                 started_at as \"started_at: DateTime<Utc>\",\n                 finished_at as \"finished_at: DateTime<Utc>\"\n               FROM script_runs\n               WHERE task_id = ? AND host_id = ?\n               ORDER BY position",
   "describe": {
     "columns": [
       {
@@ -14,23 +14,18 @@
         "type_info": "Text"
       },
       {
-        "name": "output",
-        "ordinal": 2,
-        "type_info": "Text"
-      },
-      {
         "name": "exit_code",
-        "ordinal": 3,
+        "ordinal": 2,
         "type_info": "Integer"
       },
       {
         "name": "started_at: DateTime<Utc>",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Text"
       },
       {
         "name": "finished_at: DateTime<Utc>",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Text"
       }
     ],
@@ -40,11 +35,10 @@
     "nullable": [
       false,
       false,
-      false,
       true,
       false,
       true
     ]
   },
-  "hash": "3a84adbd77022ff031e70872df419f96be09cd235c6ddd00614c82dbeb36b971"
+  "hash": "b65981ed957acb2206c9680458c9329e96c7b1fc74aa39c43e5148ec105f901d"
 }

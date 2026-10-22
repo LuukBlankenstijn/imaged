@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 
-use crate::model::{CreateGroupRequest, Group, MulticastRequest, UpdateGroupRequest, UpdateName};
+use crate::model::{
+    CreateGroupRequest, Group, MulticastRequest, Task, UpdateGroupRequest, UpdateName,
+};
 
 #[cfg(feature = "server")]
 use injectable::inject;
@@ -44,9 +46,9 @@ pub async fn delete_group(id: i64) -> Result<()> {
 
 #[post("/api/ui/groups/multicast")]
 #[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
-pub async fn multicast(req: MulticastRequest) -> Result<()> {
+pub async fn multicast(req: MulticastRequest) -> Result<Task> {
     let inputs = crate::hosts::host_inputs(req.image_id, &req.host_ids, req.inputs).await?;
-    task_repo
+    let task = task_repo
         .create_with_inputs(
             TaskType::Multicast,
             req.host_ids,
@@ -55,5 +57,5 @@ pub async fn multicast(req: MulticastRequest) -> Result<()> {
         )
         .await?;
     multicast_mgr.wake();
-    Ok(())
+    Ok(task.into())
 }

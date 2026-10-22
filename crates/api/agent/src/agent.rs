@@ -1,6 +1,6 @@
 use axum::{extract::FromRequestParts, http::request::Parts};
 use imaged_model::{
-    agent::{IP_HEADER, MAC_HEADER},
+    agent::{IP_HEADER, MAC_HEADER, MacAddress},
     error::AppError,
 };
 
@@ -21,13 +21,14 @@ where
                 .headers
                 .get(name)
                 .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
         };
-        let mac =
-            header(MAC_HEADER).ok_or_else(|| AppError::InvalidArgument("missing mac".into()))?;
+        let mac = header(MAC_HEADER)
+            .ok_or_else(|| AppError::InvalidArgument("missing mac".into()))?
+            .parse::<MacAddress>()?
+            .to_string();
         Ok(AgentInfo {
             mac,
-            ip: header(IP_HEADER),
+            ip: header(IP_HEADER).map(str::to_string),
         })
     }
 }

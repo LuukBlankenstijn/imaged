@@ -3,22 +3,15 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use derive_more::Constructor;
-use imaged_model::{
-    ServerEvent, Task,
-    host::{ConnectionChange, HostConnectionEvent},
-};
+use imaged_model::host::{ConnectionChange, HostConnectionEvent};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::domain::task::Task as DomainTask;
-
-#[derive(Constructor)]
-pub struct Registration<T> {
-    pub receiver: mpsc::UnboundedReceiver<T>,
+pub struct Registration {
+    pub receiver: mpsc::Receiver<()>,
     cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
-impl<T> Drop for Registration<T> {
+impl Drop for Registration {
     fn drop(&mut self) {
         if let Some(cleanup) = self.cleanup.take() {
             cleanup();
@@ -56,7 +49,7 @@ struct HostEntry {
     /// Monotonic id identifying this specific connection, used so a stale
     /// connection's cleanup can't tear down a newer registration for the host.
     generation: u64,
-    sender: mpsc::UnboundedSender<ServerEvent>,
+    dispatch: mpsc::Sender<()>,
 }
 
 #[derive(Default)]
@@ -82,17 +75,17 @@ impl Default for HostRegistry {
 }
 
 impl HostRegistry {
-    pub fn register(self: &Arc<Self>, id: i64) -> Registration<ServerEvent> {
+    pub fn register(self: &Arc<Self>, id: i64) -> Registration {
         let mut hosts = self.hosts.write();
         let generation = hosts.next_generation;
         hosts.next_generation += 1;
 
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (dispatch, receiver) = mpsc::channel(1);
         hosts.map.insert(
             id,
             HostEntry {
                 generation,
-                sender: command_tx,
+                dispatch,
             },
         );
         let _ = self.broadcast.send(HostConnectionEvent::new(id, true));
@@ -115,7 +108,10 @@ impl HostRegistry {
             }
         };
 
-        Registration::new(command_rx, Some(Box::new(cleanup)))
+        Registration {
+            receiver,
+            cleanup: Some(Box::new(cleanup)),
+        }
     }
 
     /// Explicitly drop a host's connection because the host told us it is about
@@ -136,18 +132,10 @@ impl HostRegistry {
         }
     }
 
-    pub fn cancel_task(&self, host_id: i64, task_id: i64) {
+    pub fn dispatch(&self, host_id: i64) {
         let hosts = self.hosts.read();
         if let Some(entry) = hosts.map.get(&host_id) {
-            let _ = entry.sender.send(task_id.into());
-        }
-    }
-
-    pub fn send_task(&self, host_id: i64, task: &DomainTask) {
-        let hosts = self.hosts.read();
-        if let Some(entry) = hosts.map.get(&host_id) {
-            let msg = Task::new(task.id, task.task_type.into(), task.image_id);
-            let _ = entry.sender.send(msg.into());
+            let _ = entry.dispatch.try_send(());
         }
     }
 
@@ -168,13 +156,11 @@ impl HostRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectionFeed, HostRegistry};
-    use crate::domain::task::{Task as DomainTask, TaskType};
-    use chrono::Utc;
-    use imaged_model::ServerEvent;
+    use super::{ConnectionFeed, HostRegistry, Registration};
     use imaged_model::host::{ConnectionChange, HostConnectionEvent};
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     async fn watch(registry: &Arc<HostRegistry>, connected: &[i64]) -> ConnectionFeed {
         let mut feed = registry.watch();
@@ -200,20 +186,12 @@ mod tests {
         assert!(next.is_err(), "unexpected change: {:?}", next.unwrap());
     }
 
-    fn domain_task(id: i64, task_type: TaskType, image_id: Option<i64>) -> DomainTask {
-        DomainTask {
-            id,
-            task_type,
-            hosts: Vec::new(),
-            image_id,
-            image_name: None,
-            image_deleted: false,
-            created_at: Utc::now(),
-        }
+    fn pending(registration: &mut Registration) -> Result<(), TryRecvError> {
+        registration.receiver.try_recv()
     }
 
     #[tokio::test]
-    async fn register_delivers_tasks_lists_the_host_and_broadcasts_a_connect_event() {
+    async fn register_lists_the_host_broadcasts_a_connect_event_and_receives_dispatches() {
         let registry = Arc::new(HostRegistry::default());
         let mut feed = watch(&registry, &[]).await;
 
@@ -225,15 +203,35 @@ mod tests {
 
         assert_eq!(registry.connected_hosts(), vec![1]);
 
-        registry.send_task(1, &domain_task(7, TaskType::Deploy, Some(3)));
-        match reg.receiver.recv().await.unwrap() {
-            ServerEvent::Task(t) => {
-                assert_eq!(t.id, 7);
-                assert_eq!(t.task_type, imaged_model::TaskType::Deploy);
-                assert_eq!(t.image_id, Some(3));
-            }
-            other => panic!("expected a task event, got {other:?}"),
+        assert_eq!(pending(&mut reg), Err(TryRecvError::Empty));
+        registry.dispatch(1);
+        assert_eq!(pending(&mut reg), Ok(()));
+        assert_eq!(pending(&mut reg), Err(TryRecvError::Empty));
+    }
+
+    #[tokio::test]
+    async fn dispatches_that_arrive_before_the_connection_wakes_coalesce_into_one() {
+        let registry = Arc::new(HostRegistry::default());
+        let mut reg = registry.register(1);
+
+        for _ in 0..5 {
+            registry.dispatch(1);
         }
+
+        assert_eq!(pending(&mut reg), Ok(()));
+        assert_eq!(pending(&mut reg), Err(TryRecvError::Empty));
+    }
+
+    #[tokio::test]
+    async fn a_dispatch_only_reaches_the_host_it_names() {
+        let registry = Arc::new(HostRegistry::default());
+        let mut one = registry.register(1);
+        let mut two = registry.register(2);
+
+        registry.dispatch(2);
+
+        assert_eq!(pending(&mut one), Err(TryRecvError::Empty));
+        assert_eq!(pending(&mut two), Ok(()));
     }
 
     #[tokio::test]
@@ -254,11 +252,8 @@ mod tests {
 
         assert!(first.receiver.recv().await.is_none());
 
-        registry.send_task(1, &domain_task(9, TaskType::Capture, None));
-        match second.receiver.recv().await.unwrap() {
-            ServerEvent::Task(t) => assert_eq!(t.id, 9),
-            other => panic!("expected a task event on the new receiver, got {other:?}"),
-        }
+        registry.dispatch(1);
+        assert_eq!(pending(&mut second), Ok(()));
         assert_quiet(&mut feed).await;
     }
 
@@ -273,11 +268,8 @@ mod tests {
 
         assert_eq!(registry.connected_hosts(), vec![1]);
 
-        registry.send_task(1, &domain_task(7, TaskType::Deploy, Some(3)));
-        match second.receiver.recv().await.unwrap() {
-            ServerEvent::Task(t) => assert_eq!(t.id, 7),
-            other => panic!("expected a task event on the newer receiver, got {other:?}"),
-        }
+        registry.dispatch(1);
+        assert_eq!(pending(&mut second), Ok(()));
     }
 
     #[tokio::test]
@@ -285,7 +277,7 @@ mod tests {
         let registry = Arc::new(HostRegistry::default());
         let mut feed = watch(&registry, &[]).await;
 
-        let _reg = registry.register(2);
+        let mut reg = registry.register(2);
         assert!(change(&mut feed).await.connected);
 
         registry.deregister(2);
@@ -293,6 +285,7 @@ mod tests {
         assert_eq!(event.id, 2);
         assert!(!event.connected);
         assert!(registry.connected_hosts().is_empty());
+        assert!(reg.receiver.recv().await.is_none());
 
         registry.deregister(999);
         assert_quiet(&mut feed).await;
@@ -325,33 +318,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_and_cancel_for_an_absent_host_are_silent_noops() {
+    async fn a_dispatch_for_an_absent_host_is_a_silent_noop() {
         let registry = Arc::new(HostRegistry::default());
-        registry.send_task(999, &domain_task(1, TaskType::Deploy, None));
-        registry.cancel_task(999, 1);
+        registry.dispatch(999);
         assert!(registry.connected_hosts().is_empty());
-    }
-
-    #[tokio::test]
-    async fn cancel_and_send_deliver_the_expected_events_to_a_registered_host() {
-        let registry = Arc::new(HostRegistry::default());
-        let mut reg = registry.register(5);
-
-        registry.cancel_task(5, 42);
-        match reg.receiver.recv().await.unwrap() {
-            ServerEvent::Cancel(id) => assert_eq!(id, 42),
-            other => panic!("expected a cancel event, got {other:?}"),
-        }
-
-        registry.send_task(5, &domain_task(9, TaskType::Capture, Some(11)));
-        match reg.receiver.recv().await.unwrap() {
-            ServerEvent::Task(t) => {
-                assert_eq!(t.id, 9);
-                assert_eq!(t.task_type, imaged_model::TaskType::Capture);
-                assert_eq!(t.image_id, Some(11));
-            }
-            other => panic!("expected a task event, got {other:?}"),
-        }
     }
 
     #[tokio::test]
@@ -380,8 +350,7 @@ mod tests {
                 handles.push(tokio::spawn(async move {
                     for _ in 0..50 {
                         let reg = registry.register(host);
-                        registry.send_task(host, &domain_task(1, TaskType::Reboot, None));
-                        registry.cancel_task(host, 1);
+                        registry.dispatch(host);
                         registry.deregister(host);
                         drop(reg);
                     }
@@ -394,7 +363,7 @@ mod tests {
         assert!(registry.connected_hosts().is_empty());
 
         let mut reg = registry.register(0);
-        registry.send_task(0, &domain_task(2, TaskType::Reboot, None));
+        registry.dispatch(0);
         assert!(reg.receiver.recv().await.is_some());
     }
 

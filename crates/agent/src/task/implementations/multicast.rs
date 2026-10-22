@@ -28,13 +28,19 @@ impl ClientTaskExt for MulticastTask {
     }
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
+        let layout = self.agent.server.image_layout(self.task_id).await?;
         let mut buffer: Vec<u8> = Vec::new();
         multicast_stream(&self.agent.status, self.task_id, 0)?
             .read_to_end(&mut buffer)
             .await
             .map_err(|e| anyhow::anyhow!("failed to receive the partition table: {e}"))?;
         tokio::fs::write(PARTTABLE_TMP, buffer).await?;
-        restore_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
+        restore_partition_table(
+            Path::new(device),
+            Path::new(PARTTABLE_TMP),
+            layout.sector_size,
+        )
+        .await?;
 
         let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
         Ok(())

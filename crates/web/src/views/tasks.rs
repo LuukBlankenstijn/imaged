@@ -1,31 +1,72 @@
 use dioxus::prelude::*;
 
-use crate::api::tasks::{cancel_task, get_all_tasks, get_script_runs, kick_host, retry_task};
+use crate::api::hosts::get_all_hosts;
+use crate::api::tasks::{cancel_task, get_script_runs, kick_host, list_tasks, retry_task};
 use crate::components::hooks::{use_poll, use_poll_while};
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
 use crate::components::progress::use_task_progress;
 use crate::components::toast::toast_error;
 use crate::components::ui::{
-    Badge, Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, TaskStateBadge,
-    TaskTypeBadge, Tone,
+    Badge, Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner,
+    TaskStateBadge, TaskTypeBadge, Tone,
 };
 use crate::format::{format_bytes, format_duration, format_relative};
 use crate::model::{
     HostProgress, KickRequest, MulticastProgress, ReceiverProgress, ScriptRun, Stage, Task,
-    TaskHost, TaskProgress, TaskState, TaskType, TransferPhase,
+    TaskHost, TaskProgress, TaskQuery, TaskState, TaskStatus, TaskType, TransferPhase,
 };
+
+const PAGE_SIZE: u32 = 50;
 
 fn select_class() -> &'static str {
     "rounded-md border border-ink-600 bg-ink-900 px-3 py-1.5 text-sm text-fog-200 focus:outline-none focus-visible:glow-amber"
 }
 
+pub(crate) fn parse_status(value: &str) -> Option<TaskStatus> {
+    match value {
+        "active" => Some(TaskStatus::Active),
+        "done" => Some(TaskStatus::Done),
+        "failed" => Some(TaskStatus::Failed),
+        "cancelled" => Some(TaskStatus::Cancelled),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_kind(value: &str) -> Option<TaskType> {
+    match value {
+        "capture" => Some(TaskType::Capture),
+        "deploy" => Some(TaskType::Deploy),
+        "multicast" => Some(TaskType::Multicast),
+        "reboot" => Some(TaskType::Reboot),
+        _ => None,
+    }
+}
+
 #[component]
 pub fn Tasks() -> Element {
-    let mut tasks = use_poll(1500, || async move { get_all_tasks().await });
-    let mut status = use_signal(|| "active".to_string());
-    let mut kind = use_signal(|| "all".to_string());
-    let mut host = use_signal(String::new);
+    let mut status = use_signal(|| Some(TaskStatus::Active));
+    let mut kind = use_signal(|| None::<TaskType>);
+    let mut host = use_signal(|| None::<i64>);
+    let mut cursors = use_signal(Vec::<i64>::new);
+    let hosts = use_resource(|| async move { get_all_hosts().await });
+    let mut tasks = use_poll(1500, move || {
+        let query = TaskQuery {
+            status: status(),
+            task_type: kind(),
+            host_id: host(),
+            before: cursors.read().last().copied(),
+            limit: Some(PAGE_SIZE),
+        };
+        async move { list_tasks(query).await }
+    });
+    let mut refilter = move || {
+        cursors.write().clear();
+        tasks.reload();
+    };
+    let polled = tasks.read();
+    let next_cursor = polled.value.as_ref().and_then(|page| page.next_cursor);
+    let on_first_page = cursors.read().is_empty();
 
     rsx! {
         PageHeader { title: "Tasks", subtitle: "Capture, deploy, multicast and reboot activity" }
@@ -33,98 +74,114 @@ pub fn Tasks() -> Element {
             div { class: "flex flex-wrap items-center gap-2",
                 select {
                     class: select_class(),
-                    value: "{status}",
-                    onchange: move |e| status.set(e.value()),
-                    option { value: "active", "Active" }
-                    option { value: "all", "All" }
-                    option { value: "done", "Done" }
-                    option { value: "failed", "Failed" }
-                    option { value: "cancelled", "Cancelled" }
+                    aria_label: "Status",
+                    onchange: move |e| {
+                        status.set(parse_status(&e.value()));
+                        refilter();
+                    },
+                    option { value: "active", selected: status() == Some(TaskStatus::Active), "Active" }
+                    option { value: "all", selected: status().is_none(), "All" }
+                    option { value: "done", selected: status() == Some(TaskStatus::Done), "Done" }
+                    option { value: "failed", selected: status() == Some(TaskStatus::Failed), "Failed or partial" }
+                    option { value: "cancelled", selected: status() == Some(TaskStatus::Cancelled), "Cancelled" }
                 }
                 select {
                     class: select_class(),
-                    value: "{kind}",
-                    onchange: move |e| kind.set(e.value()),
-                    option { value: "all", "All types" }
-                    option { value: "capture", "Capture" }
-                    option { value: "deploy", "Deploy" }
-                    option { value: "multicast", "Multicast" }
-                    option { value: "reboot", "Reboot" }
+                    aria_label: "Type",
+                    onchange: move |e| {
+                        kind.set(parse_kind(&e.value()));
+                        refilter();
+                    },
+                    option { value: "all", selected: kind().is_none(), "All types" }
+                    option { value: "capture", selected: kind() == Some(TaskType::Capture), "Capture" }
+                    option { value: "deploy", selected: kind() == Some(TaskType::Deploy), "Deploy" }
+                    option { value: "multicast", selected: kind() == Some(TaskType::Multicast), "Multicast" }
+                    option { value: "reboot", selected: kind() == Some(TaskType::Reboot), "Reboot" }
                 }
-                input {
-                    class: "{select_class()} w-40",
-                    r#type: "text",
-                    placeholder: "Host id",
-                    value: "{host}",
-                    oninput: move |e| host.set(e.value()),
-                }
-            }
-        }
-        {
-            match &*tasks.read() {
-                Some(Ok(list)) => {
-                    let host_id = host().trim().parse::<i64>().ok();
-                    let sf = status();
-                    let kf = kind();
-                    let mut items: Vec<Task> = list
-                        .iter()
-                        .filter(|t| status_matches(&sf, t.state))
-                        .filter(|t| kind_matches(&kf, t.r#type))
-                        .filter(|t| host_id.is_none_or(|id| t.hosts.iter().any(|h| h.host_id == id)))
-                        .cloned()
-                        .collect();
-                    items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
-                    if items.is_empty() {
-                        rsx! {
-                            Card { EmptyState { title: "No matching tasks", hint: "Adjust the filters above." } }
-                        }
-                    } else {
-                        rsx! {
-                            div { class: "flex flex-col gap-2",
-                                for (i , t) in items.iter().enumerate() {
-                                    TaskRow {
-                                        key: "{t.id}",
-                                        task: t.clone(),
-                                        index: i,
-                                        on_changed: move |_| tasks.restart(),
-                                    }
-                                }
+                select {
+                    class: "{select_class()} min-w-40",
+                    aria_label: "Host",
+                    onchange: move |e| {
+                        host.set(e.value().parse::<i64>().ok());
+                        refilter();
+                    },
+                    option { value: "", selected: host().is_none(), "All hosts" }
+                    if let Some(Ok(list)) = &*hosts.read() {
+                        for h in list.iter() {
+                            option {
+                                key: "{h.id}",
+                                value: "{h.id}",
+                                selected: host() == Some(h.id),
+                                "{h.name}"
                             }
                         }
                     }
                 }
-                Some(Err(e)) => rsx! {
-                    Card { EmptyState { title: "Failed to load tasks", hint: e.to_string() } }
+            }
+        }
+        if let (Some(_), Some(error)) = (&polled.value, &polled.error) {
+            ErrorBanner { message: format!("Could not refresh tasks, showing the last loaded list: {error}") }
+        }
+        {
+            match &polled.value {
+                Some(page) if page.tasks.is_empty() => rsx! {
+                    Card { EmptyState { title: "No matching tasks", hint: "Adjust the filters above." } }
                 },
-                None => rsx! {
-                    div { class: "flex justify-center py-16", Spinner {} }
+                Some(page) => rsx! {
+                    div { class: "flex flex-col gap-2",
+                        for (i , t) in page.tasks.iter().enumerate() {
+                            TaskRow {
+                                key: "{t.id}",
+                                task: t.clone(),
+                                index: i,
+                                on_changed: move |_| tasks.restart(),
+                            }
+                        }
+                    }
                 },
+                None => match &polled.error {
+                    Some(error) => rsx! {
+                        Card { EmptyState { title: "Failed to load tasks", hint: error.clone() } }
+                    },
+                    None => rsx! {
+                        div { class: "flex justify-center py-16", Spinner {} }
+                    },
+                },
+            }
+        }
+        if !on_first_page || next_cursor.is_some() {
+            div { class: "mt-4 flex justify-end gap-2",
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    disabled: on_first_page,
+                    onclick: move |_| {
+                        cursors.write().pop();
+                        tasks.reload();
+                    },
+                    "Newer"
+                }
+                Button {
+                    variant: ButtonVariant::Ghost,
+                    disabled: next_cursor.is_none(),
+                    onclick: move |_| {
+                        if let Some(cursor) = next_cursor {
+                            cursors.write().push(cursor);
+                            tasks.reload();
+                        }
+                    },
+                    "Older"
+                }
             }
         }
     }
 }
 
-fn status_matches(filter: &str, state: TaskState) -> bool {
-    match filter {
-        "active" => matches!(
-            state,
-            TaskState::Pending | TaskState::Running | TaskState::Partial
-        ),
-        "done" => state == TaskState::Done,
-        "failed" => state == TaskState::Failed,
-        "cancelled" => state == TaskState::Cancelled,
-        _ => true,
-    }
-}
-
-fn kind_matches(filter: &str, kind: TaskType) -> bool {
-    match filter {
-        "capture" => kind == TaskType::Capture,
-        "deploy" => kind == TaskType::Deploy,
-        "multicast" => kind == TaskType::Multicast,
-        "reboot" => kind == TaskType::Reboot,
-        _ => true,
-    }
+pub(crate) fn reimaged_hosts(task: &Task) -> Vec<String> {
+    task.hosts
+        .iter()
+        .filter(|h| matches!(h.state, TaskState::Failed | TaskState::Cancelled))
+        .map(|h| h.host_name.clone())
+        .collect()
 }
 
 #[component]
@@ -132,7 +189,8 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
     let task_id = task.id;
     let mut expanded = use_signal(|| false);
     let mut cancel_open = use_signal(|| false);
-    let mut kick_target = use_signal(|| None::<i64>);
+    let mut retry_open = use_signal(|| false);
+    let mut kick_target = use_signal(|| None::<TaskHost>);
     let delay = index * 35;
 
     let can_cancel = matches!(task.state, TaskState::Pending | TaskState::Running);
@@ -146,6 +204,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         TaskState::Cancelled | TaskState::Failed | TaskState::Partial
     );
     let restores_disk = matches!(task.r#type, TaskType::Deploy | TaskType::Multicast);
+    let reimaged = reimaged_hosts(&task).join(", ");
 
     let image_label = task
         .image_name
@@ -180,6 +239,15 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         });
     };
 
+    let do_retry = move || {
+        spawn(async move {
+            match retry_task(task_id).await {
+                Ok(_) => on_changed.call(()),
+                Err(err) => toast_error("Retry failed", err.to_string()),
+            }
+        });
+    };
+
     let mut do_kick = move |host_id: i64| {
         kick_target.set(None);
         spawn(async move {
@@ -194,22 +262,26 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         Card {
             class: "rise overflow-hidden",
             div {
-                class: "flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-ink-800/40",
+                class: "flex items-center gap-3 px-4 py-3 hover:bg-ink-800/40",
                 style: "--d: {delay}ms",
-                onclick: move |_| expanded.toggle(),
-                Icon { name: "chevron", class: if expanded() { "w-4 h-4 rotate-180 transition-transform text-fog-500" } else { "w-4 h-4 transition-transform text-fog-500" } }
-                TaskTypeBadge { r#type: task.r#type }
-                TaskStateBadge { state: task.state }
-                div { class: "min-w-0 flex-1 truncate text-sm text-fog-300",
-                    span { class: "font-mono text-xs text-fog-500", "#{task.id} " }
-                    span { "{image_label}" }
-                    if task.image_deleted {
-                        span { class: "ml-2 text-xs text-bad", "(image deleted)" }
+                button {
+                    class: "flex min-w-0 flex-1 items-center gap-3 text-left focus:outline-none focus-visible:glow-amber",
+                    aria_expanded: expanded().to_string(),
+                    onclick: move |_| expanded.toggle(),
+                    Icon { name: "chevron", class: if expanded() { "w-4 h-4 rotate-180 transition-transform text-fog-500" } else { "w-4 h-4 transition-transform text-fog-500" } }
+                    TaskTypeBadge { r#type: task.r#type }
+                    TaskStateBadge { state: task.state }
+                    div { class: "min-w-0 flex-1 truncate text-sm text-fog-300",
+                        span { class: "font-mono text-xs text-fog-500", "#{task.id} " }
+                        span { "{image_label}" }
+                        if task.image_deleted {
+                            span { class: "ml-2 text-xs text-bad", "(image deleted)" }
+                        }
                     }
+                    span { class: "font-mono text-xs text-fog-500", "{host_count} host(s)" }
+                    span { class: "font-mono text-xs text-fog-500", "{format_relative(task.created_at)}" }
                 }
-                span { class: "font-mono text-xs text-fog-500", "{host_count} host(s)" }
-                span { class: "font-mono text-xs text-fog-500", "{format_relative(task.created_at)}" }
-                div { class: "flex items-center gap-1.5", onclick: move |e: MouseEvent| e.stop_propagation(),
+                div { class: "flex items-center gap-1.5",
                     if can_cancel {
                         Button {
                             variant: ButtonVariant::Danger,
@@ -228,12 +300,11 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                             variant: ButtonVariant::Ghost,
                             disabled: !can_retry,
                             onclick: move |_| {
-                                spawn(async move {
-                                    match retry_task(task_id).await {
-                                        Ok(_) => on_changed.call(()),
-                                        Err(err) => toast_error("Retry failed", err.to_string()),
-                                    }
-                                });
+                                if restores_disk {
+                                    retry_open.set(true);
+                                } else {
+                                    do_retry();
+                                }
                             },
                             "Retry"
                         }
@@ -254,7 +325,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                                 progress: reported.clone(),
                                 receiver: receiver.clone(),
                                 kickable: receiving && h.state == TaskState::Running,
-                                on_kick: move |host_id| kick_target.set(Some(host_id)),
+                                on_kick: move |host: TaskHost| kick_target.set(Some(host)),
                                 has_scripts: restores_disk,
                             }
                         }
@@ -274,14 +345,29 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                 oncancel: move |_| cancel_open.set(false),
             }
             ConfirmDialog {
+                open: retry_open(),
+                title: "Retry task",
+                message: format!("Retrying erases the disks of {reimaged} again and restores {image_label} onto them. Continue?"),
+                confirm_label: "Erase and retry",
+                danger: true,
+                onconfirm: move |_| {
+                    retry_open.set(false);
+                    do_retry();
+                },
+                oncancel: move |_| retry_open.set(false),
+            }
+            ConfirmDialog {
                 open: kick_target().is_some(),
                 title: "Kick host",
-                message: "Kicking stops the multicast write on this host and marks it failed. Continue?",
+                message: format!(
+                    "Kicking stops the multicast write on {} and marks it failed. Continue?",
+                    kick_target().map(|h| h.host_name).unwrap_or_default()
+                ),
                 confirm_label: "Kick",
                 danger: true,
                 onconfirm: move |_| {
-                    if let Some(host_id) = kick_target() {
-                        do_kick(host_id);
+                    if let Some(host) = kick_target() {
+                        do_kick(host.host_id);
                     }
                 },
                 oncancel: move |_| kick_target.set(None),
@@ -297,18 +383,20 @@ fn TaskHostRow(
     progress: Option<HostProgress>,
     receiver: Option<ReceiverProgress>,
     kickable: bool,
-    on_kick: EventHandler<i64>,
+    on_kick: EventHandler<TaskHost>,
     has_scripts: bool,
 ) -> Element {
     let mut scripts_open = use_signal(|| false);
     let host_id = host.host_id;
     let running = matches!(host.state, TaskState::Pending | TaskState::Running);
+    let kicked = host.clone();
 
     rsx! {
         div {
             div { class: "flex items-center gap-3 text-sm",
                 div { class: "flex min-w-0 flex-1 flex-wrap items-center gap-3",
-                    span { class: "font-mono text-xs text-fog-500", "host {host_id}" }
+                    span { class: "text-fog-100", "{host.host_name}" }
+                    span { class: "font-mono text-xs text-fog-500", "{host.mac_address}" }
                     TaskStateBadge { state: host.state }
                     if let Some(started) = host.started_at {
                         span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
@@ -325,7 +413,8 @@ fn TaskHostRow(
                         Button {
                             variant: ButtonVariant::Danger,
                             class: "px-2 py-1 text-xs",
-                            onclick: move |_| on_kick.call(host_id),
+                            label: "Kick {host.host_name} from the multicast",
+                            onclick: move |_| on_kick.call(kicked.clone()),
                             "Kick"
                         }
                     }
@@ -333,6 +422,8 @@ fn TaskHostRow(
                         Button {
                             variant: if scripts_open() { ButtonVariant::Primary } else { ButtonVariant::Subtle },
                             class: "px-2 py-1 text-xs",
+                            label: "Script output of {host.host_name}",
+                            expanded: scripts_open(),
                             onclick: move |_| scripts_open.toggle(),
                             Icon { name: "script", class: "w-3.5 h-3.5" }
                             "Script output"
@@ -364,24 +455,26 @@ fn ScriptRuns(task_id: i64, host_id: i64, running: ReadSignal<bool>) -> Element 
         move || *running.read(),
         move || async move { get_script_runs(task_id, host_id).await },
     );
+    let polled = runs.read();
 
     rsx! {
         div { class: "mt-2 mb-1 flex flex-col gap-2 border-l-2 border-line pl-3",
-            match &*runs.read() {
-                Some(Ok(list)) if list.is_empty() => rsx! {
+            if let Some(error) = &polled.error {
+                p { class: "text-xs text-bad", "Failed to load script output: {error}" }
+            }
+            match &polled.value {
+                Some(list) if list.is_empty() => rsx! {
                     p { class: "text-xs text-fog-600", "No post-install scripts have run on this host." }
                 },
-                Some(Ok(list)) => rsx! {
+                Some(list) => rsx! {
                     for run in list.iter() {
                         ScriptRunView { key: "{run.position}", run: run.clone() }
                     }
                 },
-                Some(Err(e)) => rsx! {
-                    p { class: "text-xs text-bad", "Failed to load script output: {e}" }
-                },
-                None => rsx! {
+                None if polled.error.is_none() => rsx! {
                     Spinner { class: "w-4 h-4" }
                 },
+                None => rsx! {},
             }
         }
     }
@@ -585,6 +678,8 @@ mod tests {
     fn task_host(host_id: i64, state: TaskState) -> TaskHost {
         TaskHost {
             host_id,
+            host_name: format!("lab-{host_id}"),
+            mac_address: format!("aa:bb:cc:dd:ee:{host_id:02x}"),
             state,
             error: None,
             started_at: None,
@@ -688,5 +783,25 @@ mod tests {
         assert!(joined.contains("holding up the transfer"), "{joined}");
         assert!(missing.contains("not joined"), "{missing}");
         assert!(!missing.contains("holding up"), "{missing}");
+    }
+
+    #[test]
+    fn retrying_names_only_the_hosts_whose_disks_are_erased_again() {
+        let task = Task {
+            id: 3,
+            r#type: TaskType::Multicast,
+            hosts: vec![
+                task_host(1, TaskState::Done),
+                task_host(2, TaskState::Failed),
+                task_host(3, TaskState::Cancelled),
+            ],
+            image_id: Some(9),
+            state: TaskState::Partial,
+            created_at: 0,
+            image_name: Some("golden".to_string()),
+            image_deleted: false,
+        };
+
+        assert_eq!(reimaged_hosts(&task), ["lab-2", "lab-3"]);
     }
 }

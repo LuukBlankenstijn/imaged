@@ -116,12 +116,14 @@ fn ScriptRow(
                     Button {
                         variant: ButtonVariant::Ghost,
                         class: "px-2",
+                        label: "Edit {name}",
                         onclick: move |_| onedit.call(script.clone()),
                         Icon { name: "edit", class: "w-4 h-4" }
                     }
                     Button {
                         variant: ButtonVariant::Danger,
                         class: "px-2",
+                        label: "Delete {name}",
                         onclick: move |_| delete_open.set(true),
                         Icon { name: "trash", class: "w-4 h-4" }
                     }
@@ -185,7 +187,7 @@ impl From<&ScriptInput> for InputDraft {
             required: input.required,
             default_value: input.default_value.clone().unwrap_or_default(),
             per_machine: input.per_machine,
-            choices: input.choices.join(", "),
+            choices: input.choices.join("\n"),
         }
     }
 }
@@ -194,13 +196,12 @@ impl From<&InputDraft> for ScriptInput {
     fn from(draft: &InputDraft) -> Self {
         let default_value = match draft.kind {
             InputKind::Secret => "",
-            InputKind::Text | InputKind::Number | InputKind::Choice => draft.default_value.trim(),
+            InputKind::Text | InputKind::Number | InputKind::Choice => &draft.default_value,
         };
         let choices = match draft.kind {
             InputKind::Choice => draft
                 .choices
-                .split(',')
-                .map(str::trim)
+                .lines()
                 .filter(|choice| !choice.is_empty())
                 .map(str::to_string)
                 .collect(),
@@ -208,7 +209,7 @@ impl From<&InputDraft> for ScriptInput {
         };
         Self {
             name: draft.name.trim().to_string(),
-            label: draft.label.trim().to_string(),
+            label: draft.label.clone(),
             description: Some(draft.description.clone()),
             kind: draft.kind,
             required: draft.required,
@@ -265,10 +266,13 @@ fn ScriptEditor(
         Modal { open: true, wide: true, dismissible: false, onclose: move |_| onclose.call(()), title,
             div { class: "flex flex-col gap-4",
                 div {
-                    label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                    label {
+                        class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        r#for: "script-name",
                         "Name"
                     }
                     input {
+                        id: "script-name",
                         class: "{FIELD_CLASSES} w-full max-w-sm font-mono",
                         placeholder: "set-hostname",
                         maxlength: 64,
@@ -277,10 +281,13 @@ fn ScriptEditor(
                     }
                 }
                 div {
-                    label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                    label {
+                        class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        r#for: "script-body",
                         "Body"
                     }
                     textarea {
+                        id: "script-body",
                         class: "{FIELD_CLASSES} block w-full font-mono text-xs leading-relaxed",
                         rows: 14,
                         spellcheck: false,
@@ -388,6 +395,7 @@ fn InputRow(
                 input {
                     class: "{FIELD_CLASSES} w-32 font-mono text-xs",
                     placeholder: "hostname",
+                    aria_label: "Input name",
                     value: "{draft.name}",
                     oninput: move |e| inputs.write()[index].name = e.value(),
                 }
@@ -397,6 +405,7 @@ fn InputRow(
                     input {
                         class: "{FIELD_CLASSES} w-48 text-xs",
                         placeholder: "{draft.name}",
+                        aria_label: "Label",
                         value: "{draft.label}",
                         oninput: move |e| inputs.write()[index].label = e.value(),
                     }
@@ -405,6 +414,7 @@ fn InputRow(
                         rows: 2,
                         maxlength: 1000,
                         placeholder: "Description (optional)",
+                        aria_label: "Description",
                         value: "{draft.description}",
                         oninput: move |e| inputs.write()[index].description = e.value(),
                     }
@@ -413,6 +423,7 @@ fn InputRow(
             td { class: "px-2 py-1.5",
                 select {
                     class: "{FIELD_CLASSES} text-xs",
+                    aria_label: "Kind",
                     value: kind_value(draft.kind),
                     onchange: move |e| inputs.write()[index].kind = parse_kind(&e.value()),
                     option { value: "text", selected: draft.kind == InputKind::Text, "text" }
@@ -424,6 +435,7 @@ fn InputRow(
             td { class: "px-2 py-1.5",
                 input {
                     class: "{FIELD_CLASSES} w-24 font-mono text-xs",
+                    aria_label: "Default value",
                     disabled: draft.kind == InputKind::Secret,
                     placeholder: if draft.kind == InputKind::Secret { "none" } else { "" },
                     value: if draft.kind == InputKind::Secret { "" } else { "{draft.default_value}" },
@@ -432,9 +444,11 @@ fn InputRow(
             }
             td { class: "px-2 py-1.5",
                 if is_choice {
-                    input {
-                        class: "{FIELD_CLASSES} w-32 font-mono text-xs",
-                        placeholder: "a, b, c",
+                    textarea {
+                        class: "{FIELD_CLASSES} block w-32 font-mono text-xs",
+                        aria_label: "Choices, one per line",
+                        rows: 3,
+                        placeholder: "one per line",
                         value: "{draft.choices}",
                         oninput: move |e| inputs.write()[index].choices = e.value(),
                     }
@@ -446,6 +460,7 @@ fn InputRow(
                 input {
                     r#type: "checkbox",
                     class: "accent-amber-500",
+                    aria_label: "Required",
                     checked: draft.required,
                     onchange: move |e| inputs.write()[index].required = e.checked(),
                 }
@@ -454,6 +469,7 @@ fn InputRow(
                 input {
                     r#type: "checkbox",
                     class: "accent-amber-500",
+                    aria_label: "Per host",
                     checked: draft.per_machine,
                     onchange: move |e| inputs.write()[index].per_machine = e.checked(),
                 }
@@ -463,6 +479,7 @@ fn InputRow(
                     Button {
                         variant: ButtonVariant::Subtle,
                         class: "px-1.5",
+                        label: "Move input up",
                         disabled: index == 0,
                         onclick: move |_| inputs.write().swap(index, index - 1),
                         Icon { name: "chevron", class: "w-3.5 h-3.5 rotate-180" }
@@ -470,6 +487,7 @@ fn InputRow(
                     Button {
                         variant: ButtonVariant::Subtle,
                         class: "px-1.5",
+                        label: "Move input down",
                         disabled: index + 1 == count,
                         onclick: move |_| inputs.write().swap(index, index + 1),
                         Icon { name: "chevron", class: "w-3.5 h-3.5" }
@@ -477,6 +495,7 @@ fn InputRow(
                     Button {
                         variant: ButtonVariant::Subtle,
                         class: "px-1.5 hover:text-bad",
+                        label: "Remove input",
                         onclick: move |_| {
                             inputs.write().remove(index);
                         },

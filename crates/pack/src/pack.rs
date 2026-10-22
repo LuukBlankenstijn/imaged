@@ -5,15 +5,15 @@ use chrono::Utc;
 use imaged_archive::manifest::{PARTITION_TABLE_FILE, partition_file};
 use imaged_archive::{Contents, Manifest, PartitionSource, write_archive};
 use imaged_disk::{
-    Filesystem, backup_partition_table, clone_compressed, holds_system, root_partition,
+    Filesystem, Partition, backup_partition_table, clone_compressed, holds_system, root_partition,
 };
 use tempfile::TempDir;
 use tokio::fs::File;
 use tracing::info;
 
+use crate::blkid;
 use crate::cli::Args;
 use crate::extract::extract;
-use crate::layout::{self, Partition};
 use crate::scripts;
 
 const PARTCLONE_LOG: &str = "partclone.log";
@@ -27,17 +27,16 @@ struct Extracted {
 pub async fn run(args: Args) -> anyhow::Result<()> {
     let captured_at = Utc::now();
     let scripts = scripts::load(&args.scripts).await?;
-    let layout = layout::partitions(&args.disk).await?;
     let work = TempDir::new().context("creating a temporary directory")?;
 
     let partition_table = work.path().join(PARTITION_TABLE_FILE);
-    backup_partition_table(&args.disk, &partition_table)
+    let table = backup_partition_table(&args.disk, &partition_table)
         .await
         .context("backing up the partition table")?;
 
-    let mut partitions = Vec::with_capacity(layout.len());
+    let mut partitions = Vec::with_capacity(table.partitions.len());
     let mut systems = Vec::new();
-    for &partition in &layout {
+    for &partition in &table.partitions {
         let Some(extracted) = extract_formatted(&args.disk, partition, work.path()).await? else {
             continue;
         };
@@ -53,6 +52,7 @@ pub async fn run(args: Args) -> anyhow::Result<()> {
     let contents = Contents {
         name: args.name,
         captured_at: Some(captured_at),
+        sector_size: table.sector_size,
         partition_table,
         partitions,
         root_partition,
@@ -82,7 +82,7 @@ async fn extract_formatted(
         "extracting partition"
     );
     extract(disk, partition, &path).await?;
-    let fstype = layout::fstype(&path).await?;
+    let fstype = blkid::fstype(&path).await?;
     match Filesystem::detect(fstype.as_deref())
         .with_context(|| format!("cannot pack partition {number}"))?
     {

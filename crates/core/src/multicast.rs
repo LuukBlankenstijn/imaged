@@ -92,15 +92,7 @@ struct Worker {
 
 impl Worker {
     async fn fail_orphans(&self) -> Result {
-        for task in self.tasks.get_all().await? {
-            if task.task_type != TaskType::Multicast {
-                continue;
-            }
-            for host in task.hosts_in(TaskState::Running) {
-                self.tasks.mark_failed(task.id, host, ORPHANED).await?;
-            }
-        }
-        Ok(())
+        self.tasks.fail_running(TaskType::Multicast, ORPHANED).await
     }
 
     async fn run(self, mut woken: watch::Receiver<()>) {
@@ -144,7 +136,7 @@ impl Worker {
                 self.tasks
                     .mark_failed(task_id, host, &e.to_string())
                     .await?;
-                self.registry.cancel_task(host, task_id);
+                self.registry.dispatch(host);
             } else if !connected.contains(&host) {
                 self.tasks.mark_failed(task_id, host, DISCONNECTED).await?;
             }
@@ -192,7 +184,7 @@ mod tests {
     use crate::di::DIContainer;
     use crate::progress::Snapshot;
     use crate::test_support::container;
-    use imaged_model::{ServerEvent, get_multicast_port, multicast_group};
+    use imaged_model::{get_multicast_port, multicast_group};
     use scuttlecast::{error::ProtoError, receiver::Receiver};
     use std::{
         net::Ipv4Addr,
@@ -221,7 +213,7 @@ mod tests {
 
     async fn db_host(c: &DIContainer, mac: &str, ip: Option<&str>) -> i64 {
         c.host_repo
-            .upsert_host(mac.to_string(), 1_000_000, ip.map(Into::into))
+            .upsert_host(mac.to_string(), Ok(1_000_000), ip.map(Into::into))
             .await
             .unwrap()
             .id
@@ -314,9 +306,12 @@ mod tests {
             c.multicast_manager.wake();
 
             match tokio::time::timeout(SETTLE, registration.receiver.recv()).await {
-                Ok(Some(ServerEvent::Task(t))) => assert_eq!(t.id, task.id),
-                other => panic!("expected the task at session start, got {other:?}"),
+                Ok(Some(())) => {}
+                other => panic!("expected a dispatch at session start, got {other:?}"),
             }
+            let next = c.task_repo.get_next(connected).await.unwrap().unwrap();
+            assert_eq!(next.id, task.id);
+            assert!(next.is_dispatchable_to(connected));
             let [table_a, table_b, data_a, data_b] = receivers;
             assert_eq!(table_a.await.unwrap(), parttable);
             assert_eq!(table_b.await.unwrap(), parttable);

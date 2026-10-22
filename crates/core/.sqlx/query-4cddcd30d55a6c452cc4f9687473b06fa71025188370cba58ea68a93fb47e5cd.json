@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                i.root_partition,\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
+  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                i.root_partition,\n                i.sector_size,\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
   "describe": {
     "columns": [
       {
@@ -34,23 +34,28 @@
         "type_info": "Integer"
       },
       {
-        "name": "p_id?: i64",
+        "name": "sector_size",
         "ordinal": 6,
         "type_info": "Integer"
       },
       {
-        "name": "p_num?: i64",
+        "name": "p_id?: i64",
         "ordinal": 7,
         "type_info": "Integer"
       },
       {
-        "name": "p_fstype?",
+        "name": "p_num?: i64",
         "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_fstype?",
+        "ordinal": 9,
         "type_info": "Text"
       },
       {
         "name": "p_size?: i64",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer"
       }
     ],
@@ -64,11 +69,12 @@
       true,
       true,
       true,
+      false,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "dba1d574f0a225a88d71df42d2f3a04b9b454b37b7049cacdfaf20a8aa6181cd"
+  "hash": "4cddcd30d55a6c452cc4f9687473b06fa71025188370cba58ea68a93fb47e5cd"
 }

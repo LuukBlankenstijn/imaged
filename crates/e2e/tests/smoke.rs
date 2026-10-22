@@ -24,7 +24,9 @@ async fn harness_round_trips_a_deploy_over_http() {
 
     let resp = s.agent_get(&path::partitions(task_id), &mac).await;
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
-    let partitions: Vec<serde_json::Value> = resp.json().await.expect("partitions json");
+    let layout: serde_json::Value = resp.json().await.expect("layout json");
+    assert_eq!(layout["sector_size"], 512);
+    let partitions = layout["partitions"].as_array().expect("partitions");
     assert_eq!(partitions.len(), 1);
     assert_eq!(partitions[0]["partition_number"], 1);
     assert_eq!(partitions[0]["fstype"], "ext4");
@@ -48,7 +50,7 @@ async fn harness_round_trips_a_deploy_over_http() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("first sse event");
-    assert_eq!(event["Task"]["id"], task_id);
-    assert_eq!(event["Task"]["task_type"], "Deploy");
-    assert_eq!(event["Task"]["image_id"], image_id);
+    assert_eq!(event["Current"]["id"], task_id);
+    assert_eq!(event["Current"]["task_type"], "Deploy");
+    assert_eq!(event["Current"]["image_id"], image_id);
 }

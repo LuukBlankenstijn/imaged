@@ -6,9 +6,9 @@ use imaged_core::domain::task::TaskType;
 use super::TestServer;
 
 pub async fn host(s: &TestServer, mac: &str, disk_size_bytes: u64) -> Host {
-    s.container
-        .host_repo
-        .upsert_host(mac.to_string(), disk_size_bytes, None)
+    let hosts = s.container.host_repo.clone();
+    let mac = mac.to_string();
+    s.on_server(async move { hosts.upsert_host(mac, Ok(disk_size_bytes), None).await })
         .await
         .expect("seed host")
 }
@@ -23,69 +23,68 @@ pub async fn image_with_data(
     parttable: &[u8],
     partitions: &[(i64, &str, &[u8])],
 ) -> i64 {
-    let image = s
-        .container
-        .image_repo
-        .create_image(name.to_string())
-        .await
-        .expect("create image");
-
-    s.container
-        .image_service
-        .save_partition_table(image.id, parttable)
-        .await
-        .expect("save partition table");
-
+    let mut compressed = Vec::with_capacity(partitions.len());
     for &(number, fstype, plain) in partitions {
-        let compressed = zstd(plain).await;
-        let path = s
-            .container
-            .image_service
-            .get_partition_path(image.id, number);
-        tokio::fs::write(&path, &compressed)
-            .await
-            .expect("write partition data");
-        s.container
-            .image_repo
-            .save_partition(image.id, number, fstype, plain.len() as i64)
-            .await
-            .expect("save partition record");
+        compressed.push((
+            number,
+            fstype.to_string(),
+            plain.len() as i64,
+            zstd(plain).await,
+        ));
     }
+    let container = s.container.clone();
+    let name = name.to_string();
+    let parttable = parttable.to_vec();
+    s.on_server(async move {
+        let image = container
+            .image_repo
+            .create_image(name)
+            .await
+            .expect("create image");
+        container
+            .image_service
+            .save_partition_table(image.id, &parttable)
+            .await
+            .expect("save partition table");
+        for (number, fstype, size_bytes, data) in compressed {
+            let path = container.image_service.get_partition_path(image.id, number);
+            tokio::fs::write(&path, &data)
+                .await
+                .expect("write partition data");
+            container
+                .image_repo
+                .save_partition(image.id, number, &fstype, size_bytes)
+                .await
+                .expect("save partition record");
+        }
+        container
+            .image_repo
+            .mark_finished(image.id)
+            .await
+            .expect("mark image ready");
+        image.id
+    })
+    .await
+}
 
-    s.container
-        .image_repo
-        .mark_finished(image.id)
+async fn task(s: &TestServer, task_type: TaskType, host_id: i64, image_id: Option<i64>) -> i64 {
+    let tasks = s.container.task_repo.clone();
+    s.on_server(async move { tasks.create(task_type, vec![host_id], image_id).await })
         .await
-        .expect("mark image ready");
-
-    image.id
+        .expect("create task")
+        .id
 }
 
 pub async fn deploy_task(s: &TestServer, host_id: i64, image_id: i64) -> i64 {
-    s.container
-        .task_repo
-        .create(TaskType::Deploy, vec![host_id], Some(image_id))
-        .await
-        .expect("create deploy task")
-        .id
+    task(s, TaskType::Deploy, host_id, Some(image_id)).await
 }
 
 pub async fn capture_task(s: &TestServer, host_id: i64, image_id: i64) -> i64 {
-    s.container
-        .task_repo
-        .create(TaskType::Capture, vec![host_id], Some(image_id))
-        .await
-        .expect("create capture task")
-        .id
+    task(s, TaskType::Capture, host_id, Some(image_id)).await
 }
 
 pub async fn reboot_task(s: &TestServer, host_id: i64) -> i64 {
-    s.container
-        .task_repo
-        .create(TaskType::Reboot, vec![host_id], None)
-        .await
-        .expect("create reboot task")
-        .id
+    task(s, TaskType::Reboot, host_id, None).await
 }
 
 /// Compress bytes the way the agent's capture path does before upload.

@@ -4,12 +4,12 @@ use imaged_core::{
     domain::task::{Task, TaskType},
 };
 use imaged_model::{
-    agent::ImagePartition,
+    agent::ImageLayout,
     error::{AppError, Result},
     image::ImageStatus,
 };
 
-use crate::{AgentInfo, get_next_task};
+use crate::{AgentInfo, get_next_task, scripts::planned_scripts};
 
 #[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo)]
 pub async fn download_partition_data(
@@ -45,18 +45,24 @@ pub async fn download_partition_table(
     image_service.read_partition_table(image_id).await
 }
 
-#[injectable::inject(image_repo: ImageRepo)]
+#[injectable::inject(image_repo: ImageRepo, host_repo: HostRepo)]
 pub async fn download_partitions(
     agent: AgentInfo,
     Path(task_id): Path<i64>,
-) -> Result<Json<Vec<ImagePartition>>> {
-    let (_, image_id) = get_restore_task_and_verify(&agent.mac, task_id).await?;
-    if image_repo.get_status(image_id).await? != ImageStatus::Ready {
+) -> Result<Json<ImageLayout>> {
+    let (task, image_id) = get_restore_task_and_verify(&agent.mac, task_id).await?;
+    let image = image_repo.get(image_id).await?;
+    if image.status != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
         )));
     };
-    Ok(Json(image_repo.get_partitions(image_id).await?))
+    let host_id = host_repo.get_by_mac(&agent.mac).await?.id;
+    planned_scripts(task.id, host_id, &image).await?;
+    Ok(Json(ImageLayout {
+        sector_size: image.sector_size,
+        partitions: image.partitions,
+    }))
 }
 
 pub(crate) async fn get_restore_task_and_verify(mac: &str, task_id: i64) -> Result<(Task, i64)> {

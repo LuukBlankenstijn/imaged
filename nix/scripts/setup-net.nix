@@ -17,7 +17,7 @@ writeShellApplication {
     fi
 
     if ! ip link show "$bridge" >/dev/null 2>&1; then
-      echo "bridge $bridge not found; run 'docker compose up -d' first" >&2
+      echo "bridge $bridge not found; run 'docker compose -p imaged -f dev/compose.yaml up -d' first" >&2
       exit 1
     fi
 
@@ -26,8 +26,8 @@ writeShellApplication {
       echo "disabled igmp snooping on $bridge"
     fi
 
-    if ! iptables -C INPUT -i "$bridge" -p udp --dport 50000:50127 -j ACCEPT 2>/dev/null; then
-      iptables -I INPUT 1 -i "$bridge" -p udp --dport 50000:50127 -j ACCEPT
+    if ! iptables -C INPUT -i "$bridge" -p udp --dport 50000:50257 -j ACCEPT 2>/dev/null; then
+      iptables -I INPUT 1 -i "$bridge" -p udp --dport 50000:50257 -j ACCEPT
       echo "opened udp 50000:50127 on $bridge for multicast"
     fi
 

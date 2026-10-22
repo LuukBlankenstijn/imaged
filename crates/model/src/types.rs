@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::progress::HostProgress;
 
-#[derive(Debug, Display, IsVariant, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Display, IsVariant, Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
 pub enum TaskType {
     Capture,
     Deploy,
@@ -11,22 +11,23 @@ pub enum TaskType {
     Reboot,
 }
 
-#[derive(Debug, Serialize, Deserialize, Constructor, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Constructor, Clone, Copy, PartialEq, Eq)]
 pub struct Task {
     pub id: i64,
     pub task_type: TaskType,
     pub image_id: Option<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize, From, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, From, Clone, Copy, PartialEq, Eq)]
 pub enum ServerEvent {
-    Task(Task),
-    Cancel(i64),
+    Current(Option<Task>),
 }
 
 #[derive(Debug, Serialize, Deserialize, From, Clone, PartialEq)]
 pub enum AgentEvent {
     Progress(HostProgress),
+    #[from(skip)]
+    Idle,
 }
 
 #[cfg(test)]
@@ -76,17 +77,11 @@ mod tests {
     }
 
     #[test]
-    fn server_event_from_task_and_from_i64_pick_the_right_variant() {
-        let t = Task::new(1, TaskType::Reboot, None);
-        assert!(matches!(ServerEvent::from(t), ServerEvent::Task(inner) if inner.id == 1));
-        assert!(matches!(ServerEvent::from(42i64), ServerEvent::Cancel(42)));
-    }
-
-    #[test]
-    fn server_event_cancel_serde_round_trips() {
-        let ev = ServerEvent::from(5i64);
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ServerEvent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ServerEvent::Cancel(5)));
+    fn server_event_current_round_trips_with_and_without_a_task() {
+        for current in [Some(Task::new(5, TaskType::Capture, None)), None] {
+            let json = serde_json::to_string(&ServerEvent::from(current)).unwrap();
+            let back: ServerEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, ServerEvent::Current(current));
+        }
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE images SET status = ?, captured_at = ?, root_partition = ?, sector_size = ? WHERE id = ? AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "2964b8507901f8c40a7d55eae3858dcddeafcb956c62424a7c8c65e0cfe6f079"
+}

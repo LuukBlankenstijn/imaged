@@ -3,6 +3,10 @@ use imaged_disk::Filesystem;
 use serde::Deserialize;
 use tokio::process::Command;
 
+const E2FSCK_CONFIG: &str = "/etc/e2fsck.conf";
+const E2FSCK_REPAIRED_REBOOT: i32 = 2;
+const FSCK_FAT_REPAIRED: i32 = 1;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BlockDevice {
     pub name: String,
@@ -146,6 +150,43 @@ async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
 
 fn contains_root(dev: &BlockDevice) -> bool {
     dev.mountpoint.as_deref() == Some("/") || dev.children.iter().any(contains_root)
+}
+
+pub async fn repair_filesystem(partition: &PartitionTarget) -> Result<()> {
+    let (mut command, worst_accepted) = match partition.filesystem {
+        Filesystem::Swap => return Ok(()),
+        Filesystem::Vfat => {
+            let mut command = Command::new("fsck.fat");
+            command.arg("-a");
+            (command, FSCK_FAT_REPAIRED)
+        }
+        Filesystem::Ext2 | Filesystem::Ext3 | Filesystem::Ext4 => {
+            let mut command = Command::new("e2fsck");
+            command.env("E2FSCK_CONFIG", E2FSCK_CONFIG).arg("-p");
+            (command, E2FSCK_REPAIRED_REBOOT)
+        }
+    };
+    tracing::info!(device = %partition.device, filesystem = %partition.filesystem, "checking the filesystem before capturing it");
+    let output = command
+        .arg(&partition.device)
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("checking {}", partition.device))?;
+    if output
+        .status
+        .code()
+        .is_some_and(|code| code <= worst_accepted)
+    {
+        return Ok(());
+    }
+    let printed = [output.stdout, output.stderr].concat();
+    bail!(
+        "{} has filesystem errors that could not be repaired automatically ({}): {}",
+        partition.device,
+        output.status,
+        String::from_utf8_lossy(&printed).trim()
+    )
 }
 
 #[cfg(test)]

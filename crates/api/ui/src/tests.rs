@@ -8,9 +8,8 @@ use tower::ServiceExt as _;
 
 use core::di::DIContainer;
 use core::domain::script::NewScript;
-use core::domain::task::TaskType;
+use core::domain::task::{MAX_TASK_PAGE_SIZE, Task as DTask, TaskQuery, TaskType};
 use core::test_support::container;
-use imaged_model::ServerEvent;
 use imaged_model::error::AppError;
 use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, ScriptInput};
@@ -18,6 +17,26 @@ use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
 
 use crate::model;
+
+async fn all_tasks(c: &DIContainer) -> Vec<DTask> {
+    c.task_repo
+        .list(&TaskQuery {
+            states: Vec::new(),
+            task_type: None,
+            host_id: None,
+            before: None,
+            limit: MAX_TASK_PAGE_SIZE,
+        })
+        .await
+        .unwrap()
+        .tasks
+}
+
+async fn ready_image(c: &DIContainer, name: &str) -> i64 {
+    let image = c.image_repo.create_image(name.into()).await.unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
+    image.id
+}
 
 // ----------------------------------------------------------------------------
 // hosts
@@ -28,7 +47,7 @@ async fn update_host_name_renames() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:01".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:01".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -51,7 +70,7 @@ async fn delete_host_ok_without_tasks() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:02".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:02".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -70,7 +89,7 @@ async fn delete_host_err_with_active_task() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:03".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:03".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     // A pending task makes the host busy.
@@ -93,16 +112,16 @@ async fn deploy_creates_deploy_task() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:04".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:04".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("img".into()).await.unwrap();
+    let image_id = ready_image(&c, "img").await;
 
     let task = core::di::scope(
         c.clone(),
         crate::hosts::deploy(model::DeployRequest {
             id: host.id,
-            image_id: img.id,
+            image_id,
             inputs: Default::default(),
         }),
     )
@@ -110,58 +129,287 @@ async fn deploy_creates_deploy_task() {
     .unwrap();
 
     assert_eq!(task.r#type, model::TaskType::Deploy);
-    assert_eq!(task.image_id, Some(img.id));
+    assert_eq!(task.image_id, Some(image_id));
     assert_eq!(task.hosts.len(), 1);
     assert_eq!(task.hosts[0].host_id, host.id);
+    assert_eq!(task.hosts[0].host_name, host.name);
+    assert_eq!(task.hosts[0].mac_address, host.mac_address);
 }
 
 #[tokio::test]
-async fn reboot_creates_task_without_image() {
+async fn deploying_or_multicasting_an_image_that_is_not_ready_is_refused_without_a_task() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:05".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:4a".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let empty = c.image_repo.create_image("empty".into()).await.unwrap();
+    let faulted = c.image_repo.create_image("faulted".into()).await.unwrap();
+    c.image_repo.mark_faulted(faulted.id, "boom").await.unwrap();
+
+    for image_id in [empty.id, faulted.id] {
+        let deploy = core::di::scope(
+            c.clone(),
+            crate::hosts::deploy(model::DeployRequest {
+                id: host.id,
+                image_id,
+                inputs: Default::default(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(deploy, AppError::FailedPrecondition(_)),
+            "{deploy:?}"
+        );
+
+        let multicast = core::di::scope(
+            c.clone(),
+            crate::groups::multicast(model::MulticastRequest {
+                host_ids: vec![host.id],
+                image_id,
+                inputs: Default::default(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(multicast, AppError::FailedPrecondition(_)),
+            "{multicast:?}"
+        );
+    }
+    assert!(all_tasks(&c).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_host_without_a_usable_disk_is_neither_deployed_nor_captured() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host(
+            "aa:bb:cc:dd:ee:4b".into(),
+            Err("multiple disks found".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    let image_id = ready_image(&c, "img").await;
+
+    let deploy = core::di::scope(
+        c.clone(),
+        crate::hosts::deploy(model::DeployRequest {
+            id: host.id,
+            image_id,
+            inputs: Default::default(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&deploy, AppError::FailedPrecondition(m) if m.contains("multiple disks found")),
+        "{deploy:?}"
+    );
+
+    let capture = core::di::scope(
+        c.clone(),
+        crate::images::create_image(model::CreateImageRequest {
+            name: "cap".into(),
+            host_id: host.id,
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(capture, AppError::FailedPrecondition(_)),
+        "{capture:?}"
+    );
+
+    assert!(all_tasks(&c).await.is_empty());
+    assert_eq!(c.image_repo.get_all().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn capturing_from_an_unknown_host_is_not_found_and_leaves_no_image_behind() {
+    let (c, _guard) = container().await;
+
+    let err = core::di::scope(
+        c.clone(),
+        crate::images::create_image(model::CreateImageRequest {
+            name: "orphan".into(),
+            host_id: 999,
+        }),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, AppError::NotFound(_)), "{err:?}");
+    assert!(c.image_repo.get_all().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn reboot_creates_and_returns_a_task_without_image() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:05".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
-    core::di::scope(c.clone(), crate::hosts::reboot(vec![host.id]))
+    let task = core::di::scope(c.clone(), crate::hosts::reboot(vec![host.id]))
         .await
         .unwrap();
 
-    let tasks = c.task_repo.get_all().await.unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].task_type, TaskType::Reboot);
-    assert!(tasks[0].image_id.is_none());
+    assert_eq!(task.r#type, model::TaskType::Reboot);
+    assert!(task.image_id.is_none());
+    assert_eq!(
+        all_tasks(&c).await.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [task.id]
+    );
 }
 
 // ----------------------------------------------------------------------------
 // tasks
 // ----------------------------------------------------------------------------
 
-#[tokio::test]
-async fn get_all_tasks_empty_then_reflects_creation() {
-    let (c, _guard) = container().await;
+async fn list(c: &DIContainer, query: model::TaskQuery) -> model::TaskPage {
+    core::di::scope(c.clone(), crate::tasks::list_tasks(query))
+        .await
+        .unwrap()
+}
 
-    let empty = core::di::scope(c.clone(), crate::tasks::get_all_tasks())
+fn ids(page: &model::TaskPage) -> Vec<i64> {
+    page.tasks.iter().map(|t| t.id).collect()
+}
+
+#[tokio::test]
+async fn listing_tasks_filters_by_status_type_and_host_and_names_each_host() {
+    let (c, _guard) = container().await;
+    let a = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:06".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    assert!(empty.is_empty());
-
-    let host = c
+    let b = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:06".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:4c".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let image = ready_image(&c, "img").await;
+    let pending = c
+        .task_repo
+        .create(TaskType::Reboot, vec![a.id], None)
+        .await
+        .unwrap();
+    let partial = c
+        .task_repo
+        .create(TaskType::Reboot, vec![a.id, b.id], None)
+        .await
+        .unwrap();
+    c.task_repo.mark_finished(partial.id, a.id).await.unwrap();
+    c.task_repo
+        .mark_failed(partial.id, b.id, "boom")
+        .await
+        .unwrap();
+    let failed = c
+        .task_repo
+        .create(TaskType::Deploy, vec![b.id], Some(image))
         .await
         .unwrap();
     c.task_repo
-        .create(TaskType::Reboot, vec![host.id], None)
+        .mark_failed(failed.id, b.id, "boom")
         .await
         .unwrap();
+    let done = c
+        .task_repo
+        .create(TaskType::Reboot, vec![b.id], None)
+        .await
+        .unwrap();
+    c.task_repo.mark_finished(done.id, b.id).await.unwrap();
 
-    let tasks = core::di::scope(c.clone(), crate::tasks::get_all_tasks())
+    let status = |status| model::TaskQuery {
+        status: Some(status),
+        ..Default::default()
+    };
+    let active = list(&c, status(model::TaskStatus::Active)).await;
+    assert_eq!(ids(&active), [pending.id]);
+    assert_eq!(
+        ids(&list(&c, status(model::TaskStatus::Failed)).await),
+        [failed.id, partial.id]
+    );
+    assert_eq!(
+        ids(&list(&c, status(model::TaskStatus::Done)).await),
+        [done.id]
+    );
+    assert_eq!(
+        ids(&list(
+            &c,
+            model::TaskQuery {
+                task_type: Some(model::TaskType::Deploy),
+                ..Default::default()
+            }
+        )
+        .await),
+        [failed.id]
+    );
+    assert_eq!(
+        ids(&list(
+            &c,
+            model::TaskQuery {
+                host_id: Some(a.id),
+                ..Default::default()
+            }
+        )
+        .await),
+        [partial.id, pending.id]
+    );
+
+    let host = &active.tasks[0].hosts[0];
+    assert_eq!(
+        (host.host_name.as_str(), host.mac_address.as_str()),
+        (a.name.as_str(), a.mac_address.as_str())
+    );
+}
+
+#[tokio::test]
+async fn task_pages_run_newest_first_and_continue_from_their_cursor() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:4d".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].r#type, model::TaskType::Reboot);
+    let mut created = Vec::new();
+    for _ in 0..3 {
+        let task = c
+            .task_repo
+            .create(TaskType::Reboot, vec![host.id], None)
+            .await
+            .unwrap();
+        created.push(task.id);
+    }
+
+    let first = list(
+        &c,
+        model::TaskQuery {
+            limit: Some(2),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ids(&first), [created[2], created[1]]);
+
+    let second = list(
+        &c,
+        model::TaskQuery {
+            limit: Some(2),
+            before: first.next_cursor,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ids(&second), [created[0]]);
+    assert_eq!(second.next_cursor, None);
 }
 
 #[tokio::test]
@@ -169,7 +417,7 @@ async fn cancel_task_ok_then_err_when_not_active() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:07".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:07".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -198,7 +446,7 @@ async fn retry_task_err_when_pending_then_ok_when_cancelled() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:08".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:08".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -250,11 +498,11 @@ async fn create_image_creates_image_and_capture_task() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:09".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:09".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
-    let image = core::di::scope(
+    let capture = core::di::scope(
         c.clone(),
         crate::images::create_image(model::CreateImageRequest {
             name: "cap".into(),
@@ -263,74 +511,114 @@ async fn create_image_creates_image_and_capture_task() {
     )
     .await
     .unwrap();
-    assert_eq!(image.name, "cap");
 
-    let tasks = c.task_repo.get_all().await.unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].task_type, TaskType::Capture);
-    assert_eq!(tasks[0].image_id, Some(image.id));
+    assert_eq!(capture.image.name, "cap");
+    assert_eq!(capture.task.r#type, model::TaskType::Capture);
+    assert_eq!(capture.task.image_id, Some(capture.image.id));
+    assert_eq!(
+        all_tasks(&c).await.iter().map(|t| t.id).collect::<Vec<_>>(),
+        [capture.task.id]
+    );
 }
 
 #[tokio::test]
-async fn deleting_an_image_cancels_referencing_tasks_then_soft_deletes() {
+async fn deleting_an_image_cancels_its_capture_then_soft_deletes() {
     let (c, guard) = container().await;
 
-    // No tasks: deletion succeeds.
     let free = c.image_repo.create_image("free".into()).await.unwrap();
     core::di::scope(c.clone(), crate::images::delete_image(free.id))
         .await
         .unwrap();
 
-    for (ttype, mac, name) in [
-        (TaskType::Deploy, "aa:bb:cc:dd:ee:0b", "deploying"),
-        (TaskType::Capture, "aa:bb:cc:dd:ee:0c", "capturing"),
-    ] {
-        let host = c
-            .host_repo
-            .upsert_host(mac.into(), 1_000_000, None)
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:0c".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let img = c.image_repo.create_image("capturing".into()).await.unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Capture, vec![host.id], Some(img.id))
+        .await
+        .unwrap();
+    c.image_service
+        .save_partition_table(img.id, &[1u8, 2, 3, 4])
+        .await
+        .unwrap();
+    let dir = guard.path().join("images").join(format!("img-{}", img.id));
+    assert!(dir.exists());
+    let mut conn = c.host_registry.register(host.id);
+
+    core::di::scope(c.clone(), crate::images::delete_image(img.id))
+        .await
+        .unwrap();
+
+    assert!(
+        c.task_repo
+            .get(task.id)
             .await
-            .unwrap();
-        let img = c.image_repo.create_image(name.into()).await.unwrap();
+            .unwrap()
+            .aggregate_state()
+            .is_cancelled(),
+        "the capture of a deleted image should be cancelled"
+    );
+    assert_eq!(
+        conn.receiver.try_recv(),
+        Ok(()),
+        "the capturing host is told"
+    );
+    assert!(!dir.exists(), "image data directory should be cleared");
+    assert!(
+        c.image_repo
+            .get_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|i| i.id != img.id),
+        "soft-deleted image should not be listed"
+    );
+}
+
+#[tokio::test]
+async fn deleting_an_image_is_refused_while_it_is_being_deployed_or_multicast() {
+    let (c, _guard) = container().await;
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:0b".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+
+    for ttype in [TaskType::Deploy, TaskType::Multicast] {
+        let image_id = ready_image(&c, &format!("{ttype:?}")).await;
         let task = c
             .task_repo
-            .create(ttype, vec![host.id], Some(img.id))
+            .create(ttype, vec![host.id], Some(image_id))
             .await
             .unwrap();
-        c.image_service
-            .save_partition_table(img.id, &[1u8, 2, 3, 4])
-            .await
-            .unwrap();
-        let dir = guard.path().join("images").join(format!("img-{}", img.id));
-        assert!(dir.exists());
-        let mut conn = c.host_registry.register(host.id);
 
-        core::di::scope(c.clone(), crate::images::delete_image(img.id))
+        let err = core::di::scope(c.clone(), crate::images::delete_image(image_id))
             .await
-            .unwrap();
+            .unwrap_err();
 
         assert!(
-            c.task_repo
-                .get(task.id)
-                .await
-                .unwrap()
-                .aggregate_state()
-                .is_cancelled(),
-            "{ttype:?} task referencing a deleted image should be cancelled"
+            matches!(&err, AppError::FailedPrecondition(m) if m.contains(&format!("#{}", task.id))),
+            "{err:?}"
         );
-        match conn.receiver.try_recv() {
-            Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
-            other => panic!("registered host expected Cancel event, got {other:?}"),
-        }
-        assert!(!dir.exists(), "image data directory should be cleared");
+        let state = c.task_repo.get(task.id).await.unwrap().aggregate_state();
+        assert!(
+            state.is_pending() || state.is_running(),
+            "{ttype:?} task should be left alone, is {state:?}"
+        );
         assert!(
             c.image_repo
                 .get_all()
                 .await
                 .unwrap()
                 .iter()
-                .all(|i| i.id != img.id),
-            "soft-deleted image should not be listed"
+                .any(|i| i.id == image_id),
+            "{ttype:?} image should still be listed"
         );
+        c.task_repo.cancel(task.id).await.unwrap();
     }
 }
 
@@ -362,12 +650,12 @@ async fn groups_full_roundtrip() {
     let (c, _guard) = container().await;
     let h1 = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:0b".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:0b".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let h2 = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:0c".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:0c".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -483,6 +771,8 @@ async fn ui_api_contracts() {
     retrying_a_pending_task_is_a_bad_request(&c).await;
     deleting_a_capturing_image_cancels_its_task_and_succeeds(&c).await;
     multicast_creates_a_task_for_every_host(&c).await;
+    deploy_bodies_reject_unknown_fields(&c).await;
+    tasks_are_listed_with_query_filters(&c).await;
     waking_hosts_is_accepted(&c).await;
     images_are_exported_and_imported_as_archives(&c).await;
     scripts_are_managed_and_attached_to_images(&c).await;
@@ -490,7 +780,7 @@ async fn ui_api_contracts() {
 
 async fn reads_are_get_only(c: &DIContainer) {
     c.host_repo
-        .upsert_host("aa:bb:cc:dd:ee:10".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:10".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -518,7 +808,7 @@ async fn reads_are_get_only(c: &DIContainer) {
 async fn group_members_are_served_from_the_group_path(c: &DIContainer) {
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:11".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:11".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let group = c
@@ -539,7 +829,7 @@ async fn group_members_are_served_from_the_group_path(c: &DIContainer) {
 async fn deleting_a_busy_host_is_a_bad_request(c: &DIContainer) {
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:12".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:12".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     c.task_repo
@@ -555,7 +845,7 @@ async fn deleting_a_busy_host_is_a_bad_request(c: &DIContainer) {
 async fn cancelling_a_finished_task_is_a_bad_request(c: &DIContainer) {
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:13".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:13".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -572,7 +862,7 @@ async fn cancelling_a_finished_task_is_a_bad_request(c: &DIContainer) {
 async fn retrying_a_pending_task_is_a_bad_request(c: &DIContainer) {
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:14".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:14".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -588,7 +878,7 @@ async fn retrying_a_pending_task_is_a_bad_request(c: &DIContainer) {
 async fn deleting_a_capturing_image_cancels_its_task_and_succeeds(c: &DIContainer) {
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:15".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:15".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let image = c.image_repo.create_image("busy".into()).await.unwrap();
@@ -627,12 +917,12 @@ async fn deleting_a_capturing_image_cancels_its_task_and_succeeds(c: &DIContaine
 async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
     let first = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:16".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:16".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let second = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:17".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:17".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let image = c.image_repo.create_image("cast".into()).await.unwrap();
@@ -644,21 +934,78 @@ async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let created: model::Task = json(response).await;
 
-    let task = c.task_repo.get_next(first.id).await.unwrap().unwrap();
-    assert_eq!(task.task_type, TaskType::Multicast);
-    assert_eq!(task.image_id, Some(image.id));
-    assert_eq!(
-        c.task_repo.get_next(second.id).await.unwrap().unwrap().id,
-        task.id
-    );
+    assert_eq!(created.r#type, model::TaskType::Multicast);
+    assert_eq!(created.image_id, Some(image.id));
+    let mut host_ids: Vec<i64> = created.hosts.iter().map(|h| h.host_id).collect();
+    host_ids.sort();
+    assert_eq!(host_ids, [first.id, second.id]);
+    assert_eq!(c.task_repo.get(created.id).await.unwrap().hosts.len(), 2);
+}
+
+async fn rejected_as_unknown_field(response: Response) -> bool {
+    let rejected = !response.status().is_success();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    rejected && String::from_utf8_lossy(&body).contains("unknown field")
+}
+
+async fn deploy_bodies_reject_unknown_fields(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:1a".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let image_id = ready_image(c, "strict").await;
+
+    for req in [
+        serde_json::json!({ "id": host.id, "image_id": image_id, "input": {} }),
+        serde_json::json!({ "id": host.id, "image_id": image_id, "inputs": { "per-machine": {} } }),
+    ] {
+        let response = post("/api/ui/hosts/deploy", serde_json::json!({ "req": req })).await;
+        assert!(rejected_as_unknown_field(response).await, "{req}");
+    }
+    let response = post(
+        "/api/ui/groups/multicast",
+        serde_json::json!({ "req": { "host_ids": [host.id], "image_id": image_id, "hosts": [] } }),
+    )
+    .await;
+    assert!(rejected_as_unknown_field(response).await);
+    assert!(c.task_repo.get_next(host.id).await.unwrap().is_none());
+}
+
+async fn tasks_are_listed_with_query_filters(c: &DIContainer) {
+    let host = c
+        .host_repo
+        .upsert_host("aa:bb:cc:dd:ee:1b".into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let task = c
+        .task_repo
+        .create(TaskType::Reboot, vec![host.id], None)
+        .await
+        .unwrap();
+
+    let response = get(&format!(
+        "/api/ui/tasks?status=active&type=reboot&host_id={}&limit=5",
+        host.id
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let page: model::TaskPage = json(response).await;
+    assert_eq!(ids(&page), [task.id]);
+    assert_eq!(page.next_cursor, None);
+
+    assert!(rejected_as_unknown_field(get("/api/ui/tasks?state=active").await).await);
 }
 
 async fn waking_hosts_is_accepted(c: &DIContainer) {
     *c.machine_ip.write() = Some(std::net::Ipv4Addr::LOCALHOST.into());
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:18".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:18".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -682,7 +1029,7 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
         .unwrap();
     std::fs::write(c.image_service.get_partition_path(image.id, 1), b"data").unwrap();
     c.image_repo
-        .save_partition(image.id, 1, "ntfs", 4096)
+        .save_partition(image.id, 1, "ext4", 4096)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -734,10 +1081,7 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
 }
 
 async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
-    let hostname = serde_json::json!({
-        "name": "hostname", "label": "Hostname", "kind": "text", "required": true,
-        "default_value": null, "per_machine": true, "choices": []
-    });
+    let hostname = serde_json::json!({ "name": "hostname", "kind": "text", "per_machine": true });
     let response = post(
         "/api/ui/scripts/create",
         serde_json::json!({ "req": { "name": "set-hostname", "body": "#!/bin/sh\nhostname", "inputs": [hostname] } }),
@@ -747,6 +1091,8 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
     let script: model::Script = json(response).await;
     assert_eq!(script.inputs[0].kind, model::InputKind::Text);
     assert!(script.inputs[0].per_machine);
+    assert!(!script.inputs[0].required);
+    assert_eq!(script.inputs[0].label, "");
 
     let invalid = post(
         "/api/ui/scripts/create",
@@ -772,6 +1118,7 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
         .save_partition(image.id, 2, "ext4", 4096)
         .await
         .unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
     let response = post(
         "/api/ui/images/scripts",
         serde_json::json!({ "req": { "image_id": image.id, "script_ids": [script.id] } }),
@@ -818,7 +1165,7 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
 
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:19".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:19".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let rejected = post(
@@ -867,7 +1214,7 @@ async fn cancelling_a_capture_task_marks_the_image_faulted() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:20".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:20".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("cap".into()).await.unwrap();
@@ -892,7 +1239,7 @@ async fn cancelling_a_multicast_task_cancels_its_rows_without_faulting_the_image
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:21".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:21".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("cast".into()).await.unwrap();
@@ -920,12 +1267,12 @@ async fn cancelling_a_task_notifies_only_hosts_with_active_rows() {
     let (c, _guard) = container().await;
     let active = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:22".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:22".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let finished = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:23".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:23".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -945,10 +1292,7 @@ async fn cancelling_a_task_notifies_only_hosts_with_active_rows() {
         .await
         .unwrap();
 
-    match active_conn.receiver.try_recv() {
-        Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
-        other => panic!("active host expected Cancel event, got {other:?}"),
-    }
+    assert_eq!(active_conn.receiver.try_recv(), Ok(()));
     assert!(finished_conn.receiver.try_recv().is_err());
 }
 
@@ -975,7 +1319,7 @@ async fn retrying_a_task_whose_image_was_deleted_is_rejected() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:24".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:24".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("doomed".into()).await.unwrap();
@@ -1001,7 +1345,7 @@ async fn retrying_a_multicast_task_notifies_the_manager_to_pick_it_up() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:25".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:25".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("cast".into()).await.unwrap();
@@ -1033,48 +1377,16 @@ async fn retrying_a_multicast_task_notifies_the_manager_to_pick_it_up() {
 }
 
 #[tokio::test]
-async fn retrying_a_task_that_is_not_next_for_a_host_does_not_send_it_to_that_host() {
-    let (c, _guard) = container().await;
-    let host = c
-        .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:26".into(), 1_000_000, None)
-        .await
-        .unwrap();
-    let older = c
-        .task_repo
-        .create(TaskType::Reboot, vec![host.id], None)
-        .await
-        .unwrap();
-    let newer = c
-        .task_repo
-        .create(TaskType::Reboot, vec![host.id], None)
-        .await
-        .unwrap();
-    c.task_repo.cancel(newer.id).await.unwrap();
-
-    let mut conn = c.host_registry.register(host.id);
-    core::di::scope(c.clone(), crate::tasks::retry_task(newer.id))
-        .await
-        .unwrap();
-
-    assert!(
-        conn.receiver.try_recv().is_err(),
-        "host received a task that is not its next"
-    );
-    let _ = older;
-}
-
-#[tokio::test]
 async fn retrying_a_partial_task_resets_only_the_failed_and_cancelled_host_rows() {
     let (c, _guard) = container().await;
     let done_host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:27".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:27".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let failed_host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:28".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:28".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -1129,52 +1441,11 @@ async fn deleting_an_image_soft_deletes_the_row_and_clears_its_on_disk_directory
 }
 
 #[tokio::test]
-async fn removing_an_image_cancels_the_multicast_tasks_that_reference_it() {
-    let (c, _guard) = container().await;
-    let host = c
-        .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:29".into(), 1_000_000, None)
-        .await
-        .unwrap();
-    let img = c.image_repo.create_image("cast".into()).await.unwrap();
-    c.image_repo.mark_finished(img.id).await.unwrap();
-    let task = c
-        .task_repo
-        .create(TaskType::Multicast, vec![host.id], Some(img.id))
-        .await
-        .unwrap();
-    let mut conn = c.host_registry.register(host.id);
-
-    core::di::scope(c.clone(), crate::images::delete_image(img.id))
-        .await
-        .unwrap();
-
-    let after = c.task_repo.get(task.id).await.unwrap();
-    assert!(
-        after.aggregate_state().is_cancelled(),
-        "deleting an image should cancel the multicast tasks that reference it"
-    );
-    match conn.receiver.try_recv() {
-        Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
-        other => panic!("registered host expected Cancel event, got {other:?}"),
-    }
-    assert!(
-        c.image_repo
-            .get_all()
-            .await
-            .unwrap()
-            .iter()
-            .all(|i| i.id != img.id),
-        "soft-deleted image should not be listed"
-    );
-}
-
-#[tokio::test]
 async fn deleting_a_host_with_only_terminal_tasks_succeeds_and_cascades_its_task_rows() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:2a".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:2a".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -1200,40 +1471,34 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
     let (c, _guard) = container().await;
     let online = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:2b".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:2b".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let offline = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:2c".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:2c".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("os".into()).await.unwrap();
+    let image_id = ready_image(&c, "os").await;
 
     let mut conn = c.host_registry.register(online.id);
-    let task = core::di::scope(
+    core::di::scope(
         c.clone(),
         crate::hosts::deploy(model::DeployRequest {
             id: online.id,
-            image_id: img.id,
+            image_id,
             inputs: Default::default(),
         }),
     )
     .await
     .unwrap();
-    match conn.receiver.try_recv() {
-        Ok(ServerEvent::Task(t)) => {
-            assert_eq!(t.id, task.id);
-            assert_eq!(t.task_type, imaged_model::TaskType::Deploy);
-        }
-        other => panic!("registered host expected Task event, got {other:?}"),
-    }
+    assert_eq!(conn.receiver.try_recv(), Ok(()));
 
     let offline_task = core::di::scope(
         c.clone(),
         crate::hosts::deploy(model::DeployRequest {
             id: offline.id,
-            image_id: img.id,
+            image_id,
             inputs: Default::default(),
         }),
     )
@@ -1243,34 +1508,11 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
 }
 
 #[tokio::test]
-async fn waking_hosts_normalises_dashed_macs_and_tolerates_malformed_ones() {
-    let (c, _guard) = container().await;
-    *c.machine_ip.write() = Some(std::net::Ipv4Addr::LOCALHOST.into());
-    let dashed = c
-        .host_repo
-        .upsert_host("aa-bb-cc-dd-ee-2e".into(), 1_000_000, None)
-        .await
-        .unwrap();
-    let malformed = c
-        .host_repo
-        .upsert_host("not-a-mac".into(), 1_000_000, None)
-        .await
-        .unwrap();
-
-    core::di::scope(
-        c.clone(),
-        crate::hosts::wake_on_lan(vec![dashed.id, malformed.id]),
-    )
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
 async fn waking_hosts_is_refused_while_the_machine_listener_is_not_running() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:2f".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:2f".into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -1289,17 +1531,17 @@ async fn multicast_hands_one_task_to_registered_members_when_its_session_starts(
     let (c, _guard) = container().await;
     let first = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:30".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:30".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let second = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:31".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:31".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let absent = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:32".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:32".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("cast".into()).await.unwrap();
@@ -1328,8 +1570,8 @@ async fn multicast_hands_one_task_to_registered_members_when_its_session_starts(
 
     for conn in [&mut first_conn, &mut second_conn] {
         match tokio::time::timeout(Duration::from_secs(5), conn.receiver.recv()).await {
-            Ok(Some(ServerEvent::Task(t))) => assert_eq!(t.id, task.id),
-            other => panic!("member expected Task event, got {other:?}"),
+            Ok(Some(())) => {}
+            other => panic!("member expected a dispatch, got {other:?}"),
         }
     }
 }
@@ -1339,7 +1581,7 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:33".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:33".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let _conn = c.host_registry.register(host.id);
@@ -1356,6 +1598,7 @@ async fn scripted_image(c: &DIContainer, root: Option<i64>, inputs: Vec<ScriptIn
         .save_partition(image.id, 2, "ext4", 4096)
         .await
         .unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
     c.image_repo
         .set_root_partition(image.id, root)
         .await
@@ -1408,16 +1651,17 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
     let (c, _guard) = container().await;
     let a = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:41".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:41".into(), Ok(1_000_000), None)
         .await
         .unwrap()
         .id;
     let b = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:42".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:42".into(), Ok(1_000_000), None)
         .await
         .unwrap()
         .id;
+    c.host_repo.update_name(b, "lab-b".into()).await.unwrap();
     let mut mode = text_input("mode", false);
     mode.kind = InputKind::Choice;
     mode.choices = vec!["fast".into(), "safe".into()];
@@ -1450,8 +1694,11 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, AppError::InvalidArgument(_)), "{err:?}");
-    assert!(c.task_repo.get_all().await.unwrap().is_empty());
+    assert!(
+        matches!(&err, AppError::InvalidArgument(m) if m.contains("lab-b") && m.contains("hostname")),
+        "{err:?}"
+    );
+    assert!(all_tasks(&c).await.is_empty());
 
     core::di::scope(
         c.clone(),
@@ -1483,7 +1730,7 @@ async fn an_input_taken_from_a_script_variable_stores_the_variables_value() {
     )]));
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:44".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:44".into(), Ok(1_000_000), None)
         .await
         .unwrap()
         .id;
@@ -1512,7 +1759,7 @@ async fn an_input_taken_from_a_script_variable_stores_the_variables_value() {
         matches!(&err, AppError::InvalidArgument(m) if m.contains("`NOPE`")),
         "{err:?}"
     );
-    assert!(c.task_repo.get_all().await.unwrap().is_empty());
+    assert!(all_tasks(&c).await.is_empty());
 
     let task = core::di::scope(c.clone(), crate::hosts::deploy(request("HOST_KEY")))
         .await
@@ -1534,7 +1781,7 @@ async fn an_image_with_scripts_but_no_root_partition_is_not_deployed() {
     let (c, _guard) = container().await;
     let host = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:43".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:43".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let image = scripted_image(&c, None, Vec::new()).await;
@@ -1559,12 +1806,12 @@ async fn kicking_a_receiving_host_fails_only_that_host_and_tells_it_to_stop() {
     let (c, _guard) = container().await;
     let kicked = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:40".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:40".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let kept = c
         .host_repo
-        .upsert_host("aa:bb:cc:dd:ee:41".into(), 1_000_000, None)
+        .upsert_host("aa:bb:cc:dd:ee:41".into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c.image_repo.create_image("cast".into()).await.unwrap();
@@ -1598,8 +1845,5 @@ async fn kicking_a_receiving_host_fails_only_that_host_and_tells_it_to_stop() {
     let state = |id: i64| after.hosts.iter().find(|h| h.host_id == id).unwrap().state;
     assert_eq!(state(kicked.id), TaskState::Failed);
     assert_eq!(state(kept.id), TaskState::Running);
-    match conn.receiver.try_recv() {
-        Ok(ServerEvent::Cancel(id)) => assert_eq!(id, task.id),
-        other => panic!("kicked host expected Cancel event, got {other:?}"),
-    }
+    assert_eq!(conn.receiver.try_recv(), Ok(()));
 }

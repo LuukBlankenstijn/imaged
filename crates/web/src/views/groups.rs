@@ -9,18 +9,20 @@ use crate::api::groups::{
 use crate::api::hosts::{get_all_hosts, get_hosts_by_group, reboot, wake_on_lan};
 use crate::api::images::get_all_images;
 use crate::components::connection::use_connection;
-use crate::components::deploy_inputs::{DeployInputsForm, submitted_inputs};
+use crate::components::deploy_inputs::{
+    DeployInputsForm, EraseWarning, ImagePicker, multicast_request,
+};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
 use crate::components::modal::{ConfirmDialog, Modal};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
-    Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, StatusDot,
+    Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner, StatusDot,
 };
 use crate::model::{
-    CreateGroupRequest, DeployInputs, Group, Host, Image, ImageStatus, MulticastRequest,
-    UpdateGroupRequest, UpdateName,
+    CreateGroupRequest, DeployInputs, Group, Host, Image, ImageStatus, UpdateGroupRequest,
+    UpdateName,
 };
 
 #[component]
@@ -57,6 +59,8 @@ pub fn Groups() -> Element {
         });
     };
 
+    let polled = groups.read();
+
     rsx! {
         PageHeader { title: "Groups", subtitle: "Named sets of hosts for batch operations" }
         Card { class: "mb-6 p-4",
@@ -64,6 +68,7 @@ pub fn Groups() -> Element {
             input {
                 class: "mb-3 w-full max-w-sm rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
                 placeholder: "Group name",
+                aria_label: "Group name",
                 value: "{name}",
                 oninput: move |e| name.set(e.value()),
             }
@@ -85,11 +90,14 @@ pub fn Groups() -> Element {
                 }
             }
         }
-        match &*groups.read() {
-            Some(Ok(list)) if list.is_empty() => rsx! {
+        if let (Some(_), Some(error)) = (&polled.value, &polled.error) {
+            ErrorBanner { message: format!("Could not refresh groups, showing the last loaded list: {error}") }
+        }
+        match &polled.value {
+            Some(list) if list.is_empty() => rsx! {
                 Card { EmptyState { title: "No groups yet", hint: "Create one above to batch reboots, wakes and multicasts." } }
             },
-            Some(Ok(list)) => rsx! {
+            Some(list) => rsx! {
                 div { class: "flex flex-col gap-2",
                     for (i , g) in list.iter().enumerate() {
                         GroupRow {
@@ -102,11 +110,13 @@ pub fn Groups() -> Element {
                     }
                 }
             },
-            Some(Err(e)) => rsx! {
-                Card { EmptyState { title: "Failed to load groups", hint: e.to_string() } }
-            },
-            None => rsx! {
-                div { class: "flex justify-center py-16", Spinner {} }
+            None => match &polled.error {
+                Some(error) => rsx! {
+                    Card { EmptyState { title: "Failed to load groups", hint: error.clone() } }
+                },
+                None => rsx! {
+                    div { class: "flex justify-center py-16", Spinner {} }
+                },
             },
         }
     }
@@ -234,6 +244,7 @@ fn GroupRow(
     let mut multicast_open = use_signal(|| false);
     let mut reboot_open = use_signal(|| false);
     let mut delete_open = use_signal(|| false);
+    let members_revision = use_signal(|| 0u64);
 
     let menu_name = name.clone();
     let reboot_name = name.clone();
@@ -250,20 +261,14 @@ fn GroupRow(
     rsx! {
         Card { class: "rise overflow-hidden", style: "--d: {delay}ms",
             div { class: "flex items-center gap-3 px-4 py-3",
-                button {
-                    class: "flex min-w-0 flex-1 items-center gap-3 text-left",
-                    onclick: toggle,
-                    Icon {
-                        name: "chevron",
-                        class: if expanded { "w-4 h-4 rotate-180 text-fog-500 transition-transform" } else { "w-4 h-4 text-fog-500 transition-transform" },
-                    }
-                    Icon { name: "group", class: "w-4 h-4 text-amber-500" }
-                    if editing() {
+                if editing() {
+                    div { class: "flex min-w-0 flex-1 items-center gap-3",
+                        Icon { name: "group", class: "w-4 h-4 text-amber-500" }
                         input {
                             class: "w-56 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                            aria_label: "Group name",
                             value: "{draft}",
                             autofocus: true,
-                            onclick: move |e: MouseEvent| e.stop_propagation(),
                             oninput: move |e| draft.set(e.value()),
                             onkeydown: move |e| {
                                 match e.key() {
@@ -284,7 +289,17 @@ fn GroupRow(
                                 }
                             },
                         }
-                    } else {
+                    }
+                } else {
+                    button {
+                        class: "flex min-w-0 flex-1 items-center gap-3 text-left",
+                        aria_expanded: expanded.to_string(),
+                        onclick: toggle,
+                        Icon {
+                            name: "chevron",
+                            class: if expanded { "w-4 h-4 rotate-180 text-fog-500 transition-transform" } else { "w-4 h-4 text-fog-500 transition-transform" },
+                        }
+                        Icon { name: "group", class: "w-4 h-4 text-amber-500" }
                         span { class: "truncate font-medium text-fog-100", "{name}" }
                     }
                 }
@@ -339,14 +354,16 @@ fn GroupRow(
                 }
             }
             if expanded {
-                MemberList { group_id }
+                MemberList { group_id, revision: members_revision }
             }
             if members_open() {
                 EditMembersModal {
                     group_id,
                     onclose: move |_| members_open.set(false),
                     on_saved: move |_| {
+                        let mut members_revision = members_revision;
                         members_open.set(false);
+                        members_revision += 1;
                         on_changed.call(());
                     },
                 }
@@ -410,8 +427,11 @@ async fn group_host_ids(group_id: i64) -> imaged_model::error::Result<Vec<i64>> 
 }
 
 #[component]
-fn MemberList(group_id: i64) -> Element {
-    let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
+fn MemberList(group_id: i64, revision: ReadSignal<u64>) -> Element {
+    let members = use_resource(move || {
+        revision.read();
+        async move { get_hosts_by_group(group_id).await }
+    });
     rsx! {
         div { class: "border-t border-line/60 px-4 py-3",
             match &*members.read() {
@@ -458,6 +478,7 @@ fn EditMembersModal(
     let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
     let selected = use_signal(HashSet::<i64>::new);
     let mut seeded = use_signal(|| false);
+    let mut busy = use_signal(|| false);
 
     use_effect(move || {
         if !seeded()
@@ -469,20 +490,32 @@ fn EditMembersModal(
         }
     });
 
+    let loaded = match (&*all_hosts.read(), &*members.read()) {
+        (Some(Err(e)), _) => Err(("Failed to load hosts", e.to_string())),
+        (_, Some(Err(e))) => Err(("Failed to load members", e.to_string())),
+        (Some(Ok(hosts)), Some(Ok(_))) if seeded() => Ok(Some(hosts.clone())),
+        _ => Ok(None),
+    };
+
     rsx! {
         Modal { open: true, onclose: move |_| onclose.call(()), title: "Edit members",
-            match &*all_hosts.read() {
-                Some(Ok(list)) => rsx! {
-                    HostPicker { hosts: list.clone(), selected }
+            match loaded {
+                Ok(Some(list)) => rsx! {
+                    HostPicker { hosts: list, selected }
                     div { class: "mt-6 flex justify-end gap-2",
                         Button { variant: ButtonVariant::Ghost, onclick: move |_| onclose.call(()), "Cancel" }
                         Button {
+                            disabled: busy(),
                             onclick: move |_| {
                                 let host_ids: Vec<i64> = selected().iter().copied().collect();
+                                busy.set(true);
                                 spawn(async move {
                                     match update_group_memberships(UpdateGroupRequest { id: group_id, host_ids }).await {
                                         Ok(_) => on_saved.call(()),
-                                        Err(err) => toast_error("Update failed", err.to_string()),
+                                        Err(err) => {
+                                            busy.set(false);
+                                            toast_error("Update failed", err.to_string());
+                                        }
                                     }
                                 });
                             },
@@ -490,10 +523,10 @@ fn EditMembersModal(
                         }
                     }
                 },
-                Some(Err(e)) => rsx! {
-                    EmptyState { title: "Failed to load hosts", hint: e.to_string() }
+                Err((title, hint)) => rsx! {
+                    EmptyState { title, hint }
                 },
-                None => rsx! {
+                Ok(None) => rsx! {
                     div { class: "flex justify-center py-8", Spinner {} }
                 },
             }
@@ -505,8 +538,9 @@ fn EditMembersModal(
 fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandler<()>) -> Element {
     let images = use_resource(|| async move { get_all_images().await });
     let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
-    let mut selected = use_signal(|| None::<i64>);
+    let selected = use_signal(|| None::<i64>);
     let inputs = use_signal(|| None::<DeployInputs>);
+    let mut busy = use_signal(|| false);
 
     let loaded = match (&*images.read(), &*members.read()) {
         (Some(Ok(images)), Some(Ok(members))) => Ok(Some((images.clone(), members.clone()))),
@@ -516,9 +550,16 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
     };
 
     rsx! {
-        Modal { open: true, wide: true, onclose: move |_| onclose.call(()), title: "Multicast image",
-            p { class: "mb-4 text-sm text-fog-400", "Stream a ready image to every host in this group simultaneously." }
+        Modal {
+            open: true,
+            wide: true,
+            dismissible: !busy(),
+            onclose: move |_| onclose.call(()),
+            title: "Multicast image",
             match loaded {
+                Ok(Some((_, hosts))) if hosts.is_empty() => rsx! {
+                    EmptyState { title: "Group has no members", hint: "Add hosts to the group first." }
+                },
                 Ok(Some((list, hosts))) => {
                     let ready: Vec<Image> = list
                         .iter()
@@ -527,54 +568,54 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
                         .collect();
                     let chosen = selected()
                         .and_then(|id| ready.iter().find(|i| i.id == id))
-                        .or(ready.first())
                         .cloned();
-                    match chosen {
-                        None => rsx! {
+                    let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
+                    let request = multicast_request(
+                        &host_ids,
+                        chosen.as_ref().map(|i| i.id),
+                        inputs.read().as_ref(),
+                    );
+                    rsx! {
+                        EraseWarning { hosts: hosts.clone() }
+                        if ready.is_empty() {
                             EmptyState { title: "No ready images", hint: "Capture an image first." }
-                        },
-                        Some(_) if hosts.is_empty() => rsx! {
-                            EmptyState { title: "Group has no members", hint: "Add hosts to the group first." }
-                        },
-                        Some(image) => {
-                            let image_id = image.id;
-                            let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
-                            rsx! {
-                                select {
-                                    class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
-                                    value: "{image_id}",
-                                    onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
-                                    for img in ready.iter() {
-                                        option {
-                                            key: "{img.id}",
-                                            value: "{img.id}",
-                                            selected: img.id == image_id,
-                                            "{img.name}"
-                                        }
-                                    }
-                                }
+                        } else {
+                            ImagePicker { images: ready, selected }
+                            if let Some(image) = chosen {
                                 DeployInputsForm { image, hosts, inputs }
-                                div { class: "mt-6 flex justify-end gap-2",
-                                    Button { variant: ButtonVariant::Ghost, onclick: move |_| onclose.call(()), "Cancel" }
-                                    Button {
-                                        disabled: inputs.read().is_none(),
-                                        onclick: move |_| {
-                                            let Some(form) = inputs() else { return };
-                                            let request = MulticastRequest {
-                                                host_ids: host_ids.clone(),
-                                                image_id,
-                                                inputs: submitted_inputs(&form),
-                                            };
-                                            spawn(async move {
-                                                match multicast(request).await {
-                                                    Ok(_) => on_done.call(()),
-                                                    Err(err) => toast_error("Multicast failed", err.to_string()),
+                            }
+                            div { class: "mt-6 flex justify-end gap-2",
+                                Button {
+                                    variant: ButtonVariant::Ghost,
+                                    disabled: busy(),
+                                    onclick: move |_| onclose.call(()),
+                                    "Cancel"
+                                }
+                                Button {
+                                    variant: ButtonVariant::Danger,
+                                    disabled: busy() || request.is_none(),
+                                    onclick: move |_| {
+                                        let Some(request) = request.clone() else { return };
+                                        busy.set(true);
+                                        spawn(async move {
+                                            match multicast(request).await {
+                                                Ok(task) => {
+                                                    toast_success("Multicast queued", format!("Task #{}", task.id));
+                                                    on_done.call(());
                                                 }
-                                            });
-                                        },
+                                                Err(err) => {
+                                                    busy.set(false);
+                                                    toast_error("Multicast failed", err.to_string());
+                                                }
+                                            }
+                                        });
+                                    },
+                                    if busy() {
+                                        Spinner { class: "w-3.5 h-3.5" }
+                                    } else {
                                         Icon { name: "multicast", class: "w-3.5 h-3.5" }
-                                        "Multicast"
                                     }
+                                    "Erase {host_ids.len()} disk(s) and multicast"
                                 }
                             }
                         }

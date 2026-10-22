@@ -39,11 +39,16 @@ impl TaskType {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskHost {
     pub host_id: i64,
+    pub host_name: String,
+    pub mac: String,
     pub state: TaskState,
     pub error: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
 }
+
+pub const SCRIPT_OUTPUT_HEAD_BYTES: usize = 64 * 1024;
+pub const SCRIPT_OUTPUT_TAIL_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScriptRun {
@@ -53,6 +58,23 @@ pub struct ScriptRun {
     pub exit_code: Option<i64>,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+pub const MAX_TASK_PAGE_SIZE: u32 = 200;
+
+#[derive(Debug, Clone)]
+pub struct TaskQuery {
+    pub states: Vec<TaskState>,
+    pub task_type: Option<TaskType>,
+    pub host_id: Option<i64>,
+    pub before: Option<i64>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskPage {
+    pub tasks: Vec<Task>,
+    pub next_cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +167,8 @@ pub trait TaskRepository: Send + Sync {
     // marks one host's row of a task as failed
     async fn mark_failed(&self, task_id: i64, host_id: i64, error: &str) -> Result;
 
+    async fn fail_running(&self, task_type: TaskType, error: &str) -> Result;
+
     // reset a task's failed/cancelled host rows to pending
     async fn retry(&self, id: i64) -> Result;
 
@@ -154,8 +178,7 @@ pub trait TaskRepository: Send + Sync {
     // gets all active tasks for some image
     async fn get_active_by_image(&self, image_id: i64) -> Result<Vec<Task>>;
 
-    // gets all tasks
-    async fn get_all(&self) -> Result<Vec<Task>>;
+    async fn list(&self, query: &TaskQuery) -> Result<TaskPage>;
 
     async fn get(&self, id: i64) -> Result<Task>;
 
@@ -197,6 +220,8 @@ mod tests {
     fn host(state: TaskState) -> TaskHost {
         TaskHost {
             host_id: 1,
+            host_name: "pc".to_string(),
+            mac: "52:54:00:00:00:01".to_string(),
             state,
             error: None,
             started_at: None,

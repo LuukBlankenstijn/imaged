@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use crate::agent::Agent;
 use crate::status::Outcome;
+pub use types::ClientState;
 use types::RunningTask;
-pub use types::{ClientState, RunnableClientTask};
 
 pub use implementations::{
     CaptureTask, ClientTaskExt, DeployTask, MulticastTask, RebootTask, Task,
@@ -20,39 +20,42 @@ const PARTTABLE_TMP: &str = "/parttable.bin";
 pub async fn handle_message(
     agent: &Agent,
     state: Arc<ClientState>,
-    msg: imaged_model::ServerEvent,
+    event: imaged_model::ServerEvent,
 ) {
-    match msg {
-        imaged_model::ServerEvent::Task(task) => start_task(agent, state, task).await,
-        imaged_model::ServerEvent::Cancel(task_id) => state.cancel(task_id).await,
+    let imaged_model::ServerEvent::Current(current) = event;
+    let mut running = state.current_task.lock().await;
+    match (running.as_ref(), current) {
+        (Some(task), Some(current)) if task.task_id == current.id => {}
+        (Some(task), _) => {
+            tracing::warn!(
+                task_id = task.task_id,
+                "the server no longer lists the running task as current, cancelling it"
+            );
+            task.cancel.cancel();
+        }
+        (None, Some(current)) => *running = Some(start_task(agent, state.clone(), current)),
+        (None, None) => {}
     }
 }
 
-async fn start_task(agent: &Agent, state: Arc<ClientState>, task: imaged_model::Task) {
-    let mut current = state.current_task.lock().await;
-    if current.is_some() {
-        tracing::warn!("task already running, ignoring new task");
-        return;
-    }
-
-    let cancel = tokio_util::sync::CancellationToken::new();
+fn start_task(agent: &Agent, state: Arc<ClientState>, task: imaged_model::Task) -> RunningTask {
+    let cancel = CancellationToken::new();
     let cancel_for_task = cancel.clone();
-    let state_for_task = state.clone();
     let runnable = Task::new(agent.clone(), &task);
     agent.status.task_started(&task);
 
     let handle = tokio::spawn(async move {
         tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
         run_task(runnable, cancel_for_task).await;
-        let mut current = state_for_task.current_task.lock().await;
-        *current = None;
+        *state.current_task.lock().await = None;
+        state.became_idle();
     });
 
-    *current = Some(RunningTask {
+    RunningTask {
         task_id: task.id,
         _handle: handle,
         cancel,
-    });
+    }
 }
 
 async fn run_task(task: Task, cancel_for_task: CancellationToken) {

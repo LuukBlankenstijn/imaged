@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{StreamBehavior, StubConfig, StubServer, agent_server, fake_bins, stub_server};
-use imaged_agent::connection::{self, Backoff};
+use imaged_agent::connection::{self, Timing};
 use imaged_agent::task::ClientState;
 use imaged_model::progress::{HostProgress, Stage};
 use imaged_model::{AgentEvent, ServerEvent, Task, TaskType};
@@ -14,10 +14,12 @@ use tokio_util::sync::CancellationToken;
 const MAC: &str = "aa:bb:cc:dd:ee:ff";
 const TASK_ID: i64 = 7;
 
-// Tight backoff so reconnects happen in milliseconds instead of the production 1s..30s.
-const TEST_BACKOFF: Backoff = Backoff {
-    start: Duration::from_millis(5),
-    cap: Duration::from_millis(20),
+// Tight backoff so reconnects happen in milliseconds instead of the production 250ms..5s.
+// The stub never pings on its own, so the silence limit stays out of the way.
+const TEST_TIMING: Timing = Timing {
+    retry_start: Duration::from_millis(5),
+    retry_cap: Duration::from_millis(20),
+    server_silence: Duration::from_secs(60),
 };
 
 // A fake `lsblk` that blocks before reporting no usable disks. The block keeps
@@ -98,7 +100,7 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
     let task = Task::new(TASK_ID, TaskType::Deploy, Some(1));
     let server = stub_server(
         StubConfig::new()
-            .with_event(ServerEvent::Task(task))
+            .with_event(ServerEvent::Current(Some(task)))
             .stream_behavior(StreamBehavior::HoldOpen),
     )
     .await;
@@ -107,7 +109,7 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
     let state = Arc::new(ClientState::default());
 
     let driver = async {
-        // The pending Task sent on connect reaches handle_message and lands in ClientState.
+        // The current task sent on connect reaches handle_message and lands in ClientState.
         wait_for_task(&state, Some(TASK_ID)).await;
         assert_eq!(
             server.upgrades(),
@@ -134,16 +136,35 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
             "the running task must be untouched by the reconnect"
         );
 
-        // A Cancel pushed on the reconnected socket reaches handle_message and cancels the
-        // running task, proving events are received on the fresh connection.
-        server.send_event(ServerEvent::Cancel(TASK_ID));
+        // The server naming no current task (the task was cancelled) on the reconnected
+        // socket cancels the running task, proving events are received on the fresh connection.
+        server.send_event(ServerEvent::Current(None));
         tokio::time::timeout(Duration::from_secs(5), token.cancelled())
             .await
-            .expect("a Cancel on the reconnected socket must cancel the running task");
+            .expect("no current task on the reconnected socket must cancel the running task");
+
+        // Once the slot is free the agent asks for its next task, and starts whatever the
+        // server then names: a task queued while the agent was busy is not lost.
+        wait_for_task(&state, None).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !server.agent_events().contains(&AgentEvent::Idle) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "an idle agent must ask for its next task, sent {:?}",
+                server.agent_events()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        server.send_event(ServerEvent::Current(Some(Task::new(
+            TASK_ID + 1,
+            TaskType::Deploy,
+            Some(1),
+        ))));
+        wait_for_task(&state, Some(TASK_ID + 1)).await;
     };
 
     tokio::select! {
-        _ = connection::run(agent, state.clone(), 1024, TEST_BACKOFF) => {
+        _ = connection::run(agent, state.clone(), Ok(1024), TEST_TIMING) => {
             unreachable!("the agent must never exit because the connection dropped")
         }
         _ = driver => {}
@@ -172,9 +193,26 @@ async fn the_latest_progress_is_sent_on_connect_and_again_after_a_reconnect() {
     };
 
     tokio::select! {
-        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), 1024, TEST_BACKOFF) => {
+        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), Ok(1024), TEST_TIMING) => {
             unreachable!("the agent must never exit because the connection dropped")
         }
         _ = driver => {}
+    }
+}
+
+#[tokio::test]
+async fn a_server_that_goes_silent_is_given_up_on_and_reconnected_to() {
+    let server = stub_server(StubConfig::new().stream_behavior(StreamBehavior::Silent)).await;
+    let agent = agent_server(&server.base_url, MAC);
+    let timing = Timing {
+        server_silence: Duration::from_millis(200),
+        ..TEST_TIMING
+    };
+
+    tokio::select! {
+        _ = connection::run(agent, Arc::new(ClientState::default()), Ok(1024), timing) => {
+            unreachable!("the agent must never exit because the server went silent")
+        }
+        _ = wait_for_upgrades(&server, 3) => {}
     }
 }

@@ -10,6 +10,8 @@ use imaged_core::di::{
     HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, ScriptVariables, TaskRepo,
 };
 #[cfg(feature = "server")]
+use imaged_core::domain::host::Host as DHost;
+#[cfg(feature = "server")]
 use imaged_core::domain::script::resolve_inputs;
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
@@ -63,20 +65,20 @@ pub async fn deploy(req: DeployRequest) -> Result<Task> {
     let task = task_repo
         .create_with_inputs(TaskType::Deploy, vec![req.id], Some(req.image_id), &inputs)
         .await?;
-    registry.send_task(req.id, &task);
+    registry.dispatch(req.id);
     Ok(task.into())
 }
 
 #[post("/api/ui/hosts/reboot")]
 #[inject(task_repo: TaskRepo, registry: Registry)]
-pub async fn reboot(host_ids: Vec<i64>) -> Result<()> {
+pub async fn reboot(host_ids: Vec<i64>) -> Result<Task> {
     let task = task_repo
         .create(TaskType::Reboot, host_ids.clone(), None)
         .await?;
     for id in host_ids {
-        registry.send_task(id, &task);
+        registry.dispatch(id);
     }
-    Ok(())
+    Ok(task.into())
 }
 
 #[post("/api/ui/hosts/wake")]
@@ -95,8 +97,7 @@ pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
         .into_iter()
         .filter(|h| wanted.contains(&h.id))
     {
-        let normalized = host.mac_address.replace('-', ":");
-        match wakey::WolPacket::from_string(&normalized, ':') {
+        match wakey::WolPacket::from_string(&host.mac_address, ':') {
             Ok(packet) => {
                 if let Err(e) = packet.send_magic_to(src, dest) {
                     tracing::warn!(mac = %host.mac_address, err = %e, "failed to send wake-on-lan packet");
@@ -111,6 +112,29 @@ pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
 }
 
 #[cfg(feature = "server")]
+#[inject(host_repo: HostRepo)]
+pub(crate) async fn imaging_targets(host_ids: &[i64]) -> Result<Vec<DHost>> {
+    let mut known: BTreeMap<i64, DHost> = host_repo
+        .get_all(None)
+        .await?
+        .into_iter()
+        .map(|h| (h.id, h))
+        .collect();
+    let hosts = host_ids
+        .iter()
+        .map(|id| {
+            known
+                .remove(id)
+                .ok_or_else(|| AppError::NotFound(format!("host {id}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for host in &hosts {
+        host.usable_disk()?;
+    }
+    Ok(hosts)
+}
+
+#[cfg(feature = "server")]
 #[inject(image_repo: ImageRepo, script_repo: ScriptRepo, script_variables: ScriptVariables)]
 pub(crate) async fn host_inputs(
     image_id: i64,
@@ -118,6 +142,13 @@ pub(crate) async fn host_inputs(
     inputs: DeployInputs,
 ) -> Result<BTreeMap<i64, InputValues>> {
     let image = image_repo.get(image_id).await?;
+    if !image.status.is_ready() {
+        return Err(AppError::FailedPrecondition(format!(
+            "image {} is {}, only a ready image can be deployed",
+            image.name, image.status
+        )));
+    }
+    let hosts = imaging_targets(host_ids).await?;
     let scripts = script_repo.get_for_image(image_id).await?;
     if !scripts.is_empty() && image.root_partition.is_none() {
         return Err(AppError::FailedPrecondition(format!(
@@ -125,5 +156,5 @@ pub(crate) async fn host_inputs(
             image.name
         )));
     }
-    resolve_inputs(&scripts, host_ids, &inputs.resolve(&script_variables)?)
+    resolve_inputs(&scripts, &hosts, &inputs.resolve(&script_variables)?)
 }

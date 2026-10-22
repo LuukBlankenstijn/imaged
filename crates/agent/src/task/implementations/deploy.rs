@@ -28,8 +28,14 @@ impl ClientTaskExt for DeployTask {
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         let data = self.agent.server.partition_table(self.task_id).await?;
+        let layout = self.agent.server.image_layout(self.task_id).await?;
         tokio::fs::write(PARTTABLE_TMP, data).await?;
-        restore_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
+        restore_partition_table(
+            Path::new(device),
+            Path::new(PARTTABLE_TMP),
+            layout.sector_size,
+        )
+        .await?;
 
         let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
         Ok(())

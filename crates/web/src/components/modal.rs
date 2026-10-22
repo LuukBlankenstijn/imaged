@@ -17,7 +17,14 @@ pub fn Modal(
     }
     let width = if wide { "max-w-5xl" } else { "max-w-lg" };
     rsx! {
-        div { class: "fixed inset-0 z-50 flex items-center justify-center p-4",
+        div {
+            class: "fixed inset-0 z-50 flex items-center justify-center p-4",
+            onkeydown: move |e: KeyboardEvent| {
+                if dismissible && e.key() == Key::Escape {
+                    e.stop_propagation();
+                    onclose.call(())
+                }
+            },
             div {
                 class: "absolute inset-0 bg-ink-950/75 backdrop-blur-sm",
                 onclick: move |_| {
@@ -26,12 +33,22 @@ pub fn Modal(
                     }
                 },
             }
-            div { class: "relative z-10 flex max-h-[calc(100vh-2rem)] w-full {width} flex-col rounded-xl border border-line bg-ink-850 text-left shadow-2xl rise",
+            div {
+                class: "relative z-10 flex max-h-[calc(100vh-2rem)] w-full {width} flex-col rounded-xl border border-line bg-ink-850 text-left shadow-2xl rise focus:outline-none",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: (!title.is_empty()).then(|| title.clone()),
+                tabindex: "-1",
+                onmounted: move |e| async move {
+                    let _ = e.set_focus(true).await;
+                },
                 if !title.is_empty() {
                     div { class: "flex items-center justify-between border-b border-line px-5 py-3",
                         h3 { class: "font-display text-lg text-fog-100", "{title}" }
                         button {
                             class: "text-fog-500 hover:text-fog-100",
+                            aria_label: "Close",
+                            title: "Close",
                             onclick: move |_| onclose.call(()),
                             Icon { name: "close" }
                         }

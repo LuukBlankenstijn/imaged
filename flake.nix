@@ -278,22 +278,28 @@
 
       nixosModules.default =
         {
+          config,
           pkgs,
           lib,
           ...
         }:
         {
           imports = [ ./nix/modules/server.nix ];
-          nix.settings = {
-            substituters = [ "https://luukblankenstijn.cachix.org" ];
-            trusted-public-keys = [
-              "luukblankenstijn.cachix.org-1:gRz/ypm8zdDizcdAuWD6UKLVBDeObfHsNDWoAka2WSw="
-            ];
-          };
 
-          services.imaged.server.package =
-            lib.mkDefault
-              self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
+          options.services.imaged.server.useBinaryCache = lib.mkEnableOption "trusting the luukblankenstijn.cachix.org binary cache system-wide, so imaged-server is downloaded instead of built";
+
+          config = {
+            nix.settings = lib.mkIf config.services.imaged.server.useBinaryCache {
+              substituters = [ "https://luukblankenstijn.cachix.org" ];
+              trusted-public-keys = [
+                "luukblankenstijn.cachix.org-1:gRz/ypm8zdDizcdAuWD6UKLVBDeObfHsNDWoAka2WSw="
+              ];
+            };
+
+            services.imaged.server.package =
+              lib.mkDefault
+                self.packages.${pkgs.stdenv.hostPlatform.system}.imaged-server;
+          };
         };
 
       nixosModules.image =

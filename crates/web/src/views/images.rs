@@ -23,8 +23,10 @@ pub fn Images() -> Element {
 
     let mut new_name = use_signal(String::new);
     let mut host_id = use_signal(|| 0i64);
+    let mut capturing = use_signal(|| false);
 
-    let can_create = !new_name.read().trim().is_empty() && host_id() != 0;
+    let can_create = !new_name.read().trim().is_empty() && host_id() != 0 && !capturing();
+    let polled = images.read();
 
     rsx! {
         PageHeader { title: "Images", subtitle: "Captured disk images available to deploy",
@@ -34,10 +36,13 @@ pub fn Images() -> Element {
         Card { class: "mb-6 p-4",
             div { class: "flex flex-wrap items-end gap-3",
                 div { class: "min-w-52 flex-1",
-                    label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                    label {
+                        class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        r#for: "capture-name",
                         "Image name"
                     }
                     input {
+                        id: "capture-name",
                         class: "w-full rounded-md border border-ink-600 bg-ink-900/60 px-3 py-1.5 font-mono text-sm text-fog-100 placeholder:text-fog-600 focus:border-amber-500/60 focus:outline-none focus-visible:glow-amber",
                         placeholder: "golden-image-01",
                         value: "{new_name}",
@@ -45,11 +50,14 @@ pub fn Images() -> Element {
                     }
                 }
                 div { class: "min-w-48",
-                    label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                    label {
+                        class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        r#for: "capture-host",
                         "Source host"
                     }
                     div { class: "relative",
                         select {
+                            id: "capture-host",
                             class: "w-full appearance-none rounded-md border border-ink-600 bg-ink-900/60 px-3 py-1.5 pr-9 font-mono text-sm text-fog-100 focus:border-amber-500/60 focus:outline-none focus-visible:glow-amber",
                             value: "{host_id}",
                             onchange: move |e| host_id.set(e.value().parse().unwrap_or(0)),
@@ -82,26 +90,39 @@ pub fn Images() -> Element {
                         let mut images = images;
                         let mut new_name = new_name;
                         let mut host_id = host_id;
+                        capturing.set(true);
                         spawn(async move {
                             match create_image(CreateImageRequest { name, host_id: hid }).await {
-                                Ok(_) => {
+                                Ok(capture) => {
+                                    toast_success(
+                                        "Capture queued",
+                                        format!("{} · task #{}", capture.image.name, capture.task.id),
+                                    );
                                     new_name.set(String::new());
                                     host_id.set(0);
                                     images.restart();
                                 }
                                 Err(e) => toast_error("Capture failed", e.to_string()),
                             }
+                            capturing.set(false);
                         });
                     },
-                    Icon { name: "capture", class: "w-4 h-4" }
+                    if capturing() {
+                        Spinner { class: "w-4 h-4" }
+                    } else {
+                        Icon { name: "capture", class: "w-4 h-4" }
+                    }
                     "Capture"
                 }
             }
         }
 
+        if let (Some(_), Some(error)) = (&polled.value, &polled.error) {
+            ErrorBanner { message: format!("Could not refresh images, showing the last loaded list: {error}") }
+        }
         {
-            match &*images.read() {
-                Some(Ok(list)) if list.is_empty() => rsx! {
+            match &polled.value {
+                Some(list) if list.is_empty() => rsx! {
                     Card {
                         EmptyState {
                             title: "No images captured",
@@ -109,7 +130,7 @@ pub fn Images() -> Element {
                         }
                     }
                 },
-                Some(Ok(list)) => rsx! {
+                Some(list) => rsx! {
                     div { class: "flex flex-col gap-3",
                         for (i , img) in list.iter().enumerate() {
                             ImageRow {
@@ -121,13 +142,15 @@ pub fn Images() -> Element {
                         }
                     }
                 },
-                Some(Err(e)) => rsx! {
-                    Card {
-                        EmptyState { title: "Failed to load images", hint: e.to_string() }
-                    }
-                },
-                None => rsx! {
-                    div { class: "flex justify-center py-16", Spinner {} }
+                None => match &polled.error {
+                    Some(error) => rsx! {
+                        Card {
+                            EmptyState { title: "Failed to load images", hint: error.clone() }
+                        }
+                    },
+                    None => rsx! {
+                        div { class: "flex justify-center py-16", Spinner {} }
+                    },
                 },
             }
         }
@@ -140,14 +163,16 @@ fn ImportButton(on_imported: EventHandler<()>) -> Element {
     let classes = button_classes(ButtonVariant::Ghost);
 
     rsx! {
-        label { class: "{classes} cursor-pointer", title: "Import an exported .imaged archive",
+        label {
+            class: "{classes} cursor-pointer focus-within:glow-amber",
+            title: "Import an exported .imaged archive",
             if importing() {
                 Spinner { class: "w-4 h-4" }
             } else {
                 input {
                     r#type: "file",
                     accept: ".imaged",
-                    class: "hidden",
+                    class: "sr-only",
                     onchange: move |e| {
                         let Some(file) = e.files().into_iter().next() else {
                             return;
@@ -213,12 +238,14 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                             div { class: "flex items-center gap-2",
                                 input {
                                     class: "min-w-0 flex-1 rounded-md border border-amber-500/50 bg-ink-900/60 px-2 py-1 font-mono text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                                    aria_label: "Image name",
                                     value: "{draft}",
                                     oninput: move |e| draft.set(e.value()),
                                 }
                                 Button {
                                     variant: ButtonVariant::Subtle,
                                     class: "px-1.5",
+                                    label: "Save name",
                                     onclick: move |_| {
                                         let mut editing = editing;
                                         let new_name = draft.read().trim().to_string();
@@ -241,6 +268,7 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                                 Button {
                                     variant: ButtonVariant::Subtle,
                                     class: "px-1.5",
+                                    label: "Cancel rename",
                                     onclick: move |_| editing.set(false),
                                     Icon { name: "close", class: "w-4 h-4" }
                                 }
@@ -250,6 +278,8 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                                 span { class: "truncate font-display text-fog-100", "{name}" }
                                 button {
                                     class: "text-fog-600 transition-colors hover:text-amber-400",
+                                    aria_label: "Rename image",
+                                    title: "Rename image",
                                     onclick: move |_| {
                                         editing.set(true);
                                         draft.set(name_for_edit.clone());
@@ -278,6 +308,8 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                     Button {
                         variant: if setup_open() { ButtonVariant::Primary } else { ButtonVariant::Ghost },
                         class: "px-2",
+                        label: "Post-install setup",
+                        expanded: setup_open(),
                         onclick: move |_| setup_open.toggle(),
                         Icon { name: "script", class: "w-4 h-4" }
                     }
@@ -288,12 +320,14 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                             download: "",
                             rel: "noreferrer",
                             title: "Export image",
+                            aria_label: "Export image",
                             Icon { name: "download", class: "w-4 h-4" }
                         }
                     }
                     Button {
                         variant: ButtonVariant::Danger,
                         class: "px-2",
+                        label: "Delete image",
                         onclick: move |_| confirm_open.set(true),
                         Icon { name: "trash", class: "w-4 h-4" }
                     }
@@ -337,7 +371,7 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
         ConfirmDialog {
             open: confirm_open(),
             title: "Delete image",
-            message: "Permanently delete \"{name_for_msg}\" and its captured data? Active tasks must be cancelled first.",
+            message: "Permanently delete \"{name_for_msg}\" and its captured data? A capture of it that is still running is cancelled. While the image is being deployed or multicast, deleting is refused: cancel those tasks first.",
             confirm_label: "Delete",
             danger: true,
             onconfirm: move |_| {
@@ -373,6 +407,7 @@ fn RootPartitionPicker(image: Image, on_changed: EventHandler<()>) -> Element {
             } else {
                 select {
                     class: "{FIELD_CLASSES} w-full font-mono",
+                    aria_label: "Root partition",
                     value: "{current}",
                     onchange: move |e| {
                         let partition_number = e.value().parse::<i64>().ok();
@@ -447,6 +482,7 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
                             Button {
                                 variant: ButtonVariant::Subtle,
                                 class: "px-1.5",
+                                label: "Run {script.name} earlier",
                                 disabled: index == 0,
                                 onclick: move |_| draft.write().swap(index, index - 1),
                                 Icon { name: "chevron", class: "w-3.5 h-3.5 rotate-180" }
@@ -454,6 +490,7 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
                             Button {
                                 variant: ButtonVariant::Subtle,
                                 class: "px-1.5",
+                                label: "Run {script.name} later",
                                 disabled: index + 1 == count,
                                 onclick: move |_| draft.write().swap(index, index + 1),
                                 Icon { name: "chevron", class: "w-3.5 h-3.5" }
@@ -461,6 +498,7 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
                             Button {
                                 variant: ButtonVariant::Subtle,
                                 class: "px-1.5 hover:text-bad",
+                                label: "Detach {script.name}",
                                 onclick: move |_| {
                                     draft.write().remove(index);
                                 },
@@ -473,6 +511,7 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
             div { class: "mt-2 flex flex-wrap items-center gap-2",
                 select {
                     class: "{FIELD_CLASSES} min-w-48 flex-1 font-mono",
+                    aria_label: "Add script",
                     value: "",
                     disabled: available.is_empty(),
                     onchange: {

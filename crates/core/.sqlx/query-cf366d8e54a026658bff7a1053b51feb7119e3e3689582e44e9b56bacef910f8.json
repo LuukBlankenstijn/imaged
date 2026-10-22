@@ -37,6 +37,11 @@
         "name": "root_partition",
         "ordinal": 6,
         "type_info": "Integer"
+      },
+      {
+        "name": "sector_size",
+        "ordinal": 7,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -49,7 +54,8 @@
       false,
       true,
       true,
-      true
+      true,
+      false
     ]
   },
   "hash": "cf366d8e54a026658bff7a1053b51feb7119e3e3689582e44e9b56bacef910f8"

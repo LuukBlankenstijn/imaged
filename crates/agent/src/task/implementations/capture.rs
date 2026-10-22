@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use super::{ClientTaskExt, PARTCLONE_LOG};
 use crate::agent::Agent;
 use crate::status::PartitionProgress;
-use crate::sys::disk::PartitionTarget;
+use crate::sys::disk::{PartitionTarget, repair_filesystem};
 use crate::task::PARTTABLE_TMP;
 
 #[derive(Constructor, Clone, Display)]
@@ -27,12 +27,12 @@ impl ClientTaskExt for CaptureTask {
     }
 
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
-        backup_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
+        let table = backup_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
 
         let bytes = tokio::fs::read(PARTTABLE_TMP).await?;
         self.agent
             .server
-            .upload_partition_table(self.task_id, bytes.into())
+            .upload_partition_table(self.task_id, table.sector_size, bytes.into())
             .await?;
 
         let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
@@ -44,6 +44,7 @@ impl ClientTaskExt for CaptureTask {
         partition: PartitionTarget,
         progress: PartitionProgress,
     ) -> anyhow::Result<()> {
+        repair_filesystem(&partition).await?;
         let compressed = clone_compressed(
             partition.filesystem,
             Path::new(&partition.device),

@@ -7,7 +7,7 @@ pub use imaged_model::host::{ConnectionChange, HostConnectionEvent};
 pub use imaged_model::image::{ImagePartition, ImageStatus};
 pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
 pub use imaged_model::progress::{HostProgress, Stage};
-pub use imaged_model::script::{DeployInputs, InputKind, InputSource, InputSources};
+pub use imaged_model::script::{DeployInputs, InputKind, InputSource, InputSources, ScriptInput};
 pub use imaged_model::task::TaskState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,7 +15,8 @@ pub struct Host {
     pub id: i64,
     pub mac_address: String,
     pub name: String,
-    pub disk_size_bytes: u64,
+    pub disk_size_bytes: Option<u64>,
+    pub disk_error: Option<String>,
     pub ip: Option<String>,
 }
 
@@ -65,6 +66,8 @@ pub enum TaskType {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskHost {
     pub host_id: i64,
+    pub host_name: String,
+    pub mac_address: String,
     pub state: TaskState,
     pub error: Option<String>,
     pub started_at: Option<i64>,
@@ -83,6 +86,36 @@ pub struct Task {
     pub image_deleted: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Active,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<TaskType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskPage {
+    pub tasks: Vec<Task>,
+    pub next_cursor: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateName {
     pub id: i64,
@@ -90,6 +123,7 @@ pub struct UpdateName {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployRequest {
     pub id: i64,
     pub image_id: i64,
@@ -98,6 +132,7 @@ pub struct DeployRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MulticastRequest {
     pub host_ids: Vec<i64>,
     pub image_id: i64,
@@ -112,6 +147,12 @@ pub struct CreateImageRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageCapture {
+    pub image: Image,
+    pub task: Task,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateGroupRequest {
     pub name: String,
     pub host_ids: Vec<i64>,
@@ -121,22 +162,6 @@ pub struct CreateGroupRequest {
 pub struct UpdateGroupRequest {
     pub id: i64,
     pub host_ids: Vec<i64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScriptInput {
-    pub name: String,
-    pub label: String,
-    #[serde(
-        default,
-        deserialize_with = "imaged_model::script::deserialize_description"
-    )]
-    pub description: Option<String>,
-    pub kind: InputKind,
-    pub required: bool,
-    pub default_value: Option<String>,
-    pub per_machine: bool,
-    pub choices: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

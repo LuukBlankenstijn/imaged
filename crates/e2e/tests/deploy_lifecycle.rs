@@ -53,9 +53,9 @@ async fn a_deploy_runs_end_to_end_in_the_agents_order() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("task event");
-    assert_eq!(event["Task"]["id"], task_id);
-    assert_eq!(event["Task"]["task_type"], "Deploy");
-    assert_eq!(event["Task"]["image_id"], image_id);
+    assert_eq!(event["Current"]["id"], task_id);
+    assert_eq!(event["Current"]["task_type"], "Deploy");
+    assert_eq!(event["Current"]["image_id"], image_id);
 
     let task = s.container.task_repo.get(task_id).await.unwrap();
     assert_eq!(host_state(&task, host.id), TaskState::Pending);
@@ -63,7 +63,9 @@ async fn a_deploy_runs_end_to_end_in_the_agents_order() {
 
     let resp = s.agent_get(&path::partitions(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let parts: Vec<serde_json::Value> = resp.json().await.expect("partitions json");
+    let layout: serde_json::Value = resp.json().await.expect("layout json");
+    assert_eq!(layout["sector_size"], 512);
+    let parts = layout["partitions"].as_array().expect("partitions");
     assert_eq!(parts.len(), 2);
     let get = |num: i64| {
         parts
@@ -120,11 +122,9 @@ async fn a_dashboard_deploy_reaches_a_connected_agent() {
     let mut stream = harness::connect_agent_stream(s, &mac, DISK)
         .await
         .expect("connect");
-    assert!(
-        stream
-            .next_event(Duration::from_millis(300))
-            .await
-            .is_none(),
+    assert_eq!(
+        stream.next_event(Duration::from_secs(5)).await,
+        Some(json!({ "Current": null })),
         "no task should be queued yet"
     );
 
@@ -142,9 +142,9 @@ async fn a_dashboard_deploy_reaches_a_connected_agent() {
         .next_event(Duration::from_secs(2))
         .await
         .expect("dashboard deploy pushed to the agent");
-    assert_eq!(event["Task"]["id"], task_id);
-    assert_eq!(event["Task"]["task_type"], "Deploy");
-    assert_eq!(event["Task"]["image_id"], image_id);
+    assert_eq!(event["Current"]["id"], task_id);
+    assert_eq!(event["Current"]["task_type"], "Deploy");
+    assert_eq!(event["Current"]["image_id"], image_id);
 
     drop(stream);
 }

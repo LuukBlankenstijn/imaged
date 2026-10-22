@@ -19,6 +19,10 @@ impl ClientTaskExt for RebootTask {
         &self.agent
     }
 
+    async fn run(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn finalize(&self) -> anyhow::Result<()> {
         super::finish_and_reboot(self).await
     }

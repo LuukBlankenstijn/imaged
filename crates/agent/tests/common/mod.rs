@@ -21,7 +21,9 @@ use tokio::sync::broadcast;
 use imaged_agent::agent::Agent;
 use imaged_agent::server::Server;
 use imaged_agent::status::{Identity, Status};
-use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, TaskFailure, route};
+use imaged_model::agent::{
+    ImageLayout, ImagePartition, MAC_HEADER, MacAddress, PostInstall, TaskFailure, route,
+};
 use imaged_model::{AgentEvent, ServerEvent};
 use reqwest::Url;
 
@@ -69,6 +71,7 @@ pub struct StubConfig {
     pub force_status: HashMap<Route, u16>,
     pub stream_behavior: StreamBehavior,
     pub post_install: HashMap<i64, PostInstall>,
+    pub transient_failures: HashMap<Route, usize>,
 }
 
 impl StubConfig {
@@ -110,6 +113,12 @@ impl StubConfig {
         self.force_status.insert(route, status);
         self
     }
+
+    /// Answer the first `times` requests to `route` with 503 Service Unavailable.
+    pub fn fail_transiently(mut self, route: Route, times: usize) -> Self {
+        self.transient_failures.insert(route, times);
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +130,7 @@ pub struct RecordedRequest {
 
 struct AppState {
     cfg: StubConfig,
+    transient_failures: Mutex<HashMap<Route, usize>>,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     finished: Arc<Mutex<Vec<i64>>>,
     failed: Arc<Mutex<Vec<(i64, String)>>>,
@@ -204,6 +214,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
     let agent_events = Arc::new(Mutex::new(Vec::new()));
 
     let state = Arc::new(AppState {
+        transient_failures: Mutex::new(cfg.transient_failures.clone()),
         cfg,
         requests: requests.clone(),
         finished: finished.clone(),
@@ -263,16 +274,28 @@ async fn record_mw(State(state): State<Arc<AppState>>, req: Request, next: Next)
     next.run(req).await
 }
 
-fn forced(cfg: &StubConfig, route: Route) -> Option<Response> {
-    cfg.force_status.get(&route).map(|&code| {
-        let status = StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        let body = serde_json::json!({ "error": format!("forced status {code}") }).to_string();
-        (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
-    })
+fn forced(s: &AppState, route: Route) -> Option<Response> {
+    let transient = s
+        .transient_failures
+        .lock()
+        .unwrap()
+        .get_mut(&route)
+        .filter(|left| **left > 0)
+        .map(|left| {
+            *left -= 1;
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        });
+    transient
+        .or_else(|| s.cfg.force_status.get(&route).copied())
+        .map(|code| {
+            let status = StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            let body = serde_json::json!({ "error": format!("forced status {code}") }).to_string();
+            (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
+        })
 }
 
 async fn parttable(State(s): State<Arc<AppState>>, Path(_task_id): Path<i64>) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Parttable) {
+    if let Some(r) = forced(&s, Route::Parttable) {
         return r;
     }
     (
@@ -283,17 +306,21 @@ async fn parttable(State(s): State<Arc<AppState>>, Path(_task_id): Path<i64>) ->
 }
 
 async fn partitions(State(s): State<Arc<AppState>>, Path(_task_id): Path<i64>) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Partitions) {
+    if let Some(r) = forced(&s, Route::Partitions) {
         return r;
     }
-    Json(s.cfg.partitions.clone()).into_response()
+    Json(ImageLayout {
+        sector_size: 512,
+        partitions: s.cfg.partitions.clone(),
+    })
+    .into_response()
 }
 
 async fn partition_data(
     State(s): State<Arc<AppState>>,
     Path((_task_id, n)): Path<(i64, i64)>,
 ) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::PartitionData) {
+    if let Some(r) = forced(&s, Route::PartitionData) {
         return r;
     }
     let Some(data) = s.cfg.partition_data.get(&n).cloned() else {
@@ -336,7 +363,7 @@ async fn post_install(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) 
 }
 
 async fn finished_route(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Finished) {
+    if let Some(r) = forced(&s, Route::Finished) {
         return r;
     }
     s.finished.lock().unwrap().push(task_id);
@@ -348,7 +375,7 @@ async fn failed_route(
     Path(task_id): Path<i64>,
     body: Option<Json<TaskFailure>>,
 ) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Failed) {
+    if let Some(r) = forced(&s, Route::Failed) {
         return r;
     }
     let reason = body.map(|Json(b)| b.error).unwrap_or_default();
@@ -357,14 +384,14 @@ async fn failed_route(
 }
 
 async fn disconnect(State(s): State<Arc<AppState>>) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Disconnect) {
+    if let Some(r) = forced(&s, Route::Disconnect) {
         return r;
     }
     StatusCode::OK.into_response()
 }
 
 async fn stream(State(s): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
-    if let Some(r) = forced(&s.cfg, Route::Stream) {
+    if let Some(r) = forced(&s, Route::Stream) {
         return r;
     }
     ws.on_upgrade(move |socket| handle_socket(s, socket))
@@ -432,7 +459,7 @@ async fn handle_socket(s: Arc<AppState>, mut socket: WebSocket) {
 
 pub fn agent_server(base_url: &str, mac: &str) -> Agent {
     let url = Url::parse(base_url).expect("valid base url");
-    let parsed: mac_address::MacAddress = mac.parse().expect("valid mac address");
+    let parsed: MacAddress = mac.parse().expect("valid mac address");
     Agent {
         server: Arc::new(Server::new(url, parsed, None).expect("agent server client")),
         status: Status::new(Identity {

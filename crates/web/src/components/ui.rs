@@ -35,15 +35,33 @@ pub fn Button(
     #[props(default)] disabled: bool,
     #[props(default)] onclick: EventHandler<MouseEvent>,
     #[props(default)] class: String,
+    #[props(default)] label: String,
+    #[props(default)] expanded: Option<bool>,
     children: Element,
 ) -> Element {
     let classes = button_classes(variant);
+    let label = (!label.is_empty()).then_some(label);
     rsx! {
         button {
             class: "{classes} {class}",
             disabled,
+            aria_label: label.clone(),
+            title: label,
+            aria_expanded: expanded.map(|open| open.to_string()),
             onclick: move |e| onclick.call(e),
             {children}
+        }
+    }
+}
+
+#[component]
+pub fn ErrorBanner(message: String) -> Element {
+    rsx! {
+        div {
+            role: "alert",
+            class: "mb-4 flex items-start gap-2 rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-sm text-bad",
+            Icon { name: "alert", class: "mt-0.5 w-4 h-4 shrink-0" }
+            span { class: "break-words", "{message}" }
         }
     }
 }

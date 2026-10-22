@@ -67,6 +67,18 @@ impl Disk {
     }
 }
 
+fn mbr_disk(dir: &Path) -> PathBuf {
+    let path = dir.join("mbr.img");
+    File::create(&path).unwrap().set_len(64 * MIB).unwrap();
+    let script = dir.join("mbr.sfdisk");
+    std::fs::write(&script, "label: dos\n,16M,83\n,,83\n").unwrap();
+    run(Command::new("sfdisk")
+        .arg("-q")
+        .arg(&path)
+        .stdin(File::open(&script).unwrap()));
+    path
+}
+
 fn run(command: &mut Command) -> Output {
     let output = command
         .output()
@@ -307,6 +319,7 @@ async fn a_disk_image_packs_like_a_capture() {
     let Unpacked { manifest, scripts } = unpack(&archive, &unpacked_dir).await;
     assert_eq!(manifest.name, "packed");
     assert!(manifest.captured_at.is_some());
+    assert_eq!(manifest.sector_size, 512);
     let partitions: Vec<(i64, &str, u64)> = manifest
         .partitions
         .iter()
@@ -428,6 +441,34 @@ async fn an_unsupported_filesystem_fails_without_leaving_output() {
     assert_failed_without_output(
         pack(&disk.path, &archive, [] as [&str; 0]),
         "filesystem not supported: swsuspend",
+        &archive,
+    );
+}
+
+#[tokio::test]
+async fn an_mbr_disk_fails_without_leaving_output() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = mbr_disk(dir);
+
+    let archive = dir.join("image.imaged");
+    assert_failed_without_output(
+        pack(&disk, &archive, [] as [&str; 0]),
+        "only GPT disks are supported, found dos",
+        &archive,
+    );
+}
+
+#[tokio::test]
+async fn a_disk_without_any_filesystem_fails_without_leaving_output() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = Disk::new(dir);
+
+    let archive = dir.join("image.imaged");
+    assert_failed_without_output(
+        pack(&disk.path, &archive, [] as [&str; 0]),
+        "the manifest lists no partitions",
         &archive,
     );
 }

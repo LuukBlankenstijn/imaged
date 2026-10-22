@@ -6,7 +6,7 @@ mod target;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{self, Write};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +22,6 @@ use relay::{Direction, Metered, Traffic};
 use request::{Kind, MAX_HEAD_LEN, Request, Target};
 use status::Status;
 
-pub const DEFAULT_PORT: u16 = 3128;
 const DEFAULT_CONNECT_PORTS: [u16; 2] = [443, 22];
 const DEFAULT_FORWARD_PORTS: [u16; 1] = [80];
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -34,6 +33,7 @@ const CLOSE_LINGER: Duration = Duration::from_secs(2);
 const CONNECTION_ESTABLISHED: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Config {
     pub bind: SocketAddr,
     pub allowed_connect_ports: BTreeSet<u16>,
@@ -66,10 +66,18 @@ impl Config {
         }
     }
 
-    fn allows_address(&self, address: SocketAddr) -> bool {
-        self.allow_private_targets
-            || (address.ip() != self.bind.ip() && target::is_public(address.ip()))
+    fn allows_address(&self, address: SocketAddr, own_addresses: &[IpAddr]) -> bool {
+        let ip = target::canonical(address.ip());
+        self.allow_private_targets || (target::is_public(ip) && !own_addresses.contains(&ip))
     }
+}
+
+fn own_addresses() -> io::Result<Vec<IpAddr>> {
+    let interfaces = local_ip_address::list_afinet_netifas().map_err(io::Error::other)?;
+    Ok(interfaces
+        .into_iter()
+        .map(|(_, ip)| target::canonical(ip))
+        .collect())
 }
 
 pub struct Proxy {
@@ -288,13 +296,24 @@ async fn connect(target: &Target, config: &Config) -> Result<TcpStream, Status> 
         }
         Err(_) => return Err(Status::GatewayTimeout),
     };
+    let own_addresses = if config.allow_private_targets {
+        Vec::new()
+    } else {
+        own_addresses().map_err(|error| {
+            warn!(%error, "listing the server's own addresses failed");
+            Status::BadGateway
+        })?
+    };
     let allowed: Vec<SocketAddr> = addresses
         .iter()
         .copied()
-        .filter(|&address| config.allows_address(address))
+        .filter(|&address| config.allows_address(address, &own_addresses))
         .collect();
     if allowed.is_empty() && !addresses.is_empty() {
-        warn!(?addresses, "upstream resolves only to private addresses");
+        warn!(
+            ?addresses,
+            "upstream resolves only to private or own addresses"
+        );
         return Err(Status::Forbidden);
     }
     let mut status = Status::BadGateway;
@@ -312,4 +331,34 @@ async fn connect(target: &Target, config: &Config) -> Result<TcpStream, Status> 
         }
     }
     Err(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_servers_own_public_addresses_are_refused_in_every_form() {
+        let config = Config::new("0.0.0.0:3128".parse().unwrap());
+        let own = ["203.0.113.7".parse().unwrap()];
+        for target in [
+            "203.0.113.7:443",
+            "[::ffff:203.0.113.7]:443",
+            "[64:ff9b::cb00:7107]:443",
+        ] {
+            assert!(
+                !config.allows_address(target.parse().unwrap(), &own),
+                "{target}"
+            );
+        }
+        assert!(config.allows_address("203.0.113.8:443".parse().unwrap(), &own));
+    }
+
+    #[test]
+    fn allowing_private_targets_also_allows_the_servers_own_addresses() {
+        let mut config = Config::new("127.0.0.1:3128".parse().unwrap());
+        config.allow_private_targets = true;
+        let own = ["203.0.113.7".parse().unwrap()];
+        assert!(config.allows_address("203.0.113.7:443".parse().unwrap(), &own));
+    }
 }

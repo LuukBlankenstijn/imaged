@@ -13,16 +13,17 @@ use std::{
     time::Duration,
 };
 
-use axum::{Router, routing::get};
+use axum::{Router, http::Uri, routing::get};
 use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
-use imaged_api_ui::model::{Image, TaskProgress};
+pub use imaged_api_ui::model::{Image, TaskProgress};
 use imaged_core::{
     self as core,
     di::{DIContainer, MachineIp},
     progress::Snapshot,
     registry::HostRegistry,
 };
-use imaged_model::{error::Result, script::ScriptInput};
+use imaged_model::error::AppError;
+pub use imaged_model::script::ScriptInput;
 use imaged_web::App;
 use tokio::io::AsyncRead;
 use tokio::sync::watch;
@@ -34,6 +35,7 @@ const STOP_GRACE_PERIOD: Duration = Duration::from_secs(3);
 static OPENED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Config {
     pub data_dir: PathBuf,
     pub multicast_interface: String,
@@ -42,6 +44,7 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct Listeners {
     pub machine: SocketAddr,
     pub public_url: String,
@@ -50,11 +53,35 @@ pub struct Listeners {
     pub dashboard: Dashboard,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Dashboard {
     Off,
     OnMachineListener,
     Separate(SocketAddr),
+}
+
+impl Config {
+    pub fn new(data_dir: impl Into<PathBuf>, multicast_interface: impl Into<String>) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            multicast_interface: multicast_interface.into(),
+            script_proxy: None,
+            script_variables: BTreeMap::new(),
+        }
+    }
+}
+
+impl Listeners {
+    pub fn new(machine: SocketAddr, public_url: impl Into<String>) -> Self {
+        Self {
+            machine,
+            public_url: public_url.into(),
+            tftp: None,
+            proxy: None,
+            dashboard: Dashboard::Off,
+        }
+    }
 }
 
 pub struct Imaged {
@@ -108,6 +135,7 @@ impl Imaged {
     }
 
     pub async fn serve(&self, listeners: Listeners) -> io::Result<Server> {
+        validate_public_url(&listeners.public_url)?;
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
         let machine_router = machine_router(&listeners.public_url);
@@ -170,16 +198,27 @@ impl Imaged {
         Ok(server)
     }
 
-    pub async fn import_archive(&self, archive: impl AsyncRead + Unpin + Send) -> Result<Image> {
-        Ok(self.container.archive_service.import(archive).await?.into())
+    pub async fn import_archive(
+        &self,
+        archive: impl AsyncRead + Unpin + Send,
+    ) -> io::Result<Image> {
+        let image = self
+            .container
+            .archive_service
+            .import(archive)
+            .await
+            .map_err(into_io_error)?;
+        Ok(image.into())
     }
 
-    pub async fn script_inputs(&self, image_id: i64) -> Result<Vec<ScriptInput>> {
-        Ok(self
+    pub async fn script_inputs(&self, image_id: i64) -> io::Result<Vec<ScriptInput>> {
+        let scripts = self
             .container
             .script_repo
             .get_for_image(image_id)
-            .await?
+            .await
+            .map_err(into_io_error)?;
+        Ok(scripts
             .into_iter()
             .flat_map(|script| script.inputs)
             .collect())
@@ -286,8 +325,34 @@ impl Drop for ServingClaim {
     }
 }
 
+#[doc(hidden)]
 pub fn machine_router(public_url: &str) -> Router {
     imaged_boot::pxe::router(public_url).merge(imaged_api_agent::router())
+}
+
+fn validate_public_url(public_url: &str) -> io::Result<()> {
+    let valid = public_url.parse::<Uri>().is_ok_and(|uri| {
+        matches!(uri.scheme_str(), Some("http" | "https"))
+            && uri.host().is_some_and(|host| !host.is_empty())
+    });
+    if valid {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("public_url {public_url:?} is not an http:// or https:// URL with a host"),
+        ))
+    }
+}
+
+fn into_io_error(error: AppError) -> io::Error {
+    let kind = match &error {
+        AppError::NotFound(_) => io::ErrorKind::NotFound,
+        AppError::InvalidArgument(_) => io::ErrorKind::InvalidInput,
+        AppError::AlreadyExists(_) => io::ErrorKind::AlreadyExists,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, error)
 }
 
 fn dashboard_router() -> io::Result<Router> {

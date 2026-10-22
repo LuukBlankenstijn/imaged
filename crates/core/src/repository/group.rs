@@ -70,8 +70,7 @@ impl GroupRepository for SqliteGroupRepository {
     }
 
     async fn update_group_members(&self, id: i64, host_ids: &[i64]) -> Result<Group> {
-        let mut tx = self.pool.begin().await?;
-        // first get the group to check if it exists
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let group = sqlx::query!("SELECT * FROM groups WHERE id = ?", id)
             .fetch_one(&mut *tx)
             .await?;
@@ -103,7 +102,7 @@ mod tests {
 
     async fn host(c: &Repos, mac: &str) -> i64 {
         c.host_repo
-            .upsert_host(mac.into(), 1_000, None)
+            .upsert_host(mac.into(), Ok(1_000), None)
             .await
             .unwrap()
             .id

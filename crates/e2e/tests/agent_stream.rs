@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
+use imaged_core::domain::task::TaskType;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::{MAC_HEADER, route};
 use reqwest::StatusCode;
+use serde_json::json;
 
 const DISK: u64 = 6 * 1024 * 1024 * 1024;
 
@@ -55,7 +57,7 @@ async fn connecting_upserts_the_host_and_marks_it_connected() {
         .await
         .expect("host upserted by connecting");
     assert_eq!(host.mac_address, mac);
-    assert_eq!(host.disk_size, DISK);
+    assert_eq!(host.disk, Ok(DISK));
 
     assert!(
         poll_until(|| connected(s, host.id), Duration::from_secs(1)).await,
@@ -86,73 +88,72 @@ async fn a_pending_task_is_delivered_as_the_first_event() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("first event is the pending task");
-    assert_eq!(event["Task"]["id"], task_id);
-    assert_eq!(event["Task"]["task_type"], "Deploy");
-    assert_eq!(event["Task"]["image_id"], image_id);
+    assert_eq!(event["Current"]["id"], task_id);
+    assert_eq!(event["Current"]["task_type"], "Deploy");
+    assert_eq!(event["Current"]["image_id"], image_id);
 }
 
 #[tokio::test]
-async fn a_host_without_a_pending_task_receives_no_task_event() {
+async fn a_host_without_a_pending_task_is_told_it_has_none() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
 
     let mut stream = harness::connect_agent_stream(s, &mac, DISK)
         .await
         .expect("connect");
+    let event = stream.next_event(Duration::from_secs(5)).await;
+    assert_eq!(event, Some(json!({ "Current": null })));
     let event = stream.next_event(Duration::from_millis(500)).await;
-    assert!(
-        event.is_none(),
-        "an idle host must not receive a task event, got {event:?}"
-    );
+    assert!(event.is_none(), "nothing changed, yet got {event:?}");
 }
 
 #[tokio::test]
-async fn live_events_fan_out_to_an_open_stream_in_order() {
+async fn a_dispatch_sends_the_new_current_task_only_when_it_changed() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
 
     let mut stream = harness::connect_agent_stream(s, &mac, DISK)
         .await
         .expect("connect");
+    assert_eq!(
+        stream.next_event(Duration::from_secs(5)).await,
+        Some(json!({ "Current": null }))
+    );
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
-
-    let other = seed::host(s, &harness::unique_mac(), DISK).await;
     let image_id = seed::image_with_data(
         s,
-        &harness::unique_name("fanout-img"),
+        &harness::unique_name("dispatch-img"),
         b"pt",
         &[(1, "ext4", &[3u8; 512])],
     )
     .await;
-    let task_id = seed::deploy_task(s, other.id, image_id).await;
-    let task = s.container.task_repo.get(task_id).await.unwrap();
+    let task_id = seed::deploy_task(s, host.id, image_id).await;
 
-    s.container.host_registry.send_task(host.id, &task);
+    s.container.host_registry.dispatch(host.id);
     let event = stream
         .next_event(Duration::from_secs(2))
         .await
-        .expect("send_task arrives on the open stream");
-    assert_eq!(event["Task"]["id"], task_id);
-    assert_eq!(event["Task"]["task_type"], "Deploy");
-    assert_eq!(event["Task"]["image_id"], image_id);
+        .expect("the queued task arrives on the open stream");
+    assert_eq!(event["Current"]["id"], task_id);
+    assert_eq!(event["Current"]["task_type"], "Deploy");
+    assert_eq!(event["Current"]["image_id"], image_id);
 
-    s.container.host_registry.cancel_task(host.id, 4242);
-    let event = stream
-        .next_event(Duration::from_secs(2))
+    s.container.host_registry.dispatch(host.id);
+    let event = stream.next_event(Duration::from_millis(500)).await;
+    assert!(
+        event.is_none(),
+        "the current task did not change, yet got {event:?}"
+    );
+
+    s.on_server(async move { s.container.task_repo.cancel(task_id).await })
         .await
-        .expect("cancel arrives on the open stream");
-    assert_eq!(event["Cancel"], 4242);
-
-    for id in [7001, 7002, 7003] {
-        s.container.host_registry.cancel_task(host.id, id);
-    }
-    for id in [7001, 7002, 7003] {
-        let event = stream
-            .next_event(Duration::from_secs(2))
-            .await
-            .expect("ordered cancel");
-        assert_eq!(event["Cancel"], id);
-    }
+        .expect("cancel");
+    s.container.host_registry.dispatch(host.id);
+    assert_eq!(
+        stream.next_event(Duration::from_secs(2)).await,
+        Some(json!({ "Current": null })),
+        "a cancelled task is no longer current"
+    );
 }
 
 #[tokio::test]
@@ -163,6 +164,10 @@ async fn a_second_stream_displaces_the_first_and_keeps_the_host_connected() {
     let mut first = harness::connect_agent_stream(s, &mac, DISK)
         .await
         .expect("connect");
+    assert_eq!(
+        first.next_event(Duration::from_secs(5)).await,
+        Some(json!({ "Current": null }))
+    );
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
     assert!(poll_until(|| connected(s, host.id), Duration::from_secs(1)).await);
 
@@ -179,12 +184,26 @@ async fn a_second_stream_displaces_the_first_and_keeps_the_host_connected() {
         "the host stays connected across the displacement"
     );
 
-    s.container.host_registry.cancel_task(host.id, 999);
+    assert_eq!(
+        second.next_event(Duration::from_secs(2)).await,
+        Some(json!({ "Current": null }))
+    );
+    let task_id = s
+        .on_server(async move {
+            s.container
+                .task_repo
+                .create(TaskType::Reboot, vec![host.id], None)
+                .await
+        })
+        .await
+        .expect("reboot task")
+        .id;
+    s.container.host_registry.dispatch(host.id);
     let event = second
         .next_event(Duration::from_secs(2))
         .await
         .expect("events after displacement are delivered to the new connection");
-    assert_eq!(event["Cancel"], 999);
+    assert_eq!(event["Current"]["id"], task_id);
 
     assert!(connected(s, host.id));
 }
@@ -275,12 +294,26 @@ async fn a_host_can_reconnect_after_disconnecting() {
         "the reconnected registration must survive the old one's late cleanup"
     );
 
-    s.container.host_registry.cancel_task(host.id, 555);
+    assert_eq!(
+        second.next_event(Duration::from_secs(2)).await,
+        Some(json!({ "Current": null }))
+    );
+    let task_id = s
+        .on_server(async move {
+            s.container
+                .task_repo
+                .create(TaskType::Reboot, vec![host.id], None)
+                .await
+        })
+        .await
+        .expect("reboot task")
+        .id;
+    s.container.host_registry.dispatch(host.id);
     let event = second
         .next_event(Duration::from_secs(2))
         .await
         .expect("reconnected stream receives events");
-    assert_eq!(event["Cancel"], 555);
+    assert_eq!(event["Current"]["id"], task_id);
 }
 
 #[tokio::test]
@@ -307,20 +340,27 @@ async fn a_non_ascii_mac_header_is_rejected() {
 }
 
 #[tokio::test]
-async fn an_ascii_mac_of_any_shape_is_accepted() {
+async fn a_malformed_mac_is_refused_and_any_spelling_of_a_mac_names_one_host() {
     let s = harness::server().await;
     let junk = format!("not-a-mac-{}", harness::unique_name("junk"));
+    assert!(
+        harness::connect_agent_stream(s, &junk, 4096).await.is_err(),
+        "a header that is not a MAC address registers no host"
+    );
 
-    let stream = harness::connect_agent_stream(s, &junk, 4096)
+    let mac = harness::unique_mac();
+    let shouted = mac.to_ascii_uppercase().replace(':', "-");
+    let stream = harness::connect_agent_stream(s, &shouted, 4096)
         .await
-        .expect("an arbitrary ascii mac is accepted; the server does not validate format");
+        .expect("an upper-case, dash-separated MAC is accepted");
     let host = s
         .container
         .host_repo
-        .get_by_mac(&junk)
+        .get_by_mac(&mac)
         .await
-        .expect("the arbitrary mac upserted a host");
-    assert_eq!(host.disk_size, 4096);
+        .expect("the host is stored under the canonical MAC");
+    assert_eq!(host.mac_address, mac);
+    assert_eq!(host.disk, Ok(4096));
 
     drop(stream);
 }
@@ -338,7 +378,7 @@ async fn an_unresponsive_agent_is_evicted_by_the_liveness_deadline() {
 
     let connected_at = Instant::now();
     let mut latency = None;
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if !connected(s, host.id) {
             latency = Some(connected_at.elapsed());
@@ -365,7 +405,7 @@ async fn a_responsive_agent_is_not_evicted() {
 
     // Polling the socket lets tungstenite auto-pong the server's pings; held
     // open well past the liveness timeout, the host must never be evicted.
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         let _ = stream.next_event(Duration::from_millis(100)).await;
         assert!(

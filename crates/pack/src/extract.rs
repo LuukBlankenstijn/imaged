@@ -3,8 +3,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::Context as _;
-
-use crate::layout::Partition;
+use imaged_disk::Partition;
 
 const CHUNK_BYTES: u64 = 1024 * 1024;
 

@@ -5,7 +5,9 @@ use imaged_model::error::{AppError, Result};
 use imaged_model::script::{ScriptInput, validate_script_name};
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
+const FSTYPES: [&str; 5] = ["ext2", "ext3", "ext4", "vfat", "swap"];
+const SECTOR_SIZES: std::ops::RangeInclusive<u32> = 512..=65536;
 pub const MANIFEST_FILE: &str = "manifest.json";
 pub const PARTITION_TABLE_FILE: &str = "parttable.bin";
 pub const SCRIPTS_DIR: &str = "scripts";
@@ -23,6 +25,7 @@ pub struct Manifest {
     pub format: u32,
     pub name: String,
     pub captured_at: Option<DateTime<Utc>>,
+    pub sector_size: u32,
     pub partition_table: ArchivedFile,
     pub partitions: Vec<ArchivedPartition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -72,11 +75,24 @@ impl Manifest {
     }
 
     pub fn checksums(&self) -> Result<BTreeMap<&str, &str>> {
+        if !self.sector_size.is_power_of_two() || !SECTOR_SIZES.contains(&self.sector_size) {
+            return Err(AppError::InvalidArgument(format!(
+                "invalid sector size {}, expected a power of two from {} to {}",
+                self.sector_size,
+                SECTOR_SIZES.start(),
+                SECTOR_SIZES.end()
+            )));
+        }
         if self.partition_table.file != PARTITION_TABLE_FILE {
             return Err(AppError::InvalidArgument(format!(
                 "partition table must be stored as {PARTITION_TABLE_FILE}, not `{}`",
                 self.partition_table.file
             )));
+        }
+        if self.partitions.is_empty() {
+            return Err(AppError::InvalidArgument(
+                "the manifest lists no partitions".to_string(),
+            ));
         }
         let mut checksums =
             BTreeMap::from([(PARTITION_TABLE_FILE, self.partition_table.sha256.as_str())]);
@@ -85,6 +101,14 @@ impl Manifest {
                 return Err(AppError::InvalidArgument(format!(
                     "invalid partition number {}",
                     partition.number
+                )));
+            }
+            if !FSTYPES.contains(&partition.fstype.as_str()) {
+                return Err(AppError::InvalidArgument(format!(
+                    "partition {} has unsupported fstype `{}`, expected one of {}",
+                    partition.number,
+                    partition.fstype,
+                    FSTYPES.join(", ")
                 )));
             }
             let expected_file = partition_file(partition.number);

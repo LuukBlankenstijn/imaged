@@ -5,50 +5,56 @@ use serde_json::json;
 
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::{MAC_HEADER, path};
-use imaged_model::image::ImageStatus;
+use imaged_model::image::{ImagePartition, ImageStatus};
 use imaged_model::task::TaskState;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 
+fn table_uri(task_id: i64) -> String {
+    format!("{}?sector_size=512", path::partition_table(task_id))
+}
+
 async fn create_empty_image(s: &harness::TestServer, name: &str) -> i64 {
-    s.container
-        .image_repo
-        .create_image(name.to_string())
+    let images = s.container.image_repo.clone();
+    let name = name.to_string();
+    s.on_server(async move { images.create_image(name).await })
         .await
         .expect("create empty image")
         .id
 }
 
 async fn image_status(s: &harness::TestServer, image_id: i64) -> ImageStatus {
-    s.container
-        .image_repo
-        .get_status(image_id)
+    let images = s.container.image_repo.clone();
+    s.on_server(async move { images.get_status(image_id).await })
         .await
         .expect("image status")
 }
 
 async fn captured_at_is_set(s: &harness::TestServer, image_id: i64) -> bool {
-    image_field(s, image_id, |i| i.captured_at.is_some()).await
+    image(s, image_id).await.captured_at.is_some()
 }
 
 async fn image_error(s: &harness::TestServer, image_id: i64) -> Option<String> {
-    image_field(s, image_id, |i| i.error.clone()).await
+    image(s, image_id).await.error
 }
 
-async fn image_field<T>(
-    s: &harness::TestServer,
-    image_id: i64,
-    f: impl Fn(&imaged_core::domain::image::Image) -> T,
-) -> T {
-    let images = s.container.image_repo.get_all().await.expect("images");
-    let image = images.iter().find(|i| i.id == image_id).expect("image row");
-    f(image)
+async fn image(s: &harness::TestServer, image_id: i64) -> imaged_core::domain::image::Image {
+    let images = s.container.image_repo.clone();
+    s.on_server(async move { images.get(image_id).await })
+        .await
+        .expect("image row")
+}
+
+async fn partitions(s: &harness::TestServer, image_id: i64) -> Vec<ImagePartition> {
+    let images = s.container.image_repo.clone();
+    s.on_server(async move { images.get_partitions(image_id).await })
+        .await
+        .expect("image partitions")
 }
 
 async fn aggregate_state(s: &harness::TestServer, task_id: i64) -> TaskState {
-    s.container
-        .task_repo
-        .get(task_id)
+    let tasks = s.container.task_repo.clone();
+    s.on_server(async move { tasks.get(task_id).await })
         .await
         .expect("task")
         .aggregate_state()
@@ -91,10 +97,8 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
     let task_id = seed::capture_task(s, host.id, image_id).await;
 
     let table: Vec<u8> = b"e2e-capture-partition-table".to_vec();
-    let resp = s
-        .agent_put_bytes(&path::partition_table(task_id), &mac, &table)
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = s.agent_put_bytes(&table_uri(task_id), &mac, &table).await;
+    harness::expect_status(resp, StatusCode::OK).await;
     assert_eq!(image_status(s, image_id).await, ImageStatus::Capturing);
     assert_eq!(aggregate_state(s, task_id).await, TaskState::Running);
 
@@ -113,17 +117,12 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
         split(&comp1, 1024),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     let resp = upload_partition(s, task_id, &mac, 2, "xfs", plain2.len(), split(&comp2, 700)).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
-    let parts = s
-        .container
-        .image_repo
-        .get_partitions(image_id)
-        .await
-        .unwrap();
+    let parts = partitions(s, image_id).await;
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[0].partition_number, 1);
     assert_eq!(parts[0].fstype, "ext4");
@@ -147,7 +146,7 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
     assert_eq!(on_disk_table, table);
 
     let resp = s.agent_post_empty(&path::finished(task_id), &mac).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
     assert_eq!(image_status(s, image_id).await, ImageStatus::Ready);
     assert!(captured_at_is_set(s, image_id).await);
 
@@ -158,7 +157,7 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
     let resp = s
         .agent_get(&path::partition_data(deploy_id, 1), &other_mac)
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = harness::expect_status(resp, StatusCode::OK).await;
     let downloaded = resp.bytes().await.expect("download p1");
     assert_eq!(downloaded.as_ref(), comp1.as_slice());
     assert_eq!(seed::unzstd(&downloaded).await, plain1);
@@ -166,7 +165,7 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
     let resp = s
         .agent_get(&path::partition_table(deploy_id), &other_mac)
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = harness::expect_status(resp, StatusCode::OK).await;
     let table_back = resp.bytes().await.expect("parttable bytes");
     assert_eq!(table_back.as_ref(), table.as_slice());
 }
@@ -179,13 +178,13 @@ async fn parttable_requires_a_pending_task() {
     let host = seed::host(s, &mac, DISK).await;
     let image_id = create_empty_image(s, &harness::unique_name("cap-img")).await;
     let task_id = seed::capture_task(s, host.id, image_id).await;
-    let path = path::partition_table(task_id);
+    let path = table_uri(task_id);
 
     let resp = s.agent_put_bytes(&path, &mac, b"first").await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     let resp = s.agent_put_bytes(&path, &mac, b"second").await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    harness::expect_status(resp, StatusCode::BAD_REQUEST).await;
 }
 
 #[tokio::test]
@@ -198,7 +197,7 @@ async fn upload_partition_data_requires_a_running_task() {
     let task_id = seed::capture_task(s, host.id, image_id).await;
 
     let resp = upload_partition(s, task_id, &mac, 1, "ext4", 4, split(b"data", 2)).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    harness::expect_status(resp, StatusCode::BAD_REQUEST).await;
 }
 
 #[tokio::test]
@@ -209,16 +208,14 @@ async fn upload_partition_data_refuses_another_agents_mac() {
     let host = seed::host(s, &mac, DISK).await;
     let image_id = create_empty_image(s, &harness::unique_name("cap-img")).await;
     let task_id = seed::capture_task(s, host.id, image_id).await;
-    let resp = s
-        .agent_put_bytes(&path::partition_table(task_id), &mac, b"table")
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = s.agent_put_bytes(&table_uri(task_id), &mac, b"table").await;
+    harness::expect_status(resp, StatusCode::OK).await;
 
     let intruder_mac = harness::unique_mac();
     seed::host(s, &intruder_mac, DISK).await;
 
     let resp = upload_partition(s, task_id, &intruder_mac, 1, "ext4", 4, split(b"data", 2)).await;
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    harness::expect_status(resp, StatusCode::BAD_REQUEST).await;
 }
 
 #[tokio::test]
@@ -231,23 +228,15 @@ async fn parttable_on_a_fresh_capture_wipes_the_prior_partial_captures_data() {
 
     let first = seed::capture_task(s, host_a.id, image_id).await;
     let resp = s
-        .agent_put_bytes(&path::partition_table(first), &mac_a, b"table-one")
+        .agent_put_bytes(&table_uri(first), &mac_a, b"table-one")
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     let comp = seed::zstd(&vec![0x33u8; 2048]).await;
     let resp = upload_partition(s, first, &mac_a, 1, "ext4", 2048, split(&comp, 512)).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
-    assert_eq!(
-        s.container
-            .image_repo
-            .get_partitions(image_id)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(partitions(s, image_id).await.len(), 1);
     let blob_path = s.container.image_service.get_partition_path(image_id, 1);
     assert!(tokio::fs::try_exists(&blob_path).await.unwrap());
 
@@ -255,18 +244,11 @@ async fn parttable_on_a_fresh_capture_wipes_the_prior_partial_captures_data() {
     let host_b = seed::host(s, &mac_b, DISK).await;
     let second = seed::capture_task(s, host_b.id, image_id).await;
     let resp = s
-        .agent_put_bytes(&path::partition_table(second), &mac_b, b"table-two")
+        .agent_put_bytes(&table_uri(second), &mac_b, b"table-two")
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
-    assert!(
-        s.container
-            .image_repo
-            .get_partitions(image_id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(partitions(s, image_id).await.is_empty());
     assert!(!tokio::fs::try_exists(&blob_path).await.unwrap());
     let table_now = tokio::fs::read(s.container.image_service.get_partition_table_path(image_id))
         .await
@@ -282,10 +264,8 @@ async fn failed_on_a_capture_task_faults_the_image_and_records_the_error() {
     let host = seed::host(s, &mac, DISK).await;
     let image_id = create_empty_image(s, &harness::unique_name("cap-img")).await;
     let task_id = seed::capture_task(s, host.id, image_id).await;
-    let resp = s
-        .agent_put_bytes(&path::partition_table(task_id), &mac, b"table")
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = s.agent_put_bytes(&table_uri(task_id), &mac, b"table").await;
+    harness::expect_status(resp, StatusCode::OK).await;
     assert_eq!(image_status(s, image_id).await, ImageStatus::Capturing);
 
     let resp = s
@@ -295,7 +275,7 @@ async fn failed_on_a_capture_task_faults_the_image_and_records_the_error() {
             &json!({ "error": "partclone blew up" }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     assert_eq!(image_status(s, image_id).await, ImageStatus::Faulted);
     assert_eq!(
@@ -328,7 +308,7 @@ async fn failed_on_a_deploy_task_leaves_the_image_ready() {
             &json!({ "error": "deploy failed" }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     assert_eq!(image_status(s, image_id).await, ImageStatus::Ready);
     assert_eq!(image_error(s, image_id).await, None);
@@ -342,10 +322,8 @@ async fn a_stream_that_errors_mid_upload_leaves_nothing_behind_and_cannot_be_mar
     let host = seed::host(s, &mac, DISK).await;
     let image_id = create_empty_image(s, &harness::unique_name("cap-img")).await;
     let task_id = seed::capture_task(s, host.id, image_id).await;
-    let resp = s
-        .agent_put_bytes(&path::partition_table(task_id), &mac, b"table")
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = s.agent_put_bytes(&table_uri(task_id), &mac, b"table").await;
+    harness::expect_status(resp, StatusCode::OK).await;
 
     let chunk1 = Bytes::from_static(b"AAAAAAAAAAAAAAAA");
     let chunk2 = Bytes::from_static(b"BBBBBBBBBBBBBBBB");
@@ -378,17 +356,12 @@ async fn a_stream_that_errors_mid_upload_leaves_nothing_behind_and_cannot_be_mar
     );
 
     assert!(
-        s.container
-            .image_repo
-            .get_partitions(image_id)
-            .await
-            .unwrap()
-            .is_empty(),
+        partitions(s, image_id).await.is_empty(),
         "no partition row is recorded when the upload stream errors"
     );
 
     let resp = s.agent_post_empty(&path::finished(task_id), &mac).await;
-    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    harness::expect_status(resp, StatusCode::PRECONDITION_FAILED).await;
     assert_eq!(image_status(s, image_id).await, ImageStatus::Faulted);
     assert!(image_error(s, image_id).await.is_some());
 }
@@ -401,16 +374,14 @@ async fn cancelling_a_running_capture_from_the_dashboard_faults_the_image() {
     let host = seed::host(s, &mac, DISK).await;
     let image_id = create_empty_image(s, &harness::unique_name("cap-img")).await;
     let task_id = seed::capture_task(s, host.id, image_id).await;
-    let resp = s
-        .agent_put_bytes(&path::partition_table(task_id), &mac, b"table")
-        .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = s.agent_put_bytes(&table_uri(task_id), &mac, b"table").await;
+    harness::expect_status(resp, StatusCode::OK).await;
     assert_eq!(image_status(s, image_id).await, ImageStatus::Capturing);
 
     let resp = s
         .ui_post("/api/ui/tasks/cancel", &json!({ "id": task_id }))
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    harness::expect_status(resp, StatusCode::OK).await;
 
     assert_eq!(image_status(s, image_id).await, ImageStatus::Faulted);
     assert!(image_error(s, image_id).await.is_some());

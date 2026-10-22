@@ -51,9 +51,10 @@ fn manifest(partitions: &[(i64, &[u8])]) -> Vec<u8> {
 
 fn manifest_with_table(table: &[u8], partitions: &[(i64, &[u8])]) -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "format": 1,
+        "format": 2,
         "name": "imported",
         "captured_at": null,
+        "sector_size": 512,
         "partition_table": { "file": "parttable.bin", "sha256": sha256(table) },
         "partitions": partitions
             .iter()
@@ -176,6 +177,7 @@ fn contents(sources: &Path) -> Contents {
     Contents {
         name: "golden".into(),
         captured_at: Some(captured_at()),
+        sector_size: 512,
         partition_table: table,
         partitions: vec![
             PartitionSource {
@@ -186,7 +188,7 @@ fn contents(sources: &Path) -> Contents {
             },
             PartitionSource {
                 number: 2,
-                fstype: "ntfs".into(),
+                fstype: "ext4".into(),
                 size_bytes: 1 << 33,
                 path: second,
             },
@@ -227,13 +229,14 @@ async fn written_archives_hold_the_manifest_first_followed_by_the_checksummed_fi
     assert_eq!(
         json,
         json!({
-            "format": 1,
+            "format": 2,
             "name": "golden",
             "captured_at": captured_at().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+            "sector_size": 512,
             "partition_table": { "file": "parttable.bin", "sha256": sha256(TABLE) },
             "partitions": [
                 { "number": 1, "fstype": "vfat", "size_bytes": 1u64 << 33, "file": "p-1.pcl", "sha256": sha256(&large()) },
-                { "number": 2, "fstype": "ntfs", "size_bytes": 1u64 << 33, "file": "p-2.pcl", "sha256": sha256(SMALL) },
+                { "number": 2, "fstype": "ext4", "size_bytes": 1u64 << 33, "file": "p-2.pcl", "sha256": sha256(SMALL) },
             ],
             "root_partition": 2,
             "scripts": [
@@ -356,7 +359,7 @@ async fn script_entries_must_follow_the_naming_rules_before_unpacking() {
         ),
         ("../setup", "scripts/../setup.sh", "script name `../setup`"),
     ] {
-        let manifest = with_script(&manifest(&[]), name, file, b"x");
+        let manifest = with_script(&manifest(&[(1, SMALL)]), name, file, b"x");
         let archive = tar(&[("manifest.json", &manifest), ("parttable.bin", TABLE)]).await;
 
         let message = rejected_on_open(archive).await;
@@ -384,11 +387,56 @@ async fn a_root_partition_that_is_not_archived_is_rejected_before_unpacking() {
 
 #[tokio::test]
 async fn an_unsupported_format_is_rejected_before_unpacking() {
-    let archive = tar(&[("manifest.json", br#"{"format":2,"anything":"else"}"#)]).await;
+    let archive = tar(&[("manifest.json", br#"{"format":1,"anything":"else"}"#)]).await;
 
     let message = rejected_on_open(archive).await;
 
-    assert_eq!(message, "unsupported archive format 2, expected 1");
+    assert_eq!(message, "unsupported archive format 1, expected 2");
+}
+
+#[tokio::test]
+async fn manifests_outside_the_format_are_rejected_before_unpacking() {
+    type Edit = fn(&mut serde_json::Value);
+    let cases: [(Edit, &str); 5] = [
+        (
+            |manifest| manifest["partitions"][0]["fstype"] = json!("ntfs"),
+            "partition 1 has unsupported fstype `ntfs`, expected one of ext2, ext3, ext4, vfat, swap",
+        ),
+        (
+            |manifest| manifest["partitions"] = json!([]),
+            "the manifest lists no partitions",
+        ),
+        (
+            |manifest| manifest["sector_size"] = json!(1000),
+            "invalid sector size 1000, expected a power of two from 512 to 65536",
+        ),
+        (
+            |manifest| manifest["sector_size"] = json!(256),
+            "invalid sector size 256, expected a power of two from 512 to 65536",
+        ),
+        (
+            |manifest| {
+                manifest.as_object_mut().unwrap().remove("sector_size");
+            },
+            "invalid manifest.json: missing field `sector_size`",
+        ),
+    ];
+    for (edit, expected) in cases {
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+        edit(&mut manifest);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[
+            ("manifest.json", &manifest),
+            ("parttable.bin", TABLE),
+            ("p-1.pcl", SMALL),
+        ])
+        .await;
+
+        let message = rejected_on_open(archive).await;
+
+        assert!(message.starts_with(expected), "{message}");
+    }
 }
 
 #[tokio::test]
@@ -532,8 +580,12 @@ async fn a_partition_table_larger_than_one_mebibyte_is_rejected() {
 
     open(
         &tar(&[
-            ("manifest.json", &manifest_with_table(&largest, &[])),
+            (
+                "manifest.json",
+                &manifest_with_table(&largest, &[(1, SMALL)]),
+            ),
             ("parttable.bin", &largest),
+            ("p-1.pcl", SMALL),
         ])
         .await,
     )
@@ -544,7 +596,10 @@ async fn a_partition_table_larger_than_one_mebibyte_is_rejected() {
     .unwrap();
     let message = rejected_on_unpack(
         tar(&[
-            ("manifest.json", &manifest_with_table(&too_large, &[])),
+            (
+                "manifest.json",
+                &manifest_with_table(&too_large, &[(1, SMALL)]),
+            ),
             ("parttable.bin", &too_large),
         ])
         .await,

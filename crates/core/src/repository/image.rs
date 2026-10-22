@@ -27,15 +27,16 @@ impl SqliteImageRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(Image::new(
-            image.id,
-            image.name,
-            None,
-            image_status(&image.status)?,
-            image.error,
-            Vec::new(),
-            None,
-        ))
+        Ok(Image {
+            id: image.id,
+            name: image.name,
+            captured_at: None,
+            status: image_status(&image.status)?,
+            error: image.error,
+            partitions: Vec::new(),
+            root_partition: None,
+            sector_size: sector_size(image.sector_size)?,
+        })
     }
 }
 
@@ -56,22 +57,24 @@ impl ImageRepository for SqliteImageRepository {
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
                  error,
-                 root_partition
+                 root_partition,
+                 sector_size
                FROM images WHERE id = ? AND deleted_at IS NULL"#,
             id
         )
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(Image::new(
-            image.id,
-            image.name,
-            image.captured_at,
-            image_status(&image.status)?,
-            image.error,
-            self.get_partitions(id).await?,
-            image.root_partition,
-        ))
+        Ok(Image {
+            id: image.id,
+            name: image.name,
+            captured_at: image.captured_at,
+            status: image_status(&image.status)?,
+            error: image.error,
+            partitions: self.get_partitions(id).await?,
+            root_partition: image.root_partition,
+            sector_size: sector_size(image.sector_size)?,
+        })
     }
 
     async fn create_image(&self, name: String) -> Result<Image> {
@@ -87,7 +90,8 @@ impl ImageRepository for SqliteImageRepository {
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
                  error,
-                 root_partition
+                 root_partition,
+                 sector_size
             "#,
             name,
             id
@@ -117,15 +121,16 @@ impl ImageRepository for SqliteImageRepository {
         })
         .collect();
 
-        Ok(Image::new(
-            image.id,
-            image.name,
-            image.captured_at,
-            image_status(&image.status)?,
-            image.error,
+        Ok(Image {
+            id: image.id,
+            name: image.name,
+            captured_at: image.captured_at,
+            status: image_status(&image.status)?,
+            error: image.error,
             partitions,
-            image.root_partition,
-        ))
+            root_partition: image.root_partition,
+            sector_size: sector_size(image.sector_size)?,
+        })
     }
 
     async fn set_root_partition(&self, id: i64, partition_number: Option<i64>) -> Result<Image> {
@@ -162,6 +167,7 @@ impl ImageRepository for SqliteImageRepository {
                 i.error AS "error",
                 i.captured_at as "captured_at: DateTime<Utc>",
                 i.root_partition,
+                i.sector_size,
                 p.id AS "p_id?: i64",
                 p.partition_number AS "p_num?: i64",
                 p.fstype AS "p_fstype?",
@@ -185,15 +191,16 @@ impl ImageRepository for SqliteImageRepository {
                 None => {
                     let id = row.image_id;
                     image_ids.push(id);
-                    let image = Image::new(
+                    let image = Image {
                         id,
-                        row.image_name,
-                        row.captured_at,
-                        image_status(&row.image_status)?,
-                        row.error,
-                        Vec::new(),
-                        row.root_partition,
-                    );
+                        name: row.image_name,
+                        captured_at: row.captured_at,
+                        status: image_status(&row.image_status)?,
+                        error: row.error,
+                        partitions: Vec::new(),
+                        root_partition: row.root_partition,
+                        sector_size: sector_size(row.sector_size)?,
+                    };
                     images_map.entry(id).or_insert(image)
                 }
             };
@@ -267,15 +274,16 @@ impl ImageRepository for SqliteImageRepository {
         Ok(())
     }
 
-    async fn start_capture(&self, id: i64) -> Result {
+    async fn start_capture(&self, id: i64, sector_size: u32) -> Result {
         let status = ImageStatus::Capturing.to_string();
         let mut tx = self.pool.begin().await?;
         sqlx::query!("DELETE FROM image_partitions WHERE image_id = ?", id)
             .execute(&mut *tx)
             .await?;
         sqlx::query!(
-            "UPDATE images SET status = ?, root_partition = NULL WHERE id = ?",
+            "UPDATE images SET status = ?, root_partition = NULL, sector_size = ? WHERE id = ?",
             status,
+            sector_size,
             id
         )
         .execute(&mut *tx)
@@ -322,6 +330,7 @@ impl ImageRepository for SqliteImageRepository {
         captured_at: Option<DateTime<Utc>>,
         partitions: &[NewImagePartition],
         root_partition: Option<i64>,
+        sector_size: u32,
     ) -> Result<Image> {
         let status = ImageStatus::Ready.to_string();
         let mut tx = self.pool.begin().await?;
@@ -343,11 +352,12 @@ impl ImageRepository for SqliteImageRepository {
             .await?;
         }
         let updated = sqlx::query!(
-            "UPDATE images SET status = ?, captured_at = ?, root_partition = ? \
+            "UPDATE images SET status = ?, captured_at = ?, root_partition = ?, sector_size = ? \
              WHERE id = ? AND deleted_at IS NULL",
             status,
             captured_at,
             root_partition,
+            sector_size,
             id
         )
         .execute(&mut *tx)
@@ -404,6 +414,11 @@ fn image_status(value: &str) -> Result<ImageStatus> {
         tracing::info!(err=%e, "failed to convert string to ImageStatus");
         AppError::Internal("conversion error".to_string())
     })
+}
+
+fn sector_size(value: i64) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| AppError::Internal(format!("stored sector size {value} is out of range")))
 }
 
 #[cfg(test)]
@@ -666,7 +681,7 @@ mod tests {
     async fn start_capture_moves_an_empty_image_to_capturing() {
         let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.start_capture(img.id).await.unwrap();
+        c.image_repo.start_capture(img.id, 512).await.unwrap();
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
             ImageStatus::Capturing
@@ -677,7 +692,7 @@ mod tests {
     async fn mark_finished_moves_capturing_to_ready_and_records_a_capture_time() {
         let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.start_capture(img.id).await.unwrap();
+        c.image_repo.start_capture(img.id, 512).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
@@ -691,7 +706,7 @@ mod tests {
     async fn mark_faulted_moves_capturing_to_faulted_and_records_the_error() {
         let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo.start_capture(img.id).await.unwrap();
+        c.image_repo.start_capture(img.id, 512).await.unwrap();
         c.image_repo
             .mark_faulted(img.id, "disk exploded")
             .await
@@ -744,7 +759,7 @@ mod tests {
             .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
 
-        c.image_repo.start_capture(img.id).await.unwrap();
+        c.image_repo.start_capture(img.id, 512).await.unwrap();
 
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
@@ -818,6 +833,7 @@ mod tests {
                     size_bytes: 1 << 40,
                 }],
                 Some(1),
+                4096,
             )
             .await
             .unwrap();
@@ -827,6 +843,7 @@ mod tests {
         assert_eq!(ready.partitions.len(), 1);
         assert_eq!(ready.partitions[0].size_bytes, 1 << 40);
         assert_eq!(ready.root_partition, Some(1));
+        assert_eq!(ready.sector_size, 4096);
     }
 
     #[tokio::test]
@@ -846,6 +863,7 @@ mod tests {
                     size_bytes: 4096,
                 }],
                 None,
+                512,
             )
             .await
             .unwrap_err();
@@ -896,9 +914,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recapturing_forgets_the_root_partition() {
+    async fn recapturing_forgets_the_root_partition_and_records_the_new_sector_size() {
         let (c, _g) = repos().await;
         let img = c.image_repo.create_image("img".into()).await.unwrap();
+        assert_eq!(img.sector_size, 512);
         c.image_repo
             .save_partition(img.id, 1, "ext4", 20)
             .await
@@ -908,9 +927,11 @@ mod tests {
             .await
             .unwrap();
 
-        c.image_repo.start_capture(img.id).await.unwrap();
+        c.image_repo.start_capture(img.id, 4096).await.unwrap();
 
-        assert_eq!(c.image_repo.get(img.id).await.unwrap().root_partition, None);
+        let recaptured = c.image_repo.get(img.id).await.unwrap();
+        assert_eq!(recaptured.root_partition, None);
+        assert_eq!(recaptured.sector_size, 4096);
     }
 
     #[test]

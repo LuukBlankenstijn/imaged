@@ -5,5 +5,6 @@ edition.workspace = true
 
 [dependencies]
 httparse = "1.10"
+local-ip-address = "0.6.13"
 tokio = { workspace = true, features = ["net", "io-util", "sync", "time"] }
 tracing.workspace = true

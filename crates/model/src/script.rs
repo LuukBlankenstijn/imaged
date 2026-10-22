@@ -51,6 +51,7 @@ pub enum InputSource {
 pub type InputSources = BTreeMap<String, InputSource>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployInputs {
     #[serde(default)]
     pub shared: InputSources,
@@ -341,7 +342,7 @@ mod tests {
     #[test]
     fn a_secret_has_neither_a_default_nor_choices() {
         let secret = input("host_key", InputKind::Secret);
-        validate("s", &[secret.clone()]).unwrap();
+        validate("s", std::slice::from_ref(&secret)).unwrap();
         secret.check("-----BEGIN KEY-----\nline\n").unwrap();
 
         let mut with_default = secret.clone();

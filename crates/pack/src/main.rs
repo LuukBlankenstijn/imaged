@@ -1,6 +1,6 @@
+mod blkid;
 mod cli;
 mod extract;
-mod layout;
 mod pack;
 mod scripts;
 

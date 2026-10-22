@@ -11,6 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
+use imaged_core::AgentLiveness;
 use imaged_core::di::DIContainer;
 use imaged_core::test_support::{self, TestDir};
 use imaged_model::agent::{MAC_HEADER, route};
@@ -22,6 +23,7 @@ pub struct TestServer {
     pub container: DIContainer,
     pub images_dir: PathBuf,
     pub http: reqwest::Client,
+    runtime: tokio::runtime::Handle,
     _dir: TestDir,
 }
 
@@ -51,7 +53,18 @@ pub async fn server() -> &'static TestServer {
 }
 
 async fn build_server() -> TestServer {
-    let (container, dir) = test_support::container().await;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    let (mut container, dir) = test_support::container().await;
+    container.agent_liveness = AgentLiveness {
+        ping_interval: Duration::from_millis(250),
+        timeout: Duration::from_millis(1500),
+    };
     imaged_core::di::init_container(container.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -79,6 +92,7 @@ async fn build_server() -> TestServer {
             .pool_max_idle_per_host(0)
             .build()
             .expect("build harness http client"),
+        runtime: tokio::runtime::Handle::current(),
         _dir: dir,
     }
 }
@@ -104,9 +118,31 @@ pub fn unique_name(prefix: &str) -> String {
     format!("{prefix}-{}-{}", std::process::id(), n)
 }
 
+pub async fn expect_status(
+    resp: reqwest::Response,
+    expected: reqwest::StatusCode,
+) -> reqwest::Response {
+    if resp.status() == expected {
+        return resp;
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    panic!("expected {expected}, got {status}: {body}");
+}
+
 impl TestServer {
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
+    }
+
+    pub async fn on_server<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = T> + Send + 'static,
+    ) -> T {
+        self.runtime
+            .spawn(work)
+            .await
+            .expect("harness task panicked")
     }
 
     pub async fn agent_get(&self, path: &str, mac: &str) -> reqwest::Response {

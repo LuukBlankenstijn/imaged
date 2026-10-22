@@ -4,36 +4,43 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 
 use crate::agent::Agent;
+use crate::server::Uplink;
 use crate::status::Connection;
 use crate::task::{self, ClientState};
 
 #[derive(Clone, Copy, Debug)]
-pub struct Backoff {
-    pub start: Duration,
-    pub cap: Duration,
+pub struct Timing {
+    pub retry_start: Duration,
+    pub retry_cap: Duration,
+    pub server_silence: Duration,
 }
 
-impl Backoff {
-    pub const PRODUCTION: Backoff = Backoff {
-        start: Duration::from_millis(250),
-        cap: Duration::from_secs(5),
+impl Timing {
+    pub const PRODUCTION: Timing = Timing {
+        retry_start: Duration::from_millis(250),
+        retry_cap: Duration::from_secs(5),
+        server_silence: Duration::from_secs(15),
     };
 }
 
 pub async fn run(
     agent: Agent,
     state: Arc<ClientState>,
-    disk_size_bytes: u64,
-    backoff: Backoff,
+    disk: Result<u64, String>,
+    timing: Timing,
 ) -> ! {
-    let mut delay = backoff.start;
+    let mut delay = timing.retry_start;
     loop {
         agent
             .status
             .update(|s| s.connection = Connection::Connecting);
+        let uplink = Uplink {
+            progress: agent.status.uplink(),
+            idle: state.idle(),
+        };
         let lost = match agent
             .server
-            .connect_events(disk_size_bytes, agent.status.uplink())
+            .connect_events(&disk, uplink, timing.server_silence)
             .await
         {
             Ok(events) => {
@@ -41,7 +48,7 @@ pub async fn run(
                 agent
                     .status
                     .update(|s| s.connection = Connection::Connected);
-                delay = backoff.start;
+                delay = timing.retry_start;
                 drain(&agent, &state, events).await;
                 tracing::warn!("agent control connection closed, reconnecting");
                 "the server closed the connection".to_string()
@@ -56,7 +63,7 @@ pub async fn run(
             .update(|s| s.connection = Connection::Lost(lost));
 
         tokio::time::sleep(delay).await;
-        delay = (delay * 2).min(backoff.cap);
+        delay = (delay * 2).min(timing.retry_cap);
     }
 }
 

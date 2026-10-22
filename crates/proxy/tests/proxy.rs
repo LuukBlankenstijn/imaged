@@ -401,6 +401,10 @@ async fn private_targets_are_forbidden_by_default() {
         format!("0.0.0.0:{port}"),
         format!("[fd00::1]:{port}"),
         format!("[fe80::1]:{port}"),
+        format!("[64:ff9b::7f00:1]:{port}"),
+        format!("[::127.0.0.1]:{port}"),
+        format!("[2002:7f00:1::]:{port}"),
+        format!("198.18.0.1:{port}"),
     ] {
         for request in [
             format!("CONNECT {target} HTTP/1.1\r\n\r\n"),

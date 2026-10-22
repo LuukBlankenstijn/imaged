@@ -8,6 +8,9 @@
 let
   inherit (lib) mkOption types;
   cfg = config.imaged.image;
+  host = config;
+  disko = options ? disko && config.disko.devices.disk != { };
+  efi = cfg.partitionTableType != "legacy+gpt";
 
   secretOptions =
     { name, ... }:
@@ -75,18 +78,65 @@ let
         printf '%s' "''$${variable}" > ${path}
         chown ${lib.escapeShellArg "${secret.owner}:${secret.group}"} ${path}
         chmod ${secret.mode} ${path}
-        log "wrote secret ${name} to ${secret.path}"
+        log "wrote secret ${name} to "${path}
       else
-        log "WARNING: secret ${name} has no value, ${secret.path} was not written"
+        log "WARNING: secret ${name} has no value, "${path}" was not written"
+      fi
+    '';
+
+  bootDevices =
+    imageConfig:
+    let
+      inherit (imageConfig.boot.loader) grub limine;
+    in
+    lib.optionals grub.enable (lib.filter (device: device != "nodev") grub.devices)
+    ++ lib.optional (
+      (limine.enable or false) && limine.biosSupport && limine.biosDevice != "nodev"
+    ) limine.biosDevice;
+
+  efiLoader =
+    imageConfig:
+    let
+      loader = imageConfig.boot.loader;
+    in
+    loader.systemd-boot.enable
+    || (loader.grub.enable && loader.grub.efiSupport)
+    || ((loader.limine.enable or false) && loader.limine.efiSupport)
+    || (loader.refind.enable or false);
+
+  linkBootDevice =
+    device:
+    let
+      path = lib.escapeShellArg device;
+    in
+    ''
+      if [ ! -e ${path} ]; then
+        mkdir -p "$(dirname ${path})"
+        ln -s "$target_disk" ${path}
+        log "linked boot loader device "${path}" to $target_disk"
+      elif [ "$(readlink -f ${path})" != "$target_disk" ]; then
+        log "boot loader device "${path}" is $(readlink -f ${path}), not the target disk $target_disk"
+        exit 1
+      fi
+    '';
+
+  linkBootDeviceInDiskoBuilder =
+    device:
+    let
+      path = lib.escapeShellArg device;
+    in
+    ''
+      if [ ! -e ${path} ]; then
+        mkdir -p "$(dirname ${path})"
+        ln -s "$device" ${path}
       fi
     '';
 
   postInstall =
     imageConfig:
     let
-      grub = imageConfig.boot.loader.grub;
-      grubDevices = lib.optionals grub.enable (lib.filter (device: device != "nodev") grub.devices);
       systemPath = imageConfig.system.path;
+      esp = lib.escapeShellArg imageConfig.boot.loader.efi.efiSysMountPoint;
     in
     ''
       #!${pkgs.runtimeShell}
@@ -101,16 +151,13 @@ let
       log "root $root_source on disk $target_disk, mounted: $(findmnt -rno TARGET | tr '\n' ' ')"
       mkdir -p /run
       mountpoint -q /run || mount -t tmpfs -o mode=0755 tmpfs /run
-      ${lib.concatMapStrings (device: ''
-        if [ ! -e ${device} ]; then
-          mkdir -p "$(dirname ${device})"
-          ln -s "$target_disk" ${device}
-          log "linked grub device ${device} to $target_disk"
-        elif [ "$(readlink -f ${device})" != "$target_disk" ]; then
-          log "grub device ${device} is $(readlink -f ${device}), not the target disk $target_disk"
+      ${lib.concatMapStrings linkBootDevice (bootDevices imageConfig)}
+      ${lib.optionalString (efiLoader imageConfig) ''
+        if ! mountpoint -q ${esp}; then
+          log "the ESP "${esp}" is not mounted, so the EFI boot loader cannot be installed"
           exit 1
         fi
-      '') grubDevices}
+      ''}
       log "installing the bootloader"
       SYSTEMD_RELAX_ESP_CHECKS=1 NIXOS_INSTALL_BOOTLOADER=1 \
         ${imageConfig.system.build.installBootLoader} ${imageConfig.system.build.toplevel}
@@ -118,15 +165,20 @@ let
     '';
 
   packArchive =
-    imageConfig: raw:
+    imageConfig: raw: rootPartition:
     let
       name = scriptName imageConfig;
+      toplevel = imageConfig.system.build.toplevel;
       script = pkgs.writeText "${name}.sh" (postInstall imageConfig);
-      closure = pkgs.closureInfo { rootPaths = [ imageConfig.system.build.toplevel ]; };
+      closure = pkgs.closureInfo { rootPaths = [ toplevel ]; };
     in
     pkgs.runCommand imageConfig.image.fileName
       {
-        nativeBuildInputs = [ cfg.package ];
+        nativeBuildInputs = [
+          cfg.package
+          pkgs.e2fsprogs
+          pkgs.util-linux
+        ];
         exportReferencesGraph = [
           "script"
           script
@@ -139,11 +191,19 @@ let
           echo "$missing" >&2
           exit 1
         fi
+        start=$(partx -g -o START --nr ${toString rootPartition} ${raw})
+        debugfs -R 'rdump /nix/var/nix/profiles .' "${raw}?offset=$((start * 512))" || true
+        installed=$(cd profiles && readlink "$(readlink system)" || true)
+        if [ "$installed" != ${toplevel} ]; then
+          echo "partition ${toString rootPartition} of the disk image installs the system '$installed', but the post-install script runs ${toplevel}" >&2
+          exit 1
+        fi
         mkdir -p $out scripts
         cp ${script} scripts/${name}.sh
         cp ${pkgs.writeText "inputs.json" (builtins.toJSON scriptInputs)} scripts/${name}.inputs.json
         imaged-pack ${raw} --name ${lib.escapeShellArg cfg.name} \
-          --script scripts/${name}.sh -o $out/${imageConfig.image.fileName}
+          --root-partition ${toString rootPartition} \
+          --script scripts/${name}.sh -o "$out"/${lib.escapeShellArg imageConfig.image.fileName}
       '';
 
   volatile = [
@@ -200,13 +260,39 @@ let
       ]) cfg.secrets
     );
 
+  systemAssertions =
+    imageConfig:
+    let
+      esp = imageConfig.boot.loader.efi.efiSysMountPoint;
+    in
+    [
+      {
+        assertion = !(imageConfig.system.etc.overlay.enable or false);
+        message = "imaged cannot deploy system.etc.overlay: the deploy reads /etc/fstab from the root filesystem and writes secrets into it, but at boot the overlay hides that /etc";
+      }
+      {
+        assertion =
+          !efiLoader imageConfig
+          || lib.any (fs: fs.mountPoint == esp) (lib.attrValues imageConfig.fileSystems);
+        message = "the EFI boot loader installs into boot.loader.efi.efiSysMountPoint `${esp}`, but no fileSystems entry mounts the ESP there";
+      }
+    ];
+
+  diskoPartitions =
+    imageConfig:
+    lib.sort (a: b: a.priority < b.priority) (
+      lib.attrValues (
+        (lib.head (lib.attrValues imageConfig.disko.devices.disk)).content.partitions or { }
+      )
+    );
+
   diskoAssertions =
     imageConfig:
     let
       disks = imageConfig.disko.devices.disk;
       disk = lib.head (lib.attrValues disks);
       table = disk.content;
-      partitions = lib.sort (a: b: a.priority < b.priority) (lib.attrValues table.partitions);
+      partitions = diskoPartitions imageConfig;
       supported =
         partition:
         partition.content == null
@@ -259,7 +345,7 @@ let
     ];
 
   makeDiskImageAssertions =
-    imageConfig: efi:
+    imageConfig:
     let
       imaged = [ "/" ] ++ lib.optional efi "/boot";
       onDisk = device: lib.hasPrefix "/dev/" (toString device);
@@ -293,7 +379,7 @@ in
       type = types.str;
       default = config.system.name;
       defaultText = lib.literalExpression "config.system.name";
-      description = "Image name stored in the archive.";
+      description = "Image name stored in the archive. The archive file is named after it, with characters that may not appear in store paths replaced by `-`.";
     };
     partitionTableType = mkOption {
       type = types.enum [
@@ -325,62 +411,82 @@ in
     };
   };
 
-  config.image.modules.imaged =
+  config = lib.mkMerge [
     {
-      config,
-      lib,
-      pkgs,
-      modulesPath,
-      ...
-    }:
-    let
-      disko = options ? disko && config.disko.devices.disk != { };
-      efi = cfg.partitionTableType != "legacy+gpt";
-      raw =
-        if disko then
-          "${config.system.build.diskoImages}/${(lib.head (lib.attrValues config.disko.devices.disk)).imageName}.raw"
-        else
-          "${
-            import "${modulesPath}/../lib/make-disk-image.nix" {
-              inherit lib config pkgs;
-              name = "imaged-disk";
-              baseName = "nixos";
-              format = "raw";
-              inherit (cfg) partitionTableType additionalSpace;
-              copyChannel = false;
-            }
-          }/nixos.img";
-    in
-    {
-      imports = [ "${modulesPath}/image/file-options.nix" ];
-      config = lib.mkMerge [
+      boot.growPartition = lib.mkDefault true;
+      fileSystems."/".autoResize = lib.mkDefault true;
+      image.modules.imaged =
         {
-          assertions =
-            secretAssertions config
-            ++ (if disko then diskoAssertions config else makeDiskImageAssertions config efi);
-          boot.growPartition = lib.mkDefault true;
-          fileSystems."/".autoResize = lib.mkDefault true;
-          image.extension = "imaged";
-          image.baseName = lib.mkDefault "${cfg.name}";
-          system.build.image = packArchive config raw;
-        }
-        (lib.mkIf (!disko) {
-          fileSystems."/" = lib.mkForce {
-            device = "/dev/disk/by-label/nixos";
-            fsType = "ext4";
-            autoResize = true;
-          };
-          fileSystems."/boot" = lib.mkIf efi (
-            lib.mkForce {
-              device = "/dev/disk/by-label/ESP";
-              fsType = "vfat";
-              options = [
-                "fmask=0077"
-                "dmask=0077"
-              ];
+          config,
+          lib,
+          pkgs,
+          modulesPath,
+          ...
+        }:
+        let
+          raw =
+            if disko then
+              "${config.system.build.diskoImages}/${(lib.head (lib.attrValues config.disko.devices.disk)).imageName}.raw"
+            else
+              "${
+                import "${modulesPath}/../lib/make-disk-image.nix" {
+                  inherit lib config pkgs;
+                  name = "imaged-disk";
+                  baseName = "nixos";
+                  format = "raw";
+                  inherit (cfg) partitionTableType additionalSpace;
+                  copyChannel = false;
+                }
+              }/nixos.img";
+          rootPartition =
+            if disko then
+              (lib.findFirst (p: p.content.mountpoint or null == "/") null (diskoPartitions config))._index or 0
+            else
+              {
+                efi = 2;
+                hybrid = 3;
+                "legacy+gpt" = 2;
+              }
+              .${cfg.partitionTableType};
+        in
+        {
+          imports = [ "${modulesPath}/image/file-options.nix" ];
+          config = lib.mkMerge [
+            {
+              assertions =
+                systemAssertions config
+                ++ secretAssertions config
+                ++ (if disko then diskoAssertions config else makeDiskImageAssertions config);
+              image.extension = "imaged";
+              image.baseName = lib.mkDefault (lib.strings.sanitizeDerivationName cfg.name);
+              system.build.image = packArchive config raw rootPartition;
             }
-          );
-        })
-      ];
-    };
+            (lib.optionalAttrs disko {
+              disko.imageBuilder.imageFormat = lib.mkForce "raw";
+              boot.loader.grub.devices = lib.mkOverride 49 host.boot.loader.grub.devices;
+              disko.devices.disk = lib.mapAttrs (_: _: {
+                postCreateHook = lib.concatMapStrings linkBootDeviceInDiskoBuilder (bootDevices host);
+              }) host.disko.devices.disk;
+            })
+          ];
+        };
+    }
+    (lib.mkIf (!disko) {
+      fileSystems."/" = lib.mkForce {
+        device = "/dev/disk/by-label/nixos";
+        fsType = "ext4";
+        autoResize = true;
+      };
+      fileSystems."/boot" = lib.mkIf efi (
+        lib.mkForce {
+          device = "/dev/disk/by-label/ESP";
+          fsType = "vfat";
+          options = [
+            "fmask=0077"
+            "dmask=0077"
+          ];
+        }
+      );
+    })
+  ];
 }

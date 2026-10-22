@@ -5,14 +5,17 @@ use std::collections::{BTreeMap, HashSet};
 
 use dioxus::prelude::*;
 
-use crate::components::deploy_inputs::{form_fields, initial_inputs, submitted_inputs};
+use crate::components::deploy_inputs::{
+    deploy_request, erase_target, form_fields, initial_inputs, multicast_request, submitted_inputs,
+};
+use crate::components::hooks::Polled;
 use crate::components::icons::Icon;
 use crate::components::ui::{
     Button, EmptyState, ImageStatusBadge, StatusDot, TaskStateBadge, TaskTypeBadge,
 };
 use crate::format::{format_bytes, format_relative};
 use crate::model::{
-    DeployInputs, ImageStatus, InputKind, InputSource, InputSources, Script, ScriptInput,
+    DeployInputs, Host, ImageStatus, InputKind, InputSource, InputSources, Script, ScriptInput,
     TaskState, TaskType,
 };
 use crate::views::groups::{all_selected, toggle_visible};
@@ -323,24 +326,45 @@ fn submitting_the_deploy_form_leaves_out_cleared_values_and_hosts_without_any() 
 }
 
 #[test]
-fn a_choice_input_draft_saves_its_trimmed_comma_separated_choices() {
+fn saving_an_unchanged_input_in_the_editor_keeps_its_choices_default_and_label_verbatim() {
+    let input = ScriptInput {
+        name: "edition".to_string(),
+        label: " Edition ".to_string(),
+        description: Some("Which edition to install".to_string()),
+        kind: InputKind::Choice,
+        required: true,
+        default_value: Some(" pro".to_string()),
+        per_machine: false,
+        choices: vec![
+            "home, office".to_string(),
+            " pro".to_string(),
+            "edu".to_string(),
+        ],
+    };
+
+    let saved = ScriptInput::from(&InputDraft::from(&input));
+
+    assert_eq!(saved, input);
+}
+
+#[test]
+fn the_editor_takes_one_choice_per_line_and_skips_blank_lines() {
     let draft = InputDraft {
         name: " edition ".to_string(),
-        label: " Edition ".to_string(),
+        label: "Edition".to_string(),
         description: String::new(),
         kind: InputKind::Choice,
         required: true,
-        default_value: " pro ".to_string(),
+        default_value: String::new(),
         per_machine: false,
-        choices: "home, pro ,, edu".to_string(),
+        choices: "home, office\n\n pro\nedu\n".to_string(),
     };
 
     let saved = ScriptInput::from(&draft);
 
     assert_eq!(saved.name, "edition");
-    assert_eq!(saved.label, "Edition");
-    assert_eq!(saved.default_value.as_deref(), Some("pro"));
-    assert_eq!(saved.choices, ["home", "pro", "edu"]);
+    assert_eq!(saved.default_value, None);
+    assert_eq!(saved.choices, ["home, office", " pro", "edu"]);
 }
 
 #[test]
@@ -351,9 +375,9 @@ fn a_draft_switched_away_from_choice_drops_its_choices_and_an_empty_default() {
         description: String::new(),
         kind: InputKind::Number,
         required: false,
-        default_value: "  ".to_string(),
+        default_value: String::new(),
         per_machine: true,
-        choices: "a, b".to_string(),
+        choices: "a\nb".to_string(),
     };
 
     let saved = ScriptInput::from(&draft);
@@ -361,4 +385,80 @@ fn a_draft_switched_away_from_choice_drops_its_choices_and_an_empty_default() {
     assert!(saved.choices.is_empty());
     assert_eq!(saved.default_value, None);
     assert!(saved.per_machine);
+}
+
+#[test]
+fn a_failed_poll_keeps_the_last_loaded_value_and_reports_the_error() {
+    let mut polled = Polled::default();
+    polled.record(Ok::<_, String>(vec![1, 2]));
+
+    polled.record(Err("server restarting".to_string()));
+
+    assert_eq!(polled.value, Some(vec![1, 2]));
+    assert_eq!(polled.error.as_deref(), Some("server restarting"));
+}
+
+#[test]
+fn a_successful_poll_replaces_the_value_and_clears_the_error() {
+    let mut polled = Polled::default();
+    polled.record(Err::<Vec<i32>, _>("down".to_string()));
+    assert_eq!(polled.value, None);
+
+    polled.record(Ok::<_, String>(vec![3]));
+
+    assert_eq!(polled.value, Some(vec![3]));
+    assert_eq!(polled.error, None);
+}
+
+fn filled_form() -> DeployInputs {
+    DeployInputs {
+        shared: values(&[("site", "hq"), ("role", "")]),
+        per_machine: BTreeMap::from([(4, values(&[("hostname", "pc-4")]))]),
+    }
+}
+
+#[test]
+fn a_deploy_cannot_be_submitted_before_an_image_is_chosen_and_its_inputs_are_loaded() {
+    let form = filled_form();
+
+    assert_eq!(deploy_request(4, None, Some(&form)), None);
+    assert_eq!(deploy_request(4, Some(9), None), None);
+
+    let request = deploy_request(4, Some(9), Some(&form)).unwrap();
+    assert_eq!((request.id, request.image_id), (4, 9));
+    assert_eq!(request.inputs, submitted_inputs(&form));
+}
+
+#[test]
+fn a_multicast_targets_every_member_and_needs_members_an_image_and_loaded_inputs() {
+    let form = filled_form();
+
+    assert_eq!(multicast_request(&[], Some(9), Some(&form)), None);
+    assert_eq!(multicast_request(&[4, 7], None, Some(&form)), None);
+    assert_eq!(multicast_request(&[4, 7], Some(9), None), None);
+
+    let request = multicast_request(&[4, 7], Some(9), Some(&form)).unwrap();
+    assert_eq!(request.host_ids, [4, 7]);
+    assert_eq!(request.image_id, 9);
+    assert_eq!(request.inputs.shared, values(&[("site", "hq")]));
+}
+
+#[test]
+fn the_erase_warning_names_each_target_with_its_mac_and_disk() {
+    let mut host = Host {
+        id: 4,
+        mac_address: "aa:bb:cc:dd:ee:04".to_string(),
+        name: "lab-4".to_string(),
+        disk_size_bytes: Some(1024u64.pow(3)),
+        disk_error: None,
+        ip: None,
+    };
+    assert_eq!(erase_target(&host), "lab-4 · aa:bb:cc:dd:ee:04 · 1.00 GiB");
+
+    host.disk_size_bytes = None;
+    host.disk_error = Some("multiple disks found".to_string());
+    assert_eq!(
+        erase_target(&host),
+        "lab-4 · aa:bb:cc:dd:ee:04 · no usable disk"
+    );
 }

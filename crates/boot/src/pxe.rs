@@ -99,7 +99,7 @@ async fn manifest_ipxe(
         format!("{serial} console=tty0")
     };
 
-    tracing::info!(target: "boot_config", console_args = %console_args, "Selected console line");
+    tracing::info!(console_args = %console_args, "Selected console line");
 
     let arch = params.arch;
     let early_console = arch.early_console();

@@ -5,12 +5,13 @@ pub mod mount;
 use std::net::IpAddr;
 
 use anyhow::{Context as _, Result};
-use mac_address::MacAddress;
+use imaged_model::agent::MacAddress;
 
 pub fn get_mac() -> Result<MacAddress> {
-    mac_address::get_mac_address()
+    let mac = mac_address::get_mac_address()
         .context("mac address")?
-        .context("no mac address found")
+        .context("no mac address found")?;
+    Ok(MacAddress::from(mac.bytes()))
 }
 
 pub fn get_ip() -> Option<IpAddr> {

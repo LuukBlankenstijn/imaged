@@ -25,9 +25,10 @@ pub fn capture(source: &Path) -> anyhow::Result<Captured> {
     Ok(Box::new(Cursor::new(start)))
 }
 
-pub async fn restore(mut data: impl AsyncRead + Unpin, target: &Path) -> anyhow::Result<()> {
+pub async fn restore(data: impl AsyncRead + Unpin, target: &Path) -> anyhow::Result<()> {
     let mut header = Vec::new();
-    data.read_to_end(&mut header)
+    data.take(LARGEST_PAGE as u64 + 1)
+        .read_to_end(&mut header)
         .await
         .context("reading the swap header")?;
     if !PAGE_SIZES.contains(&header.len()) || !header.ends_with(SIGNATURE) {

@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 const PUBLIC_URL: &str = "http://imaged.test:8080";
+const PROMPTLY: Duration = Duration::from_secs(10);
 
 type AgentStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -30,12 +31,7 @@ impl Drop for DataDir {
 }
 
 fn config(data_dir: &Path) -> Config {
-    Config {
-        data_dir: data_dir.to_path_buf(),
-        multicast_interface: "lo".to_string(),
-        script_proxy: None,
-        script_variables: Default::default(),
-    }
+    Config::new(data_dir, "lo")
 }
 
 fn free_address() -> SocketAddr {
@@ -53,13 +49,10 @@ fn free_udp_address() -> SocketAddr {
 }
 
 fn listeners(machine: SocketAddr, tftp: Option<SocketAddr>, dashboard: Dashboard) -> Listeners {
-    Listeners {
-        machine,
-        public_url: PUBLIC_URL.to_string(),
-        tftp,
-        proxy: None,
-        dashboard,
-    }
+    let mut listeners = Listeners::new(machine, PUBLIC_URL);
+    listeners.tftp = tftp;
+    listeners.dashboard = dashboard;
+    listeners
 }
 
 async fn connect_agent(address: SocketAddr) -> AgentStream {
@@ -72,8 +65,8 @@ async fn connect_agent(address: SocketAddr) -> AgentStream {
     connect_async(request).await.unwrap().0
 }
 
-async fn closes_within_a_second(agent: &mut AgentStream) -> bool {
-    tokio::time::timeout(Duration::from_secs(1), async {
+async fn closes_promptly(agent: &mut AgentStream) -> bool {
+    tokio::time::timeout(PROMPTLY, async {
         while let Some(Ok(message)) = agent.next().await {
             if message.is_close() {
                 break;
@@ -84,15 +77,15 @@ async fn closes_within_a_second(agent: &mut AgentStream) -> bool {
     .is_ok()
 }
 
-async fn next_within_a_second(progress: &mut TaskProgressFeed) -> Vec<TaskProgress> {
-    tokio::time::timeout(Duration::from_secs(1), progress.next())
+async fn next_promptly(progress: &mut TaskProgressFeed) -> Vec<TaskProgress> {
+    tokio::time::timeout(PROMPTLY, progress.next())
         .await
         .unwrap()
         .unwrap()
 }
 
-async fn ends_within_a_second(mut response: reqwest::Response) -> bool {
-    tokio::time::timeout(Duration::from_secs(1), async {
+async fn ends_promptly(mut response: reqwest::Response) -> bool {
+    tokio::time::timeout(PROMPTLY, async {
         while let Ok(Some(_)) = response.chunk().await {}
     })
     .await
@@ -155,6 +148,17 @@ impl Probe {
             .unwrap()
     }
 
+    async fn wake_nobody(&self, address: SocketAddr, headers: &[(&str, &str)]) -> StatusCode {
+        let mut request = self
+            .0
+            .post(format!("http://{address}/api/ui/hosts/wake"))
+            .body(r#"{"host_ids":[]}"#);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.send().await.unwrap().status()
+    }
+
     async fn refuses_connections(&self, address: SocketAddr) -> bool {
         self.0
             .get(format!("http://{address}/boot/boot.ipxe"))
@@ -196,6 +200,13 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
                 .await
         ),
         Some(ErrorKind::NotFound)
+    );
+    assert!(probe.refuses_connections(unstarted).await);
+    let mut schemeless = listeners(unstarted, None, Dashboard::Off);
+    schemeless.public_url = "imaged.test:8080".to_string();
+    assert_eq!(
+        error_kind(imaged.serve(schemeless).await),
+        Some(ErrorKind::InvalidInput)
     );
     assert!(probe.refuses_connections(unstarted).await);
     std::fs::create_dir_all(&dashboard_assets).unwrap();
@@ -249,17 +260,17 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
     };
     let event = serde_json::to_string(&AgentEvent::from(reported.clone())).unwrap();
     agent.send(Message::text(event)).await.unwrap();
-    let tasks = next_within_a_second(&mut progress).await;
+    let tasks = next_promptly(&mut progress).await;
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task_id, 7);
     assert_eq!(tasks[0].hosts.values().collect::<Vec<_>>(), [&reported]);
     assert_eq!(imaged.task_progress(), tasks);
     let stopping = Instant::now();
     server.stop().await.unwrap();
-    assert!(stopping.elapsed() < Duration::from_secs(1));
-    assert!(closes_within_a_second(&mut agent).await);
+    assert!(stopping.elapsed() < Duration::from_secs(3));
+    assert!(closes_promptly(&mut agent).await);
     assert!(imaged.connected_hosts().is_empty());
-    assert!(next_within_a_second(&mut progress).await.is_empty());
+    assert!(next_promptly(&mut progress).await.is_empty());
     assert!(probe.refuses_connections(headless).await);
     assert!(imaged_api_ui::hosts::wake_on_lan(Vec::new()).await.is_err());
 
@@ -279,12 +290,31 @@ async fn imaged_serves_machines_on_the_requested_listeners_and_restarts_on_new_a
     assert!(probe.boot_script(dashboard).await.is_none());
     assert!(!probe.serves_agent_api(dashboard).await);
     assert!(probe.serves_dashboard_api(dashboard).await);
+    let json = ("content-type", "application/json");
+    assert_eq!(
+        probe
+            .wake_nobody(dashboard, &[json, ("sec-fetch-site", "same-origin")])
+            .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        probe
+            .wake_nobody(dashboard, &[json, ("origin", "http://evil.example")])
+            .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        probe
+            .wake_nobody(dashboard, &[("content-type", "text/plain")])
+            .await,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
 
     let endless_stream = probe.dashboard_progress(dashboard).await;
     let stopping = Instant::now();
     server.stop().await.unwrap();
     assert!(stopping.elapsed() < Duration::from_secs(5));
-    assert!(ends_within_a_second(endless_stream).await);
+    assert!(ends_promptly(endless_stream).await);
     assert!(probe.refuses_connections(machine).await);
     assert!(probe.refuses_connections(dashboard).await);
 

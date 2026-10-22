@@ -75,6 +75,7 @@ impl ArchiveService {
             name: image.name,
             captured_at: image.captured_at,
             root_partition: image.root_partition,
+            sector_size: image.sector_size,
             scripts: scripts
                 .into_iter()
                 .map(|script| imaged_archive::Script {
@@ -128,9 +129,7 @@ impl ArchiveService {
     {
         let import_dir = self.image_service.import_dir(image_id);
         let Unpacked { manifest, scripts } = reader.unpack(Path::new(&import_dir)).await?;
-        tokio::fs::rename(&import_dir, self.image_service.image_dir(image_id))
-            .await
-            .map_err(store_failed)?;
+        self.image_service.commit_import(image_id).await?;
         let scripts: Vec<NewScript> = scripts
             .into_iter()
             .map(|script| NewScript {
@@ -148,6 +147,7 @@ impl ArchiveService {
                 manifest.captured_at,
                 &partitions(&manifest),
                 manifest.root_partition,
+                manifest.sector_size,
             )
             .await
     }
@@ -178,12 +178,9 @@ fn partitions(manifest: &Manifest) -> Vec<NewImagePartition> {
         .collect()
 }
 
-fn store_failed(error: io::Error) -> AppError {
-    AppError::Internal(format!("failed to store imported image: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
+    use imaged_archive::manifest::FORMAT;
     use imaged_model::script::{InputKind, ScriptInput};
 
     use super::*;
@@ -200,11 +197,12 @@ mod tests {
 
     async fn ready_image(c: &DIContainer) -> Image {
         let image = c.image_repo.create_image("golden".into()).await.unwrap();
+        c.image_repo.start_capture(image.id, 4096).await.unwrap();
         c.image_service
             .save_partition_table(image.id, TABLE)
             .await
             .unwrap();
-        for (number, fstype, data) in [(1, "vfat", large()), (2, "ntfs", SMALL.to_vec())] {
+        for (number, fstype, data) in [(1, "vfat", large()), (2, "ext4", SMALL.to_vec())] {
             c.image_service
                 .save_partition_data(
                     image.id,
@@ -234,12 +232,20 @@ mod tests {
     async fn scripts_archive(guard: &TestDir, scripts: &[(&str, &str)]) -> Vec<u8> {
         let table = guard.path().join("table");
         std::fs::write(&table, TABLE).unwrap();
+        let partition = guard.path().join("partition");
+        std::fs::write(&partition, SMALL).unwrap();
         let contents = Contents {
             name: "imported".into(),
             captured_at: None,
             partition_table: table,
-            partitions: Vec::new(),
+            partitions: vec![PartitionSource {
+                path: partition,
+                number: 1,
+                fstype: "ext4".into(),
+                size_bytes: 1 << 20,
+            }],
             root_partition: None,
+            sector_size: 512,
             scripts: scripts
                 .iter()
                 .map(|&(name, body)| imaged_archive::Script {
@@ -312,6 +318,7 @@ mod tests {
         assert_eq!(imported.status, ImageStatus::Ready);
         assert_eq!(imported.captured_at, source.captured_at);
         assert_eq!(imported.root_partition, Some(2));
+        assert_eq!(imported.sector_size, 4096);
         let layout = |image: &Image| -> Vec<(i64, String, u64)> {
             image
                 .partitions
@@ -375,7 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scripts_travel_with_the_archive_and_replace_library_scripts_of_the_same_name() {
+    async fn scripts_travel_with_the_archive_without_changing_scripts_other_images_use() {
         let (c, _guard) = container().await;
         let source = scripted_image(&c).await;
         let archive = export(&c, source.id).await;
@@ -417,17 +424,26 @@ mod tests {
             listed,
             [
                 (
-                    "set-hostname",
+                    "set-hostname-2",
                     "#!/bin/sh\nhostname \"$IMAGED_INPUT_HOSTNAME\"\n",
                     1
                 ),
                 ("cleanup", "rm -rf /var/cache/*\n", 0),
             ]
         );
-        assert_eq!(scripts[0].id, hostname.id);
         assert_eq!(scripts[0].inputs, [hostname_input()]);
-        assert_ne!(scripts[1].id, cleanup.id);
-        assert_eq!(c.script_repo.get(cleanup.id).await.unwrap().name, "tidy");
+        let kept = c.script_repo.get_for_image(source.id).await.unwrap();
+        let kept: Vec<(i64, &str, &str)> = kept
+            .iter()
+            .map(|s| (s.id, s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (hostname.id, "set-hostname", "echo edited"),
+                (cleanup.id, "tidy", "rm -rf /var/cache/*\n"),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -519,11 +535,19 @@ mod tests {
         let (c, guard) = container().await;
         let source = ready_image(&c).await;
         let mut archive = export(&c, source.id).await;
-        replace(&mut archive, b"\"format\": 1", b"\"format\": 2");
+        let unsupported = FORMAT + 1;
+        replace(
+            &mut archive,
+            format!("\"format\": {FORMAT}").as_bytes(),
+            format!("\"format\": {unsupported}").as_bytes(),
+        );
 
         let message = rejected_import(&c, &archive).await;
 
-        assert_eq!(message, "unsupported archive format 2, expected 1");
+        assert_eq!(
+            message,
+            format!("unsupported archive format {unsupported}, expected {FORMAT}")
+        );
         let ids: Vec<i64> = c
             .image_repo
             .get_all()

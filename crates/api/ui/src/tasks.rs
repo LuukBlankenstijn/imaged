@@ -1,25 +1,48 @@
 use dioxus::prelude::*;
 
-use crate::model::{KickRequest, ScriptRun, Task};
+use crate::model::{KickRequest, ScriptRun, TaskPage, TaskQuery};
 
 #[cfg(feature = "server")]
 use injectable::inject;
 
 #[cfg(feature = "server")]
+use crate::model::TaskStatus;
+#[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, MulticastMgr, Progress, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::task::TaskType;
+use imaged_core::domain::task::{Task as DTask, TaskQuery as DTaskQuery, TaskType};
 #[cfg(feature = "server")]
 use imaged_model::error::AppError;
 use imaged_model::error::Result;
 #[cfg(feature = "server")]
 use imaged_model::task::TaskState;
 
-#[get("/api/ui/tasks")]
+#[cfg(feature = "server")]
+const DEFAULT_PAGE_SIZE: u32 = 50;
+
+#[get("/api/ui/tasks?{query}")]
 #[inject(task_repo: TaskRepo)]
-pub async fn get_all_tasks() -> Result<Vec<Task>> {
-    let tasks = task_repo.get_all().await?;
-    Ok(tasks.into_iter().map(Into::into).collect())
+pub async fn list_tasks(query: TaskQuery) -> Result<TaskPage> {
+    let page = task_repo
+        .list(&DTaskQuery {
+            states: query.status.map(status_states).unwrap_or_default(),
+            task_type: query.task_type.map(Into::into),
+            host_id: query.host_id,
+            before: query.before,
+            limit: query.limit.unwrap_or(DEFAULT_PAGE_SIZE),
+        })
+        .await?;
+    Ok(page.into())
+}
+
+#[cfg(feature = "server")]
+fn status_states(status: TaskStatus) -> Vec<TaskState> {
+    match status {
+        TaskStatus::Active => vec![TaskState::Pending, TaskState::Running],
+        TaskStatus::Done => vec![TaskState::Done],
+        TaskStatus::Failed => vec![TaskState::Failed, TaskState::Partial],
+        TaskStatus::Cancelled => vec![TaskState::Cancelled],
+    }
 }
 
 #[get("/api/ui/tasks/{task_id}/hosts/{host_id}/scripts")]
@@ -30,7 +53,7 @@ pub async fn get_script_runs(task_id: i64, host_id: i64) -> Result<Vec<ScriptRun
 }
 
 #[post("/api/ui/tasks/cancel")]
-#[inject(task_repo: TaskRepo, image_repo: ImageRepo, multicast_mgr: MulticastMgr, registry: Registry, progress: Progress)]
+#[inject(task_repo: TaskRepo)]
 pub async fn cancel_task(id: i64) -> Result<()> {
     let task = task_repo.get(id).await?;
     let state = task.aggregate_state();
@@ -39,6 +62,12 @@ pub async fn cancel_task(id: i64) -> Result<()> {
             "cannot cancel task {id}, task is not pending or running"
         )));
     }
+    cancel_active(&task).await
+}
+
+#[cfg(feature = "server")]
+#[inject(task_repo: TaskRepo, image_repo: ImageRepo, multicast_mgr: MulticastMgr, registry: Registry, progress: Progress)]
+pub(crate) async fn cancel_active(task: &DTask) -> Result<()> {
     task_repo.cancel(task.id).await?;
     if let Some(image_id) = task.image_id
         && task.task_type == TaskType::Capture
@@ -55,7 +84,7 @@ pub async fn cancel_task(id: i64) -> Result<()> {
         .iter()
         .filter(|h| h.state.is_pending() || h.state.is_running())
     {
-        registry.cancel_task(host.host_id, task.id);
+        registry.dispatch(host.host_id);
         progress.forget(host.host_id);
     }
     Ok(())
@@ -77,7 +106,7 @@ pub async fn kick_host(req: KickRequest) -> Result<()> {
         .mark_failed(task.id, host_id, "Kicked from the multicast by user")
         .await?;
     multicast_mgr.wake();
-    registry.cancel_task(host_id, task.id);
+    registry.dispatch(host_id);
     progress.forget(host_id);
     Ok(())
 }
@@ -108,11 +137,7 @@ pub async fn retry_task(id: i64) -> Result<()> {
         return Ok(());
     }
     for host in &task.hosts {
-        if let Some(next_task) = task_repo.get_next(host.host_id).await?
-            && next_task.id == task.id
-        {
-            registry.send_task(host.host_id, &task);
-        }
+        registry.dispatch(host.host_id);
     }
     Ok(())
 }

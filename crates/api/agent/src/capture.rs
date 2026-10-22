@@ -10,7 +10,7 @@ use imaged_core::{
     domain::task::{Task, TaskType},
 };
 use imaged_model::{
-    agent::{ImagePartition, PartitionUpload},
+    agent::{ImagePartition, PartitionTableUpload, PartitionUpload},
     error::{AppError, Result},
     task::TaskState,
 };
@@ -47,17 +47,27 @@ pub async fn upload_partition_data(
 }
 
 #[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo, host_repo: HostRepo, task_repo: TaskRepo)]
-pub async fn partition_table(agent: AgentInfo, Path(task_id): Path<i64>, body: Bytes) -> Result {
+pub async fn partition_table(
+    agent: AgentInfo,
+    Path(task_id): Path<i64>,
+    Query(PartitionTableUpload { sector_size }): Query<PartitionTableUpload>,
+    body: Bytes,
+) -> Result {
     let (task, image_id) = get_capture_task_and_verify(&agent.mac, task_id).await?;
     if task.aggregate_state() != TaskState::Pending {
         return Err(AppError::InvalidArgument(
             "Task has already stared".to_string(),
         ));
     }
+    if sector_size < 512 || !sector_size.is_power_of_two() {
+        return Err(AppError::InvalidArgument(format!(
+            "invalid logical sector size {sector_size}"
+        )));
+    }
 
     image_service.clear_image_data(image_id).await?;
     // remove old partition records and marks image as capturing
-    image_repo.start_capture(image_id).await?;
+    image_repo.start_capture(image_id, sector_size).await?;
     // save partition table
     image_service.save_partition_table(image_id, &body).await?;
     // mark this host's row running

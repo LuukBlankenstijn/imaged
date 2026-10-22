@@ -2,21 +2,28 @@ use imaged_core::domain::{
     host::Host as DHost,
     image::Image as DImage,
     script::{NewScript as DNewScript, Script as DScript},
-    task::{ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskType as DType},
+    task::{
+        ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskPage as DTaskPage,
+        TaskType as DType,
+    },
 };
 use imaged_core::multicast::MulticastProgress as DMulticastProgress;
 use imaged_core::progress::TaskProgress as DTaskProgress;
-use imaged_model::script::ScriptInput as DScriptInput;
 
 use crate::model;
 
 impl From<DHost> for model::Host {
     fn from(h: DHost) -> Self {
+        let (disk_size_bytes, disk_error) = match h.disk {
+            Ok(size) => (Some(size), None),
+            Err(reason) => (None, Some(reason)),
+        };
         Self {
             id: h.id,
             mac_address: h.mac_address,
             name: h.name,
-            disk_size_bytes: h.disk_size,
+            disk_size_bytes,
+            disk_error,
             ip: h.ip,
         }
     }
@@ -70,10 +77,23 @@ impl From<DType> for model::TaskType {
     }
 }
 
+impl From<model::TaskType> for DType {
+    fn from(t: model::TaskType) -> Self {
+        match t {
+            model::TaskType::Capture => Self::Capture,
+            model::TaskType::Deploy => Self::Deploy,
+            model::TaskType::Multicast => Self::Multicast,
+            model::TaskType::Reboot => Self::Reboot,
+        }
+    }
+}
+
 impl From<DTaskHost> for model::TaskHost {
     fn from(h: DTaskHost) -> Self {
         Self {
             host_id: h.host_id,
+            host_name: h.host_name,
+            mac_address: h.mac,
             state: h.state,
             error: h.error,
             started_at: h.started_at.map(|t| t.timestamp_millis()),
@@ -98,36 +118,6 @@ impl From<DTask> for model::Task {
     }
 }
 
-impl From<DScriptInput> for model::ScriptInput {
-    fn from(i: DScriptInput) -> Self {
-        Self {
-            name: i.name,
-            label: i.label,
-            description: i.description,
-            kind: i.kind,
-            required: i.required,
-            default_value: i.default_value,
-            per_machine: i.per_machine,
-            choices: i.choices,
-        }
-    }
-}
-
-impl From<model::ScriptInput> for DScriptInput {
-    fn from(i: model::ScriptInput) -> Self {
-        Self {
-            name: i.name,
-            label: i.label,
-            description: i.description,
-            kind: i.kind,
-            required: i.required,
-            default_value: i.default_value,
-            per_machine: i.per_machine,
-            choices: i.choices,
-        }
-    }
-}
-
 impl From<DScript> for model::Script {
     fn from(s: DScript) -> Self {
         Self {
@@ -135,7 +125,7 @@ impl From<DScript> for model::Script {
             name: s.name,
             body: s.body,
             updated_at: s.updated_at.timestamp_millis(),
-            inputs: s.inputs.into_iter().map(Into::into).collect(),
+            inputs: s.inputs,
         }
     }
 }
@@ -145,7 +135,16 @@ impl From<model::ScriptRequest> for DNewScript {
         Self {
             name: s.name,
             body: s.body,
-            inputs: s.inputs.into_iter().map(Into::into).collect(),
+            inputs: s.inputs,
+        }
+    }
+}
+
+impl From<DTaskPage> for model::TaskPage {
+    fn from(p: DTaskPage) -> Self {
+        Self {
+            tasks: p.tasks.into_iter().map(Into::into).collect(),
+            next_cursor: p.next_cursor,
         }
     }
 }

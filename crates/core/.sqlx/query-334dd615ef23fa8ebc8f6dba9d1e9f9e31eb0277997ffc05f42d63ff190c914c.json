@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE script_runs SET output_bytes = output_bytes + ? WHERE task_id = ? AND host_id = ? AND position = ? AND finished_at IS NULL RETURNING output_bytes",
+  "describe": {
+    "columns": [
+      {
+        "name": "output_bytes",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "334dd615ef23fa8ebc8f6dba9d1e9f9e31eb0277997ffc05f42d63ff190c914c"
+}

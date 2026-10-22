@@ -5,27 +5,34 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use mac_address::MacAddress;
 use reqwest::Url;
 use tokio::io::AsyncReadExt;
 use tokio::sync::watch;
 
-use imaged_agent::server::Server;
+use imaged_agent::server::{Server, Uplink};
 use imaged_agent::status::{Identity, Status};
 use imaged_core::domain::script::NewScript;
 use imaged_core::domain::task::{Task, TaskType};
 use imaged_core::progress::Snapshot;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::ServerEvent;
-use imaged_model::agent::{ImagePartition, PostInstall, PostInstallScript};
+use imaged_model::agent::{ImagePartition, MacAddress, PostInstall, PostInstallScript};
 use imaged_model::image::ImageStatus;
-use imaged_model::progress::Stage;
+use imaged_model::progress::{HostProgress, Stage};
 use imaged_model::script::{InputKind, InputValues, ScriptInput};
 use imaged_model::task::TaskState;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 const AGENT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
 const WAIT: Duration = Duration::from_secs(5);
+const SILENCE_LIMIT: Duration = Duration::from_secs(30);
+
+fn uplink(progress: watch::Receiver<Option<HostProgress>>) -> Uplink {
+    Uplink {
+        progress,
+        idle: watch::channel(()).1,
+    }
+}
 
 fn agent(s: &harness::TestServer) -> (Server, String) {
     let mac: MacAddress = harness::unique_mac().parse().expect("unique mac parses");
@@ -57,7 +64,7 @@ async fn connect_events_registers_an_unknown_host_with_its_disk_size_and_ip() {
     assert!(s.container.host_repo.get_by_mac(&mac).await.is_err());
 
     let events = agent
-        .connect_events(DISK, watch::channel(None).1)
+        .connect_events(&Ok(DISK), uplink(watch::channel(None).1), SILENCE_LIMIT)
         .await
         .expect("connect events");
     let mut events = std::pin::pin!(events);
@@ -69,14 +76,19 @@ async fn connect_events_registers_an_unknown_host_with_its_disk_size_and_ip() {
         .await
         .expect("host registered by the event stream");
     assert_eq!(host.mac_address, mac);
-    assert_eq!(host.disk_size, DISK);
+    assert_eq!(host.disk, Ok(DISK));
     assert_eq!(host.ip.as_deref(), Some("10.0.0.7"));
 
+    assert_eq!(
+        tokio::time::timeout(WAIT, events.next()).await.unwrap(),
+        Some(ServerEvent::Current(None)),
+        "a host without tasks is told it has none"
+    );
     assert!(
         tokio::time::timeout(Duration::from_millis(300), events.next())
             .await
             .is_err(),
-        "a host without tasks receives no event"
+        "nothing changed, so nothing more is sent"
     );
 }
 
@@ -94,7 +106,7 @@ async fn the_pending_capture_task_is_the_first_server_event() {
     let task_id = seed::capture_task(s, host.id, image.id).await;
 
     let events = agent
-        .connect_events(DISK, watch::channel(None).1)
+        .connect_events(&Ok(DISK), uplink(watch::channel(None).1), SILENCE_LIMIT)
         .await
         .expect("connect events");
     let mut events = std::pin::pin!(events);
@@ -103,15 +115,17 @@ async fn the_pending_capture_task_is_the_first_server_event() {
         .expect("first event within the timeout")
         .expect("stream still open");
 
-    let ServerEvent::Task(task) = event else {
-        panic!("expected a task event, got {event:?}");
-    };
-    assert_eq!(task.id, task_id);
-    assert_eq!(task.task_type, imaged_model::TaskType::Capture);
-    assert_eq!(task.image_id, Some(image.id));
+    assert_eq!(
+        event,
+        ServerEvent::Current(Some(imaged_model::Task::new(
+            task_id,
+            imaged_model::TaskType::Capture,
+            Some(image.id)
+        )))
+    );
 
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
-    assert_eq!(host.disk_size, DISK, "connecting refreshes the disk size");
+    assert_eq!(host.disk, Ok(DISK), "connecting refreshes the disk size");
 }
 
 #[tokio::test]
@@ -129,7 +143,7 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
 
     let table = b"real-client-partition-table".to_vec();
     agent
-        .upload_partition_table(task_id, Bytes::from(table.clone()))
+        .upload_partition_table(task_id, 4096, Bytes::from(table.clone()))
         .await
         .expect("upload partition table");
     let task = s.container.task_repo.get(task_id).await.unwrap();
@@ -162,6 +176,7 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
     assert_eq!(stored.status, ImageStatus::Ready);
     assert!(stored.captured_at.is_some());
     assert_eq!(stored.root_partition, Some(1));
+    assert_eq!(stored.sector_size, 4096);
     let partitions: Vec<ImagePartition> = stored.partitions;
     assert_eq!(partitions, vec![uploaded]);
 
@@ -241,10 +256,12 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
         .expect("create deploy task")
         .id;
 
-    let partitions = agent.partitions(task_id).await.expect("list partitions");
-    assert_eq!(partitions, stored_partitions(s, image_id).await);
+    let layout = agent.image_layout(task_id).await.expect("image layout");
+    assert_eq!(layout.sector_size, 512);
+    assert_eq!(layout.partitions, stored_partitions(s, image_id).await);
     assert_eq!(
-        partitions
+        layout
+            .partitions
             .iter()
             .map(|p| (p.partition_number, p.fstype.as_str(), p.size_bytes))
             .collect::<Vec<_>>(),
@@ -295,6 +312,7 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
         .upload_script_output(
             task_id,
             0,
+            &script.name,
             futures::stream::iter([Bytes::from_static(b"pc-"), Bytes::from_static(b"42\n")]),
         )
         .await
@@ -357,7 +375,7 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
     assert!(message.contains("400"), "{message}");
 
     let err = agent
-        .partitions(queued)
+        .image_layout(queued)
         .await
         .expect_err("listing a queued task's partitions is refused");
     assert!(
@@ -367,7 +385,7 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
     );
 
     let err = agent
-        .upload_partition_table(current, Bytes::from_static(b"table"))
+        .upload_partition_table(current, 512, Bytes::from_static(b"table"))
         .await
         .expect_err("capturing into a deploy task is refused");
     assert!(
@@ -400,10 +418,11 @@ async fn progress_reported_through_the_client_is_shown_until_the_agent_disconnec
 
     let mut events = Box::pin(
         agent
-            .connect_events(DISK, status.uplink())
+            .connect_events(&Ok(DISK), uplink(status.uplink()), SILENCE_LIMIT)
             .await
             .expect("connect events"),
     );
+    assert_eq!(events.next().await, Some(ServerEvent::Current(None)));
     let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
     let reported = |snapshot: &Snapshot| {
         snapshot.tasks().iter().any(|task| {

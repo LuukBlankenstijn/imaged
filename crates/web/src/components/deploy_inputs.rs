@@ -3,8 +3,10 @@ use dioxus::prelude::*;
 use crate::api::scripts::{get_image_scripts, get_script_variable_names};
 use crate::components::icons::Icon;
 use crate::components::ui::{FIELD_CLASSES, Spinner};
+use crate::format::format_bytes;
 use crate::model::{
-    DeployInputs, Host, Image, InputKind, InputSource, InputSources, Script, ScriptInput,
+    DeployInputs, DeployRequest, Host, Image, InputKind, InputSource, InputSources,
+    MulticastRequest, Script, ScriptInput,
 };
 
 pub(crate) fn form_fields(scripts: &[Script]) -> Vec<ScriptInput> {
@@ -48,6 +50,91 @@ pub(crate) fn submitted_inputs(form: &DeployInputs) -> DeployInputs {
             .map(|(&host_id, sources)| (host_id, filled(sources)))
             .filter(|(_, sources)| !sources.is_empty())
             .collect(),
+    }
+}
+
+pub(crate) fn deploy_request(
+    host_id: i64,
+    image_id: Option<i64>,
+    form: Option<&DeployInputs>,
+) -> Option<DeployRequest> {
+    Some(DeployRequest {
+        id: host_id,
+        image_id: image_id?,
+        inputs: submitted_inputs(form?),
+    })
+}
+
+pub(crate) fn multicast_request(
+    host_ids: &[i64],
+    image_id: Option<i64>,
+    form: Option<&DeployInputs>,
+) -> Option<MulticastRequest> {
+    if host_ids.is_empty() {
+        return None;
+    }
+    Some(MulticastRequest {
+        host_ids: host_ids.to_vec(),
+        image_id: image_id?,
+        inputs: submitted_inputs(form?),
+    })
+}
+
+pub(crate) fn erase_target(host: &Host) -> String {
+    let disk = host
+        .disk_size_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| "no usable disk".to_string());
+    format!("{} · {} · {disk}", host.name, host.mac_address)
+}
+
+#[component]
+pub fn EraseWarning(hosts: Vec<Host>) -> Element {
+    let target = match hosts.len() {
+        1 => "this host".to_string(),
+        n => format!("these {n} hosts"),
+    };
+    rsx! {
+        div {
+            role: "alert",
+            class: "mb-4 rounded-md border border-bad/30 bg-bad/10 px-3 py-2 text-sm text-bad",
+            div { class: "flex items-start gap-2",
+                Icon { name: "alert", class: "mt-0.5 w-4 h-4 shrink-0" }
+                span { "Erases every partition on the disk of {target} and replaces it with the image. This cannot be undone." }
+            }
+            ul { class: "mt-2 max-h-40 overflow-y-auto pl-6 font-mono text-xs",
+                for host in hosts.iter() {
+                    li { key: "{host.id}", {erase_target(host)} }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+pub fn ImagePicker(images: Vec<Image>, selected: Signal<Option<i64>>) -> Element {
+    let mut selected = selected;
+    let current = selected();
+    rsx! {
+        label {
+            class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+            r#for: "deploy-image",
+            "Image"
+        }
+        select {
+            id: "deploy-image",
+            class: "{FIELD_CLASSES} w-full",
+            onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
+            option { value: "", disabled: true, selected: current.is_none(), "Choose an image\u{2026}" }
+            for image in images.iter() {
+                option {
+                    key: "{image.id}",
+                    value: "{image.id}",
+                    selected: current == Some(image.id),
+                    "{image.name}"
+                }
+            }
+        }
     }
 }
 
@@ -115,8 +202,9 @@ pub fn DeployInputsForm(
                         div { class: "grid gap-3 sm:grid-cols-2",
                             for field in shared.iter() {
                                 div { key: "{field.name}",
-                                    FieldLabel { input: field.clone() }
+                                    FieldLabel { input: field.clone(), target: format!("input-{}", field.name) }
                                     FieldControl {
+                                        id: format!("input-{}", field.name),
                                         input: field.clone(),
                                         variables: variables.clone(),
                                         source: values.shared.get(&field.name).cloned(),
@@ -161,6 +249,8 @@ pub fn DeployInputsForm(
                                                 for field in per_machine.iter() {
                                                     td { key: "{field.name}", class: "px-3 py-1.5",
                                                         FieldControl {
+                                                            id: format!("input-{}-{}", host.id, field.name),
+                                                            label: format!("{} for {}", field_label(field), host.name),
                                                             input: field.clone(),
                                                             variables: variables.clone(),
                                                             source: values
@@ -204,10 +294,12 @@ pub fn DeployInputsForm(
 }
 
 #[component]
-fn FieldLabel(input: ScriptInput) -> Element {
+fn FieldLabel(input: ScriptInput, #[props(default)] target: String) -> Element {
     let label = field_label(&input).to_string();
     rsx! {
-        label { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+        label {
+            class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+            r#for: (!target.is_empty()).then_some(target),
             "{label}"
             if input.required {
                 span { class: "ml-0.5 text-amber-500", "*" }
@@ -223,6 +315,8 @@ fn FieldLabel(input: ScriptInput) -> Element {
 
 #[component]
 fn FieldControl(
+    id: String,
+    #[props(default)] label: String,
     input: ScriptInput,
     variables: Vec<String>,
     source: Option<InputSource>,
@@ -233,12 +327,18 @@ fn FieldControl(
         Some(InputSource::Value(value)) => (None, value),
         None => (None, String::new()),
     };
+    let named = if label.is_empty() {
+        field_label(&input).to_string()
+    } else {
+        label.clone()
+    };
     rsx! {
         div { class: "flex items-start gap-2",
             if !variables.is_empty() {
                 select {
                     class: "{FIELD_CLASSES} w-28 shrink-0 text-xs",
                     title: "Take the value from a script variable",
+                    aria_label: "Source of {named}",
                     onchange: move |e| {
                         let picked = e.value();
                         onchange.call(if picked.is_empty() {
@@ -259,6 +359,8 @@ fn FieldControl(
                 }
             }
             ValueControl {
+                id,
+                label,
                 input,
                 value,
                 disabled: variable.is_some(),
@@ -270,15 +372,20 @@ fn FieldControl(
 
 #[component]
 fn ValueControl(
+    id: String,
+    label: String,
     input: ScriptInput,
     value: String,
     disabled: bool,
     onchange: EventHandler<String>,
 ) -> Element {
+    let label = (!label.is_empty()).then_some(label);
     match input.kind {
         InputKind::Choice => rsx! {
             select {
                 class: "{FIELD_CLASSES} w-full min-w-28",
+                id,
+                aria_label: label,
                 disabled,
                 value: "{value}",
                 onchange: move |e| onchange.call(e.value()),
@@ -296,6 +403,8 @@ fn ValueControl(
         InputKind::Number => rsx! {
             input {
                 class: "{FIELD_CLASSES} w-full min-w-24 font-mono",
+                id,
+                aria_label: label,
                 disabled,
                 r#type: "number",
                 value: "{value}",
@@ -305,6 +414,8 @@ fn ValueControl(
         InputKind::Text => rsx! {
             input {
                 class: "{FIELD_CLASSES} w-full min-w-32 font-mono",
+                id,
+                aria_label: label,
                 disabled,
                 r#type: "text",
                 value: "{value}",
@@ -313,9 +424,10 @@ fn ValueControl(
         },
         InputKind::Secret => rsx! {
             textarea {
-                class: "{FIELD_CLASSES} w-full min-w-32 font-mono",
+                class: "{FIELD_CLASSES} w-full min-w-32 font-mono [-webkit-text-security:disc]",
+                id,
+                aria_label: label,
                 disabled,
-                style: "-webkit-text-security: disc",
                 rows: 2,
                 autocomplete: "off",
                 spellcheck: false,

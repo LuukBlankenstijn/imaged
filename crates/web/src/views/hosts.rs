@@ -5,17 +5,19 @@ use crate::api::hosts::{
 };
 use crate::api::images::get_all_images;
 use crate::components::connection::{Connections, use_connection};
-use crate::components::deploy_inputs::{DeployInputsForm, submitted_inputs};
+use crate::components::deploy_inputs::{
+    DeployInputsForm, EraseWarning, ImagePicker, deploy_request,
+};
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
 use crate::components::modal::{ConfirmDialog, Modal};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
-    Button, ButtonVariant, Card, EmptyState, PageHeader, Spinner, StatusDot,
+    Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner, StatusDot,
 };
 use crate::format::format_bytes;
-use crate::model::{DeployInputs, DeployRequest, Host, Image, ImageStatus, UpdateName};
+use crate::model::{DeployInputs, Host, Image, ImageStatus, UpdateName};
 
 #[component]
 pub fn Hosts() -> Element {
@@ -24,19 +26,23 @@ pub fn Hosts() -> Element {
     let mut query = use_signal(String::new);
     let mut show_online = use_signal(|| false);
     let mut show_offline = use_signal(|| false);
+    let polled = hosts.read();
 
     rsx! {
         PageHeader { title: "Hosts", subtitle: "Registered machines on the netboot fabric" }
+        if let (Some(_), Some(error)) = (&polled.value, &polled.error) {
+            ErrorBanner { message: format!("Could not refresh hosts, showing the last loaded list: {error}") }
+        }
         Card { class: "overflow-hidden",
             {
-                match &*hosts.read() {
-                    Some(Ok(list)) if list.is_empty() => rsx! {
+                match &polled.value {
+                    Some(list) if list.is_empty() => rsx! {
                         EmptyState {
                             title: "No hosts detected",
                             hint: "Machines appear here once they PXE-boot and register.",
                         }
                     },
-                    Some(Ok(list)) => {
+                    Some(list) => {
                         let total = list.len();
                         let needle = query().trim().to_lowercase();
                         let want_online = show_online();
@@ -74,11 +80,13 @@ pub fn Hosts() -> Element {
                                         }
                                         button {
                                             class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(want_online)}",
+                                            aria_pressed: want_online.to_string(),
                                             onclick: move |_| show_online.toggle(),
                                             "Online"
                                         }
                                         button {
                                             class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(want_offline)}",
+                                            aria_pressed: want_offline.to_string(),
                                             onclick: move |_| show_offline.toggle(),
                                             "Offline"
                                         }
@@ -125,11 +133,13 @@ pub fn Hosts() -> Element {
                             }
                         }
                     }
-                    Some(Err(e)) => rsx! {
-                        EmptyState { title: "Failed to load hosts", hint: e.to_string() }
-                    },
-                    None => rsx! {
-                        div { class: "flex justify-center py-16", Spinner {} }
+                    None => match &polled.error {
+                        Some(error) => rsx! {
+                            EmptyState { title: "Failed to load hosts", hint: error.clone() }
+                        },
+                        None => rsx! {
+                            div { class: "flex justify-center py-16", Spinner {} }
+                        },
                     },
                 }
             }
@@ -176,7 +186,8 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
     let host_id = host.id;
     let name = host.name.clone();
     let ip_display = host.ip.clone().unwrap_or_else(|| "\u{2014}".to_string());
-    let disk = format_bytes(host.disk_size_bytes);
+    let disk = host.disk_size_bytes.map(format_bytes);
+    let disk_error = host.disk_error.clone();
     let connected = use_connection(host_id);
     let delay = index * 40;
 
@@ -199,6 +210,7 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
                     div { class: "flex items-center gap-1.5",
                         input {
                             class: "w-44 rounded-md border border-ink-600 bg-ink-900 px-2 py-1 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
+                            aria_label: "Host name",
                             value: "{draft}",
                             autofocus: true,
                             oninput: move |e| draft.set(e.value()),
@@ -224,6 +236,7 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
                         button {
                             class: "rounded-md p-1.5 text-ok transition-colors hover:bg-ok/10",
                             title: "Save",
+                            aria_label: "Save",
                             onclick: move |_| {
                                 let new_name = draft().trim().to_string();
                                 editing.set(false);
@@ -241,6 +254,7 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
                         button {
                             class: "rounded-md p-1.5 text-fog-400 transition-colors hover:bg-ink-700 hover:text-fog-100",
                             title: "Cancel",
+                            aria_label: "Cancel",
                             onclick: move |_| editing.set(false),
                             Icon { name: "close", class: "w-4 h-4" }
                         }
@@ -251,7 +265,17 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
             }
             td { class: "px-4 py-3 font-mono text-xs text-fog-400", "{host.mac_address}" }
             td { class: "px-4 py-3 font-mono text-xs text-fog-400", "{ip_display}" }
-            td { class: "px-4 py-3 font-mono text-xs text-fog-300", "{disk}" }
+            td { class: "px-4 py-3 font-mono text-xs text-fog-300",
+                match (disk, disk_error) {
+                    (Some(size), _) => rsx! { "{size}" },
+                    (None, reason) => rsx! {
+                        span { class: "text-warn", "no usable disk" }
+                        if let Some(reason) = reason {
+                            div { class: "font-sans text-[11px] text-fog-500", "{reason}" }
+                        }
+                    },
+                }
+            }
             td { class: "px-4 py-3 text-right",
                 ActionMenu {
                     MenuItem {
@@ -343,18 +367,19 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
 #[component]
 fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<()>) -> Element {
     let host_id = host.id;
-    let host_name = host.name.clone();
     let images = use_resource(|| async move { get_all_images().await });
-    let mut selected = use_signal(|| None::<i64>);
+    let selected = use_signal(|| None::<i64>);
     let inputs = use_signal(|| None::<DeployInputs>);
+    let mut busy = use_signal(|| false);
 
     rsx! {
-        Modal { open: true, wide: true, onclose: move |_| onclose.call(()), title: "Deploy image",
-            p { class: "mb-4 text-sm text-fog-400",
-                "Select a ready image to deploy to "
-                span { class: "font-medium text-fog-100", "{host_name}" }
-                "."
-            }
+        Modal {
+            open: true,
+            wide: true,
+            dismissible: !busy(),
+            onclose: move |_| onclose.call(()),
+            title: "Deploy image",
+            EraseWarning { hosts: vec![host.clone()] }
             {
                 match &*images.read() {
                     Some(Ok(list)) => {
@@ -365,59 +390,63 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                             .collect();
                         let chosen = selected()
                             .and_then(|id| ready.iter().find(|i| i.id == id))
-                            .or(ready.first())
                             .cloned();
-                        match chosen {
-                            None => rsx! {
+                        let request = deploy_request(
+                            host_id,
+                            chosen.as_ref().map(|i| i.id),
+                            inputs.read().as_ref(),
+                        );
+                        if ready.is_empty() {
+                            rsx! {
                                 EmptyState {
                                     title: "No ready images",
                                     hint: "Capture an image and wait for it to finish first.",
                                 }
-                            },
-                            Some(image) => {
-                                let image_id = image.id;
-                                rsx! {
-                                    select {
-                                        class: "w-full rounded-md border border-ink-600 bg-ink-900 px-3 py-2 text-sm text-fog-100 focus:outline-none focus-visible:glow-amber",
-                                        value: "{image_id}",
-                                        onchange: move |e| selected.set(e.value().parse::<i64>().ok()),
-                                        for img in ready.iter() {
-                                            option {
-                                                key: "{img.id}",
-                                                value: "{img.id}",
-                                                selected: img.id == image_id,
-                                                "{img.name}"
-                                            }
-                                        }
-                                    }
+                            }
+                        } else {
+                            rsx! {
+                                ImagePicker { images: ready, selected }
+                                if let Some(image) = chosen {
                                     DeployInputsForm {
                                         image,
                                         hosts: vec![host.clone()],
                                         inputs,
                                     }
-                                    div { class: "mt-6 flex justify-end gap-2",
-                                        Button {
-                                            variant: ButtonVariant::Ghost,
-                                            onclick: move |_| onclose.call(()),
-                                            "Cancel"
-                                        }
-                                        Button {
-                                            disabled: inputs.read().is_none(),
-                                            onclick: move |_| {
-                                                let Some(form) = inputs() else {
-                                                    return;
-                                                };
-                                                let inputs = submitted_inputs(&form);
-                                                spawn(async move {
-                                                    match deploy(DeployRequest { id: host_id, image_id, inputs }).await {
-                                                        Ok(_) => on_deployed.call(()),
-                                                        Err(err) => toast_error("Deploy failed", err.to_string()),
+                                }
+                                div { class: "mt-6 flex justify-end gap-2",
+                                    Button {
+                                        variant: ButtonVariant::Ghost,
+                                        disabled: busy(),
+                                        onclick: move |_| onclose.call(()),
+                                        "Cancel"
+                                    }
+                                    Button {
+                                        variant: ButtonVariant::Danger,
+                                        disabled: busy() || request.is_none(),
+                                        onclick: move |_| {
+                                            let Some(request) = request.clone() else {
+                                                return;
+                                            };
+                                            busy.set(true);
+                                            spawn(async move {
+                                                match deploy(request).await {
+                                                    Ok(task) => {
+                                                        toast_success("Deploy queued", format!("Task #{}", task.id));
+                                                        on_deployed.call(());
                                                     }
-                                                });
-                                            },
+                                                    Err(err) => {
+                                                        busy.set(false);
+                                                        toast_error("Deploy failed", err.to_string());
+                                                    }
+                                                }
+                                            });
+                                        },
+                                        if busy() {
+                                            Spinner { class: "w-3.5 h-3.5" }
+                                        } else {
                                             Icon { name: "deploy", class: "w-3.5 h-3.5" }
-                                            "Deploy"
                                         }
+                                        "Erase disk and deploy"
                                     }
                                 }
                             }
@@ -445,7 +474,8 @@ mod tests {
             id,
             mac_address: mac.to_string(),
             name: name.to_string(),
-            disk_size_bytes: 0,
+            disk_size_bytes: Some(0),
+            disk_error: None,
             ip: ip.map(str::to_string),
         }
     }

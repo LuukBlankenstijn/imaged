@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM script_run_output WHERE task_id = ? AND host_id = ? AND position = ? AND start >= ? AND start + length(CAST(text AS BLOB)) <= ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "f0eeb8ae546726c52402f1b1218f41e0d2a7342090b11c1de13a9a5dcd9eb964"
+}

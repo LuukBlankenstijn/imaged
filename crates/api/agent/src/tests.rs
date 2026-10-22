@@ -13,7 +13,7 @@ use core::di::DIContainer;
 use core::domain::script::NewScript;
 use core::domain::task::TaskType;
 use core::test_support::container;
-use imaged_model::agent::{ImagePartition, MAC_HEADER, PostInstall, path, route};
+use imaged_model::agent::{ImageLayout, ImagePartition, MAC_HEADER, PostInstall, path, route};
 use imaged_model::image::ImageStatus;
 use imaged_model::script::{InputKind, ScriptInput};
 use imaged_model::task::TaskState;
@@ -44,6 +44,14 @@ fn next_name(prefix: &str) -> String {
 
 fn stream_uri(disk_size_bytes: u64) -> String {
     format!("{}?disk_size_bytes={disk_size_bytes}", route::STREAM)
+}
+
+fn table_uri(task_id: i64) -> String {
+    format!("{}?sector_size=512", path::partition_table(task_id))
+}
+
+fn output_uri(task_id: i64, position: i64, name: &str) -> String {
+    format!("{}?name={name}", path::script_output(task_id, position))
 }
 
 fn upload_uri(task_id: i64, partition_number: i64, filesystem: &str, size: i64) -> String {
@@ -131,7 +139,7 @@ async fn ready_image(c: &DIContainer, name: &str) -> i64 {
 async fn deploy_task(c: &DIContainer, mac: &str, image_id: i64) -> i64 {
     let host = c
         .host_repo
-        .upsert_host(mac.into(), 1_000_000, None)
+        .upsert_host(mac.into(), Ok(1_000_000), None)
         .await
         .unwrap();
     c.task_repo
@@ -149,7 +157,7 @@ async fn host_task(
 ) -> (i64, i64) {
     let host = c
         .host_repo
-        .upsert_host(mac.into(), 1_000_000, None)
+        .upsert_host(mac.into(), Ok(1_000_000), None)
         .await
         .unwrap();
     let task = c
@@ -167,15 +175,17 @@ async fn partitions_are_served_to_the_owning_agent() {
     let image_id = ready_image(c, "served").await;
     let task_id = deploy_task(c, MAC, image_id).await;
     c.host_repo
-        .upsert_host(IDLE_MAC.into(), 1_000_000, None)
+        .upsert_host(IDLE_MAC.into(), Ok(1_000_000), None)
         .await
         .unwrap();
 
     let response = get(c, &path::partitions(task_id), MAC).await;
     assert_eq!(response.status(), StatusCode::OK);
 
-    let partitions: Vec<ImagePartition> = serde_json::from_slice(&body(response).await).unwrap();
-    let listed: Vec<(i64, &str)> = partitions
+    let layout: ImageLayout = serde_json::from_slice(&body(response).await).unwrap();
+    assert_eq!(layout.sector_size, 512);
+    let listed: Vec<(i64, &str)> = layout
+        .partitions
         .iter()
         .map(|p| (p.partition_number, p.fstype.as_str()))
         .collect();
@@ -197,10 +207,10 @@ async fn agent_identity_is_required_on_every_route() {
         (Method::GET, path::partitions(1)),
         (Method::GET, path::partition_table(1)),
         (Method::GET, path::partition_data(1, 1)),
-        (Method::PUT, path::partition_table(1)),
+        (Method::PUT, table_uri(1)),
         (Method::PUT, path::root_partition(1, 1)),
         (Method::GET, path::scripts(1)),
-        (Method::PUT, path::script_output(1, 0)),
+        (Method::PUT, output_uri(1, 0, "script")),
         (Method::POST, path::script_finished(1, 0)),
         (Method::PUT, upload_uri(1, 1, "ext4", 1)),
     ];
@@ -314,7 +324,7 @@ async fn a_host_without_an_active_task_is_a_bad_request_not_a_not_found() {
     let c = &c;
     let mac = next_mac();
     c.host_repo
-        .upsert_host(mac.clone(), 1_000_000, None)
+        .upsert_host(mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
 
@@ -403,12 +413,12 @@ async fn marking_a_task_finished_updates_rows_and_image() {
     let b_mac = next_mac();
     let a = c
         .host_repo
-        .upsert_host(a_mac.clone(), 1_000_000, None)
+        .upsert_host(a_mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
     let b = c
         .host_repo
-        .upsert_host(b_mac.clone(), 1_000_000, None)
+        .upsert_host(b_mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
     let multi_img = c
@@ -536,12 +546,12 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
     let b_mac = next_mac();
     let a = c
         .host_repo
-        .upsert_host(a_mac.clone(), 1_000_000, None)
+        .upsert_host(a_mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
     let b = c
         .host_repo
-        .upsert_host(b_mac.clone(), 1_000_000, None)
+        .upsert_host(b_mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
     let img = c
@@ -570,9 +580,12 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
         .status(),
         StatusCode::OK
     );
+    let settled = c.task_repo.get(task).await.unwrap();
     assert_eq!(
-        c.task_repo.get(task).await.unwrap().aggregate_state(),
-        TaskState::Partial
+        settled.aggregate_state(),
+        TaskState::Partial,
+        "{:?}",
+        settled.hosts
     );
 }
 
@@ -695,12 +708,13 @@ async fn downloading_partitions_matches_the_repository_in_order() {
 
     let resp = get(c, &path::partitions(task), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let served: Vec<ImagePartition> = serde_json::from_slice(&body(resp).await).unwrap();
+    let served: ImageLayout = serde_json::from_slice(&body(resp).await).unwrap();
 
     let expected = c.image_repo.get_partitions(image.id).await.unwrap();
-    assert_eq!(served, expected);
+    assert_eq!(served.partitions, expected);
 
     let listed: Vec<(i64, &str)> = served
+        .partitions
         .iter()
         .map(|p| (p.partition_number, p.fstype.as_str()))
         .collect();
@@ -720,7 +734,7 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     let (host_id, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
 
     let first_table = b"FIRST-TABLE".to_vec();
-    let resp = put_bytes(c, &path::partition_table(task), &mac, first_table.clone()).await;
+    let resp = put_bytes(c, &table_uri(task), &mac, first_table.clone()).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         c.image_repo.get_status(image.id).await.unwrap(),
@@ -752,7 +766,7 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     );
 
     let second_table = b"SECOND-TABLE".to_vec();
-    let resp = put_bytes(c, &path::partition_table(task), &mac, second_table.clone()).await;
+    let resp = put_bytes(c, &table_uri(task), &mac, second_table.clone()).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     assert!(!Path::new(&part_path).exists());
@@ -774,25 +788,15 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     let (_rh, running_task) =
         host_task(c, &running_mac, TaskType::Capture, Some(running_img.id)).await;
     assert_eq!(
-        put_bytes(
-            c,
-            &path::partition_table(running_task),
-            &running_mac,
-            b"a".to_vec()
-        )
-        .await
-        .status(),
+        put_bytes(c, &table_uri(running_task), &running_mac, b"a".to_vec())
+            .await
+            .status(),
         StatusCode::OK
     );
     assert_eq!(
-        put_bytes(
-            c,
-            &path::partition_table(running_task),
-            &running_mac,
-            b"b".to_vec()
-        )
-        .await
-        .status(),
+        put_bytes(c, &table_uri(running_task), &running_mac, b"b".to_vec())
+            .await
+            .status(),
         StatusCode::BAD_REQUEST
     );
 }
@@ -818,7 +822,7 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-    let resp = put_bytes(c, &path::partition_table(task), &mac, b"tbl".to_vec()).await;
+    let resp = put_bytes(c, &table_uri(task), &mac, b"tbl".to_vec()).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let chunk_a = vec![0xABu8; 4096];
@@ -884,7 +888,7 @@ async fn a_capture_reports_the_root_partition_among_its_partitions() {
         StatusCode::BAD_REQUEST
     );
 
-    put_bytes(c, &path::partition_table(task), &mac, b"t".to_vec()).await;
+    put_bytes(c, &table_uri(task), &mac, b"t".to_vec()).await;
     put_stream(
         c,
         &upload_uri(task, 2, "ext4", 1),
@@ -982,7 +986,7 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
         .unwrap();
     let host = c
         .host_repo
-        .upsert_host(mac.clone(), 1_000_000, None)
+        .upsert_host(mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap()
         .id;
@@ -1028,8 +1032,8 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
     let first_name = plan.scripts[0].name.clone();
     let second_name = plan.scripts[1].name.clone();
 
-    let output = |position: i64, chunks: Vec<&[u8]>| {
-        let uri = path::script_output(task, position);
+    let output = |position: i64, name: &str, chunks: Vec<&[u8]>| {
+        let uri = output_uri(task, position, name);
         let chunks = chunks.into_iter().map(<[u8]>::to_vec).collect();
         let mac = mac.clone();
         async move { put_stream(c, &uri, &mac, chunks).await }
@@ -1040,14 +1044,23 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
         async move { post_json(c, &uri, &mac, serde_json::json!({ "exit_code": exit_code })).await }
     };
 
+    let attached = c.script_repo.get_for_image(image_id).await.unwrap();
+    c.script_repo
+        .set_for_image(image_id, &[attached[0].id])
+        .await
+        .unwrap();
+
     assert_eq!(
-        output(0, vec![b"price: \xe2\x82", b"\xac 5\n"])
+        output(0, &first_name, vec![b"price: \xe2\x82", b"\xac 5\n"])
             .await
             .status(),
         StatusCode::OK
     );
     assert_eq!(finished(0, Some(0)).await.status(), StatusCode::OK);
-    assert_eq!(output(1, vec![b"boom\n"]).await.status(), StatusCode::OK);
+    assert_eq!(
+        output(1, &second_name, vec![b"boom\n"]).await.status(),
+        StatusCode::OK
+    );
     assert_eq!(finished(1, Some(3)).await.status(), StatusCode::OK);
     assert_eq!(
         script_runs(c, task, host).await,
@@ -1063,11 +1076,18 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
 
     assert_eq!(finished(1, Some(0)).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        output(5, vec![b"x"]).await.status(),
+        output(-1, &first_name, vec![b"x"]).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        output(2, "..", vec![b"x"]).await.status(),
         StatusCode::BAD_REQUEST
     );
 
-    assert_eq!(output(0, vec![b"again\n"]).await.status(), StatusCode::OK);
+    assert_eq!(
+        output(0, &first_name, vec![b"again\n"]).await.status(),
+        StatusCode::OK
+    );
     assert_eq!(
         script_runs(c, task, host).await,
         vec![(first_name, "again\n".to_string(), None)]
@@ -1132,7 +1152,7 @@ async fn disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_mac
     let mac = next_mac();
     let host = c
         .host_repo
-        .upsert_host(mac.clone(), 1024, None)
+        .upsert_host(mac.clone(), Ok(1024), None)
         .await
         .unwrap();
     let _registration = c.host_registry.register(host.id);
@@ -1144,7 +1164,7 @@ async fn disconnecting_deregisters_a_registered_host_and_is_safe_for_unknown_mac
 
     let idle_mac = next_mac();
     c.host_repo
-        .upsert_host(idle_mac.clone(), 1_000_000, None)
+        .upsert_host(idle_mac.clone(), Ok(1_000_000), None)
         .await
         .unwrap();
     let resp = post(c, route::DISCONNECT, &idle_mac).await;
@@ -1194,7 +1214,7 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        put_bytes(c, &path::partition_table(b_task), &a_mac, b"x".to_vec())
+        put_bytes(c, &table_uri(b_task), &a_mac, b"x".to_vec())
             .await
             .status(),
         StatusCode::BAD_REQUEST
@@ -1214,7 +1234,7 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint() {
     assert_eq!(
         put_stream(
             c,
-            &path::script_output(b_task, 0),
+            &output_uri(b_task, 0, "script"),
             &a_mac,
             vec![b"x".to_vec()],
         )
@@ -1267,4 +1287,193 @@ async fn save_partition_returns_the_partition_number_it_was_given() {
         .await
         .unwrap();
     assert_eq!(returned.partition_number, 3);
+}
+
+#[tokio::test]
+async fn a_mac_in_any_case_or_separator_reaches_the_same_host_and_garbage_is_rejected() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let (_host, task) = host_task(c, &mac, TaskType::Reboot, None).await;
+
+    let shouted = mac.to_ascii_uppercase().replace(':', "-");
+    let response = post(c, &path::finished(task), &shouted).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        c.task_repo.get(task).await.unwrap().aggregate_state(),
+        TaskState::Done
+    );
+
+    let response = post(c, &path::finished(task), "not-a-mac").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error_message(response).await,
+        "invalid MAC address \"not-a-mac\""
+    );
+}
+
+#[tokio::test]
+async fn reporting_the_same_outcome_again_is_accepted_but_a_different_one_is_not() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let failure = || serde_json::json!({ "error": "disk exploded" });
+
+    let done_mac = next_mac();
+    let (_host, done) = host_task(c, &done_mac, TaskType::Reboot, None).await;
+    for _ in 0..2 {
+        let response = post(c, &path::finished(done), &done_mac).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let response = post_json(c, &path::failed(done), &done_mac, failure()).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        c.task_repo.get(done).await.unwrap().aggregate_state(),
+        TaskState::Done
+    );
+
+    let failed_mac = next_mac();
+    let (_host, failed) = host_task(c, &failed_mac, TaskType::Reboot, None).await;
+    for _ in 0..2 {
+        let response = post_json(c, &path::failed(failed), &failed_mac, failure()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let response = post(c, &path::finished(failed), &failed_mac).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let task = c.task_repo.get(failed).await.unwrap();
+    assert_eq!(task.hosts[0].state, TaskState::Failed);
+    assert_eq!(task.hosts[0].error.as_deref(), Some("disk exploded"));
+}
+
+#[tokio::test]
+async fn the_captured_sector_size_is_recorded_and_handed_to_restores() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let image = c
+        .image_repo
+        .create_image(next_name("sector-size"))
+        .await
+        .unwrap();
+    let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
+    let upload = |sector_size: u32| {
+        let uri = format!("{}?sector_size={sector_size}", path::partition_table(task));
+        let mac = mac.clone();
+        async move { put_bytes(c, &uri, &mac, b"table".to_vec()).await }
+    };
+
+    assert_eq!(upload(1000).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(upload(256).await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(upload(4096).await.status(), StatusCode::OK);
+    c.image_repo
+        .save_partition(image.id, 1, "ext4", 4_096)
+        .await
+        .unwrap();
+    assert_eq!(
+        post(c, &path::finished(task), &mac).await.status(),
+        StatusCode::OK
+    );
+
+    let restore_mac = next_mac();
+    let restore = deploy_task(c, &restore_mac, image.id).await;
+    let response = get(c, &path::partitions(restore), &restore_mac).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let layout: ImageLayout = serde_json::from_slice(&body(response).await).unwrap();
+    assert_eq!(layout.sector_size, 4096);
+    assert_eq!(layout.partitions.len(), 1);
+}
+
+fn choice_input(name: &str, choices: &[&str]) -> ScriptInput {
+    ScriptInput {
+        kind: InputKind::Choice,
+        choices: choices.iter().map(|choice| choice.to_string()).collect(),
+        ..script_input(name, None)
+    }
+}
+
+#[tokio::test]
+async fn stored_inputs_that_no_longer_fit_the_scripts_stop_the_restore_before_the_disk_is_written()
+{
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let image_id = scripted_image(c, &[("setup", vec![script_input("mode", None)])]).await;
+    c.image_repo
+        .set_root_partition(image_id, Some(2))
+        .await
+        .unwrap();
+    let host = c
+        .host_repo
+        .upsert_host(mac.clone(), Ok(1_000_000), None)
+        .await
+        .unwrap()
+        .id;
+    let stored = std::collections::BTreeMap::from([(
+        host,
+        std::collections::BTreeMap::from([("mode".to_string(), "fast".to_string())]),
+    )]);
+    let task = c
+        .task_repo
+        .create_with_inputs(TaskType::Deploy, vec![host], Some(image_id), &stored)
+        .await
+        .unwrap()
+        .id;
+    let script = c
+        .script_repo
+        .get_for_image(image_id)
+        .await
+        .unwrap()
+        .remove(0);
+    let change_inputs = |inputs: Vec<ScriptInput>| {
+        let id = script.id;
+        let changed = NewScript {
+            name: script.name.clone(),
+            body: script.body.clone(),
+            inputs,
+        };
+        async move { c.script_repo.update(id, &changed).await.unwrap() }
+    };
+    let refusal = |uri: String| {
+        let mac = mac.clone();
+        async move {
+            let response = get(c, &uri, &mac).await;
+            assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED, "{uri}");
+            error_message(response).await
+        }
+    };
+
+    assert_eq!(
+        get(c, &path::partitions(task), &mac).await.status(),
+        StatusCode::OK
+    );
+
+    change_inputs(vec![choice_input("mode", &["safe", "slow"])]).await;
+    let reason = refusal(path::partitions(task)).await;
+    assert_eq!(
+        reason,
+        format!(
+            "script `{}` no longer fits the inputs stored with this task: input `mode` must be one of safe, slow; start a new deployment",
+            script.name
+        )
+    );
+
+    c.task_repo.start(task, host).await.unwrap();
+    change_inputs(vec![
+        script_input("mode", None),
+        ScriptInput {
+            required: true,
+            ..script_input("site", None)
+        },
+    ])
+    .await;
+    let reason = refusal(path::scripts(task)).await;
+    assert!(
+        reason.ends_with("input `site` is required; start a new deployment"),
+        "{reason}"
+    );
+    assert_eq!(
+        refusal(path::partitions(task)).await,
+        reason,
+        "the layout and the scripts give the same reason"
+    );
+    assert!(script_runs(c, task, host).await.is_empty());
 }

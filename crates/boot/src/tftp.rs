@@ -5,7 +5,7 @@ use std::{
     path::Path,
     pin::Pin,
     task::{Context, Poll},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use async_tftp::{
@@ -15,6 +15,9 @@ use async_tftp::{
 use futures_lite::{AsyncRead, io::Cursor};
 
 use crate::pxe::Arch;
+
+const RETRANSMIT_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_RETRANSMITS: u32 = 10;
 
 static IPXE: &[u8] = include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/ipxe.efi"));
 static IPXE_ARM64: &[u8] =
@@ -109,17 +112,27 @@ pub struct TftpServer(async_tftp::server::TftpServer<BootFiles>);
 pub async fn bind(bind_address: SocketAddr) -> io::Result<TftpServer> {
     let server = TftpServerBuilder::with_handler(BootFiles)
         .bind(bind_address)
+        .timeout(RETRANSMIT_TIMEOUT)
+        .ignore_client_timeout()
+        .max_send_retries(MAX_RETRANSMITS)
         .build()
         .await
-        .map_err(io::Error::other)?;
+        .map_err(into_io_error)?;
     tracing::info!(%bind_address, "tftp server listening");
     Ok(TftpServer(server))
+}
+
+fn into_io_error(error: async_tftp::Error) -> io::Error {
+    match error {
+        async_tftp::Error::Io(error) | async_tftp::Error::Bind(error) => error,
+        error => io::Error::other(error),
+    }
 }
 
 impl TftpServer {
     pub async fn serve(self, shutdown: impl Future<Output = ()>) -> io::Result<()> {
         tokio::select! {
-            served = self.0.serve() => served.map_err(io::Error::other),
+            served = self.0.serve() => served.map_err(into_io_error),
             () = shutdown => Ok(()),
         }
     }
@@ -150,5 +163,47 @@ mod tests {
             );
             assert_eq!(size, Some(Arch::X86_64.vmlinuz().len() as u64));
         }
+    }
+
+    #[tokio::test]
+    async fn an_occupied_address_reports_addr_in_use() {
+        let occupied = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+        let error = bind(occupied.local_addr().unwrap()).await.err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+    }
+
+    #[tokio::test]
+    async fn a_client_cannot_raise_the_retransmit_timeout() {
+        let server = bind(SocketAddr::from(([127, 0, 0, 1], 0))).await.unwrap();
+        let address = server.0.listen_addr().unwrap();
+        let serving = tokio::spawn(server.serve(std::future::pending::<()>()));
+        let reply = tokio::task::spawn_blocking(move || {
+            let client = std::net::UdpSocket::bind(("127.0.0.1", 0)).unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = b"\x00\x01x86_64/vmlinuz\x00octet\x00timeout\x00255\x00tsize\x000\x00";
+            client.send_to(request, address).unwrap();
+            let mut reply = [0; 512];
+            let (len, _) = client.recv_from(&mut reply).unwrap();
+            reply[..len].to_vec()
+        })
+        .await
+        .unwrap();
+        serving.abort();
+
+        let options = reply[2..]
+            .split(|&byte| byte == 0)
+            .map(|field| String::from_utf8_lossy(field).into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(&reply[..2], b"\0\x06");
+        assert_eq!(
+            options[..2],
+            [
+                "tsize".to_string(),
+                Arch::X86_64.vmlinuz().len().to_string()
+            ]
+        );
+        assert!(!options.contains(&"timeout".to_string()), "{options:?}");
     }
 }

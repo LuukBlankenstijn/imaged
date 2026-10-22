@@ -52,6 +52,7 @@ pub fn Toaster() -> Element {
     rsx! {
         div {
             class: "fixed bottom-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]",
+            aria_live: "polite",
             for t in toasts.iter() {
                 ToastCard { key: "{t.id}", toast: t.clone() }
             }
@@ -78,6 +79,8 @@ fn ToastCard(toast: Toast) -> Element {
             }
             button {
                 class: "text-fog-600 hover:text-fog-200",
+                aria_label: "Dismiss",
+                title: "Dismiss",
                 onclick: move |_| { TOASTS.write().retain(|t| t.id != id); },
                 Icon { name: "close", class: "w-3.5 h-3.5" }
             }

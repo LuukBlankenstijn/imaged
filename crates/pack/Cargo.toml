@@ -14,7 +14,6 @@ imaged-model = { workspace = true, features = ["logging"] }
 clap.workspace = true
 anyhow.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs", "io-util", "process"] }
-serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 tracing.workspace = true

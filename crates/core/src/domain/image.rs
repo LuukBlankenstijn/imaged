@@ -1,10 +1,8 @@
-use derive_more::Constructor;
-
 use chrono::{DateTime, Utc};
 use imaged_model::error::Result;
 use imaged_model::image::{ImagePartition, ImageStatus};
 
-#[derive(Debug, Constructor)]
+#[derive(Debug)]
 pub struct Image {
     pub id: i64,
     pub name: String,
@@ -13,6 +11,7 @@ pub struct Image {
     pub error: Option<String>,
     pub partitions: Vec<ImagePartition>,
     pub root_partition: Option<i64>,
+    pub sector_size: u32,
 }
 
 #[derive(Debug)]
@@ -45,7 +44,7 @@ pub trait ImageRepository: Send + Sync {
     async fn delete_image(&self, id: i64) -> Result;
 
     // clears all old data and marks the images as capturing
-    async fn start_capture(&self, id: i64) -> Result;
+    async fn start_capture(&self, id: i64, sector_size: u32) -> Result;
 
     // marks the image as finished
     async fn mark_finished(&self, id: i64) -> Result;
@@ -61,6 +60,7 @@ pub trait ImageRepository: Send + Sync {
         captured_at: Option<DateTime<Utc>>,
         partitions: &[NewImagePartition],
         root_partition: Option<i64>,
+        sector_size: u32,
     ) -> Result<Image>;
 
     async fn fault_unfinished_imports(&self, error: &str) -> Result;

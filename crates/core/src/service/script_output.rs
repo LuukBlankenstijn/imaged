@@ -3,7 +3,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 
-use crate::domain::task::TaskRepository;
+use crate::domain::task::{SCRIPT_OUTPUT_TAIL_BYTES, TaskRepository};
 use imaged_model::error::Result;
 
 const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
@@ -29,7 +29,12 @@ where
     loop {
         tokio::select! {
             chunk = output.next() => match chunk {
-                Some(chunk) => pending.extend_from_slice(&chunk?),
+                Some(chunk) => {
+                    pending.extend_from_slice(&chunk?);
+                    if pending.len() >= SCRIPT_OUTPUT_TAIL_BYTES {
+                        append(task_repo, &run, &decoded_prefix(&mut pending)).await?;
+                    }
+                }
                 None => break,
             },
             _ = flush.tick() => append(task_repo, &run, &decoded_prefix(&mut pending)).await?,

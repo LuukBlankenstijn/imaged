@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", body FROM scripts WHERE name = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "body",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "2f0f6a1099c58f0f9fd25e85972d54883061b04e9c742fe7567a9cf1a6b45a61"
+}

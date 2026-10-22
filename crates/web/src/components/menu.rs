@@ -13,6 +13,10 @@ pub fn ActionMenu(children: Element) -> Element {
         div { class: "inline-flex",
             button {
                 class: "rounded-md p-1.5 text-fog-400 hover:bg-ink-700 hover:text-fog-100 transition-colors",
+                aria_label: "Actions",
+                title: "Actions",
+                aria_haspopup: "menu",
+                aria_expanded: open().to_string(),
                 onmounted: move |e| trigger.set(Some(e.data())),
                 onclick: move |e: MouseEvent| {
                     e.stop_propagation();

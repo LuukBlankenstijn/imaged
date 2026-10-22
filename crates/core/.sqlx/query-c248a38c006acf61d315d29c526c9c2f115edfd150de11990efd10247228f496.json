@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE images SET name = ? WHERE id = ?\n               RETURNING\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition\n            ",
+  "query": "UPDATE images SET name = ? WHERE id = ?\n               RETURNING\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition,\n                 sector_size\n            ",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "name": "root_partition",
         "ordinal": 5,
         "type_info": "Integer"
+      },
+      {
+        "name": "sector_size",
+        "ordinal": 6,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -43,8 +48,9 @@
       true,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "e2d53fef95d8e91c43deaaf2dd3c8aa31fcb289c9a312170147986d953cc76db"
+  "hash": "c248a38c006acf61d315d29c526c9c2f115edfd150de11990efd10247228f496"
 }

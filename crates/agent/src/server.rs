@@ -6,26 +6,31 @@ use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
 use futures::{SinkExt as _, Stream, StreamExt, TryStreamExt};
 use imaged_model::agent::{
-    IP_HEADER, ImagePartition, MAC_HEADER, PartitionUpload, PostInstall, ScriptFinished,
-    StreamQuery, TaskFailure, path, route,
+    IP_HEADER, ImageLayout, ImagePartition, MAC_HEADER, MacAddress, PartitionTableUpload,
+    PartitionUpload, PostInstall, ScriptFinished, ScriptOutputUpload, StreamQuery, TaskFailure,
+    path, route,
 };
 use imaged_model::progress::HostProgress;
 use imaged_model::{AgentEvent, ServerEvent};
-use mac_address::MacAddress;
 use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::{Body, Client, Method, RequestBuilder, Response, Url};
+use reqwest::{Body, Client, Method, RequestBuilder, Response, StatusCode, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::io::{ReaderStream, StreamReader};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(10);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const KEEPALIVE_PROBES: u32 = 3;
+const UNACKNOWLEDGED_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Server {
     http: Client,
@@ -38,6 +43,38 @@ struct ErrorBody {
     error: String,
 }
 
+#[derive(Debug)]
+pub struct Rejected {
+    request: String,
+    status: StatusCode,
+    message: String,
+}
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} failed with {}: {}",
+            self.request, self.status, self.message
+        )
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+impl Rejected {
+    pub fn is_final(error: &anyhow::Error) -> bool {
+        error
+            .downcast_ref::<Rejected>()
+            .is_some_and(|rejected| rejected.status.is_client_error())
+    }
+}
+
+pub struct Uplink {
+    pub progress: watch::Receiver<Option<HostProgress>>,
+    pub idle: watch::Receiver<()>,
+}
+
 impl Server {
     pub fn new(base: Url, mac: MacAddress, ip: Option<IpAddr>) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -48,6 +85,11 @@ impl Server {
         }
         let http = Client::builder()
             .default_headers(headers.clone())
+            .connect_timeout(CONNECT_TIMEOUT)
+            .tcp_keepalive(KEEPALIVE_IDLE)
+            .tcp_keepalive_interval(KEEPALIVE_INTERVAL)
+            .tcp_keepalive_retries(KEEPALIVE_PROBES)
+            .tcp_user_timeout(UNACKNOWLEDGED_TIMEOUT)
             .build()
             .context("building the http client")?;
         Ok(Self {
@@ -85,7 +127,12 @@ impl Server {
         let message = serde_json::from_str::<ErrorBody>(&body)
             .map(|body| body.error)
             .unwrap_or(body);
-        bail!("{method} {path} failed with {status}: {message}")
+        Err(Rejected {
+            request: format!("{method} {path}"),
+            status,
+            message,
+        }
+        .into())
     }
 
     async fn json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
@@ -98,13 +145,18 @@ impl Server {
 
     pub async fn connect_events(
         &self,
-        disk_size_bytes: u64,
-        progress: watch::Receiver<Option<HostProgress>>,
-    ) -> Result<impl Stream<Item = ServerEvent> + Send> {
+        disk: &std::result::Result<u64, String>,
+        uplink: Uplink,
+        silence_limit: Duration,
+    ) -> Result<impl Stream<Item = ServerEvent> + Send + use<>> {
+        let query = StreamQuery {
+            disk_size_bytes: disk.as_ref().ok().copied(),
+            disk_error: disk.as_ref().err().cloned(),
+        };
         let url = self
             .http
             .get(self.url(route::STREAM)?)
-            .query(&StreamQuery { disk_size_bytes })
+            .query(&query)
             .build()?
             .url()
             .clone();
@@ -113,7 +165,7 @@ impl Server {
         let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .with_context(|| format!("GET {}", route::STREAM))?;
-        let connection = Connection::new(socket, progress);
+        let connection = Connection::new(socket, uplink, silence_limit);
         Ok(futures::stream::unfold(
             connection,
             |mut connection| async move {
@@ -146,7 +198,7 @@ impl Server {
         Ok(())
     }
 
-    pub async fn partitions(&self, task_id: i64) -> Result<Vec<ImagePartition>> {
+    pub async fn image_layout(&self, task_id: i64) -> Result<ImageLayout> {
         self.json(&path::partitions(task_id)).await
     }
 
@@ -159,9 +211,16 @@ impl Server {
             .with_context(|| format!("reading the response of GET {path}"))
     }
 
-    pub async fn upload_partition_table(&self, task_id: i64, table: Bytes) -> Result<()> {
+    pub async fn upload_partition_table(
+        &self,
+        task_id: i64,
+        sector_size: u32,
+        table: Bytes,
+    ) -> Result<()> {
         self.send(Method::PUT, &path::partition_table(task_id), |request| {
-            request.body(table)
+            request
+                .query(&PartitionTableUpload { sector_size })
+                .body(table)
         })
         .await?;
         Ok(())
@@ -222,12 +281,19 @@ impl Server {
         &self,
         task_id: i64,
         position: i64,
+        name: &str,
         output: impl Stream<Item = Bytes> + Send + 'static,
     ) -> Result<()> {
         self.send(
             Method::PUT,
             &path::script_output(task_id, position),
-            |request| request.body(Body::wrap_stream(output.map(Ok::<_, io::Error>))),
+            |request| {
+                request
+                    .query(&ScriptOutputUpload {
+                        name: name.to_owned(),
+                    })
+                    .body(Body::wrap_stream(output.map(Ok::<_, io::Error>)))
+            },
         )
         .await?;
         Ok(())
@@ -251,22 +317,28 @@ impl Server {
 
 struct Connection {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    progress: watch::Receiver<Option<HostProgress>>,
+    uplink: Uplink,
     interval: Interval,
+    silence_limit: Duration,
+    last_frame: Instant,
 }
 
 impl Connection {
     fn new(
         socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-        mut progress: watch::Receiver<Option<HostProgress>>,
+        mut uplink: Uplink,
+        silence_limit: Duration,
     ) -> Self {
-        progress.mark_changed();
+        uplink.progress.mark_changed();
+        uplink.idle.mark_unchanged();
         let mut interval = tokio::time::interval(PROGRESS_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         Self {
             socket,
-            progress,
+            uplink,
             interval,
+            silence_limit,
+            last_frame: Instant::now(),
         }
     }
 
@@ -281,7 +353,19 @@ impl Connection {
                     }
                     continue;
                 }
+                Ok(()) = self.uplink.idle.changed() => {
+                    if let Err(e) = self.send(&AgentEvent::Idle).await {
+                        tracing::info!(err=%e, "could not ask for the next task, closing the agent control stream");
+                        return None;
+                    }
+                    continue;
+                }
+                _ = tokio::time::sleep_until(self.last_frame + self.silence_limit) => {
+                    tracing::warn!(silence=?self.silence_limit, "the server went silent, reconnecting");
+                    return None;
+                }
             };
+            self.last_frame = Instant::now();
             let event = match frame {
                 Ok(Message::Text(text)) => decode(text.as_bytes()),
                 Ok(Message::Binary(bytes)) => decode(&bytes),
@@ -299,15 +383,18 @@ impl Connection {
     }
 
     async fn send_progress(&mut self) -> Result<(), tungstenite::Error> {
-        if !self.progress.has_changed().unwrap_or(false) {
+        if !self.uplink.progress.has_changed().unwrap_or(false) {
             return Ok(());
         }
-        let Some(progress) = self.progress.borrow_and_update().clone() else {
+        let Some(progress) = self.uplink.progress.borrow_and_update().clone() else {
             return Ok(());
         };
         tracing::debug!(task_id = progress.task_id, fraction = progress.fraction, stage = ?progress.stage, "reporting progress");
-        let json = serde_json::to_string(&AgentEvent::from(progress))
-            .expect("agent events serialize to json");
+        self.send(&AgentEvent::from(progress)).await
+    }
+
+    async fn send(&mut self, event: &AgentEvent) -> Result<(), tungstenite::Error> {
+        let json = serde_json::to_string(event).expect("agent events serialize to json");
         self.socket.send(Message::text(json)).await
     }
 }

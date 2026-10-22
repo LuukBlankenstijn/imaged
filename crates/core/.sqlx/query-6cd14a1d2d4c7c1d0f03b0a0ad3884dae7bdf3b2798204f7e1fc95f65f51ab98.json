@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO hosts (mac, name, disk_size_bytes, disk_error, ip)\n                VALUES (?, ?, ?, ?, ?)\n                ON CONFLICT(mac) DO UPDATE SET\n                    disk_size_bytes = excluded.disk_size_bytes,\n                    disk_error = excluded.disk_error,\n                    ip = excluded.ip\n                RETURNING\n                    id AS \"id!: i64\",\n                    mac AS \"mac!: String\",\n                    name AS \"name!: String\",\n                    disk_size_bytes AS \"disk_size_bytes!: i64\",\n                    disk_error AS \"disk_error?: String\",\n                    ip AS \"ip!: String\"\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "mac!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "name!: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "disk_size_bytes!: i64",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "disk_error?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "ip!: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "6cd14a1d2d4c7c1d0f03b0a0ad3884dae7bdf3b2798204f7e1fc95f65f51ab98"
+}

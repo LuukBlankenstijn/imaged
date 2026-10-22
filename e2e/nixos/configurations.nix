@@ -13,7 +13,7 @@ let
       modules = [
         imaged.nixosModules.image
         common
-        { imaged.image.name = "e2e-${name}"; }
+        { imaged.image.name = "e2e ${name}"; }
       ]
       ++ modules;
     };
@@ -37,6 +37,36 @@ let
       type = "filesystem";
       format = "ext4";
       mountpoint = "/";
+    };
+  };
+
+  diskoDeploy = partitions: {
+    imports = [ disko.nixosModules.disko ];
+    disko.devices.disk.main = {
+      device = "/dev/disk/by-id/imaged-e2e-disk";
+      type = "disk";
+      imageSize = "4G";
+      content = {
+        type = "gpt";
+        partitions = {
+          ESP = {
+            type = "EF00";
+            size = "256M";
+            content = {
+              type = "filesystem";
+              format = "vfat";
+              mountpoint = "/boot";
+              mountOptions = [ "umask=0077" ];
+            };
+          };
+          swap = {
+            size = "128M";
+            content.type = "swap";
+          };
+          root = rootPartition;
+        }
+        // partitions;
+      };
     };
   };
 
@@ -73,11 +103,6 @@ let
       boot.kernelParams = [ "console=ttyS0,115200" ];
       boot.loader.timeout = lib.mkForce 1;
       networking.useDHCP = false;
-
-      fileSystems."/" = lib.mkDefault {
-        device = "/dev/disk/by-uuid/00000000-0000-0000-0000-000000000000";
-        fsType = "ext4";
-      };
 
       users.users.app = {
         isSystemUser = true;
@@ -251,6 +276,19 @@ in
         swapDevices = [ { device = "/dev/disk/by-uuid/5d1f7a3e-2b4c-4e8f-9a61-0c3b7d2e9f14"; } ];
       }
     ];
+    "imaged cannot deploy system.etc.overlay" = host "etc-overlay" [
+      {
+        boot.loader.systemd-boot.enable = true;
+        boot.initrd.systemd.enable = true;
+        system.etc.overlay.enable = true;
+      }
+    ];
+    "no fileSystems entry mounts the ESP" = host "sdboot-without-esp" [
+      {
+        boot.loader.systemd-boot.enable = true;
+        imaged.image.partitionTableType = "legacy+gpt";
+      }
+    ];
     "must be the last partition of disko disk `main`" = host "no-partitions" [
       (diskoRoot { })
       {
@@ -292,40 +330,22 @@ in
   ];
 
   disko = host "disko" [
-    disko.nixosModules.disko
+    (diskoDeploy { })
+    { boot.loader.systemd-boot.enable = true; }
+  ];
+
+  disko-grub = host "disko-grub" [
+    (diskoDeploy {
+      bios = {
+        size = "1M";
+        type = "EF02";
+      };
+    })
     {
-      boot.loader.systemd-boot.enable = true;
-      disko.devices.disk.main = {
-        device = "/dev/disk/by-id/imaged-e2e-disk";
-        type = "disk";
-        imageSize = "4G";
-        content = {
-          type = "gpt";
-          partitions = {
-            ESP = {
-              type = "EF00";
-              size = "256M";
-              content = {
-                type = "filesystem";
-                format = "vfat";
-                mountpoint = "/boot";
-                mountOptions = [ "umask=0077" ];
-              };
-            };
-            swap = {
-              size = "128M";
-              content.type = "swap";
-            };
-            root = {
-              size = "100%";
-              content = {
-                type = "filesystem";
-                format = "ext4";
-                mountpoint = "/";
-              };
-            };
-          };
-        };
+      boot.loader.grub = {
+        enable = true;
+        efiSupport = true;
+        efiInstallAsRemovable = true;
       };
     }
   ];

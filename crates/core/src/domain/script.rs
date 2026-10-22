@@ -6,6 +6,8 @@ use imaged_model::script::{InputValues, ScriptInput, validate_script};
 use imaged_model::error::{AppError, Result};
 use imaged_model::script::ResolvedInputs;
 
+use crate::domain::host::Host;
+
 #[derive(Debug, Clone)]
 pub struct Script {
     pub id: i64,
@@ -30,7 +32,7 @@ impl NewScript {
 
 pub fn resolve_inputs(
     scripts: &[Script],
-    host_ids: &[i64],
+    hosts: &[Host],
     inputs: &ResolvedInputs,
 ) -> Result<BTreeMap<i64, InputValues>> {
     let declared: Vec<&ScriptInput> = scripts.iter().flat_map(|s| &s.inputs).collect();
@@ -48,7 +50,7 @@ pub fn resolve_inputs(
         }
     }
     for (host_id, values) in &inputs.per_machine {
-        if !host_ids.contains(host_id) {
+        if !hosts.iter().any(|host| host.id == *host_id) {
             return Err(AppError::InvalidArgument(format!(
                 "host {host_id} is not part of this deployment"
             )));
@@ -76,11 +78,11 @@ pub fn resolve_inputs(
 
     let empty = InputValues::new();
     let mut resolved = BTreeMap::new();
-    for &host_id in host_ids {
+    for host in hosts {
         let mut values = InputValues::new();
         for input in &declared {
             let source = if input.per_machine {
-                inputs.per_machine.get(&host_id).unwrap_or(&empty)
+                inputs.per_machine.get(&host.id).unwrap_or(&empty)
             } else {
                 &inputs.shared
             };
@@ -88,19 +90,19 @@ pub fn resolve_inputs(
                 Some(value) => {
                     input
                         .check(value)
-                        .map_err(|e| AppError::InvalidArgument(format!("host {host_id}: {e}")))?;
+                        .map_err(|e| AppError::InvalidArgument(format!("{}: {e}", host.name)))?;
                     values.insert(input.name.clone(), value.to_string());
                 }
                 None if input.required => {
                     return Err(AppError::InvalidArgument(format!(
-                        "host {host_id}: input `{}` is required",
-                        input.name
+                        "{}: input `{}` is required",
+                        host.name, input.name
                     )));
                 }
                 None => {}
             }
         }
-        resolved.insert(host_id, values);
+        resolved.insert(host.id, values);
     }
     Ok(resolved)
 }
@@ -164,6 +166,20 @@ mod tests {
             .collect()
     }
 
+    fn hosts(ids: &[i64]) -> Vec<Host> {
+        ids.iter()
+            .map(|&id| {
+                Host::new(
+                    id,
+                    format!("rack-{id}"),
+                    format!("52:54:00:00:00:0{id}"),
+                    Ok(0),
+                    None,
+                )
+            })
+            .collect()
+    }
+
     fn rejected(result: Result<impl std::fmt::Debug>) -> String {
         match result {
             Err(AppError::InvalidArgument(message)) => message,
@@ -182,7 +198,7 @@ mod tests {
 
         let resolved = resolve_inputs(
             &scripts,
-            &[1, 2],
+            &hosts(&[1, 2]),
             &ResolvedInputs {
                 shared: values(&[("site", "lab")]),
                 per_machine: BTreeMap::from([
@@ -213,9 +229,13 @@ mod tests {
             per_machine: BTreeMap::from([(1, values(&[("hostname", "pc-1")]))]),
         };
 
-        let message = rejected(resolve_inputs(&[script(vec![hostname])], &[1, 2], &inputs));
+        let message = rejected(resolve_inputs(
+            &[script(vec![hostname])],
+            &hosts(&[1, 2]),
+            &inputs,
+        ));
         assert!(
-            message.contains("host 2") && message.contains("hostname"),
+            message.contains("rack-2") && message.contains("hostname"),
             "{message}"
         );
     }
@@ -229,7 +249,7 @@ mod tests {
 
         let resolved = resolve_inputs(
             &[script(vec![timezone, optional])],
-            &[1],
+            &hosts(&[1]),
             &ResolvedInputs {
                 shared: values(&[("timezone", ""), ("note", "")]),
                 per_machine: BTreeMap::new(),
@@ -249,7 +269,7 @@ mod tests {
         let deploy = |pairs: &[(&str, &str)]| {
             resolve_inputs(
                 &scripts,
-                &[1],
+                &hosts(&[1]),
                 &ResolvedInputs {
                     shared: values(pairs),
                     per_machine: BTreeMap::new(),
@@ -273,7 +293,7 @@ mod tests {
         let deploy = |shared: InputValues, per_machine: BTreeMap<i64, InputValues>| {
             resolve_inputs(
                 &scripts,
-                &[1],
+                &hosts(&[1]),
                 &ResolvedInputs {
                     shared,
                     per_machine,
@@ -304,7 +324,7 @@ mod tests {
         let deploy = |level: &str| {
             resolve_inputs(
                 &scripts,
-                &[1],
+                &hosts(&[1]),
                 &ResolvedInputs {
                     shared: values(&[("level", level)]),
                     per_machine: BTreeMap::new(),
@@ -324,7 +344,7 @@ mod tests {
         assert!(
             rejected(resolve_inputs(
                 &conflicting,
-                &[1],
+                &hosts(&[1]),
                 &ResolvedInputs::default()
             ))
             .contains("both shared and per machine")

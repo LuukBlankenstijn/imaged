@@ -4,16 +4,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use common::offline_agent;
+use common::{Route, StubConfig, StubServer, agent_server, offline_agent, stub_server};
 use imaged_agent::agent::Agent;
-use imaged_agent::status::PartitionProgress;
+use imaged_agent::status::{Outcome, PartitionProgress, Step};
 use imaged_agent::sys::disk::{BlockDevice, PartitionTarget};
 use imaged_agent::task::types::RunningTask;
 use imaged_agent::task::{
-    ClientState, ClientTaskExt, DeployTask, RunnableClientTask, handle_message,
+    CaptureTask, ClientState, ClientTaskExt, DeployTask, RebootTask, handle_message,
 };
 use imaged_model::{ServerEvent, Task as SharedTask, TaskType};
 use tokio_util::sync::CancellationToken;
+
+const MAC: &str = "aa:bb:cc:dd:ee:0f";
 
 #[derive(Clone)]
 struct RecordingTask {
@@ -70,6 +72,14 @@ impl ClientTaskExt for RecordingTask {
         &self.agent
     }
 
+    async fn target_disk(&self) -> anyhow::Result<BlockDevice> {
+        Ok(serde_json::from_str(
+            r#"{ "name": "vdz", "size": 100, "children": [
+                { "name": "vdz1", "size": 50, "fstype": "ext4" }
+            ] }"#,
+        )?)
+    }
+
     async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
         self.record(format!("table:{device}"));
         Ok(())
@@ -120,11 +130,17 @@ fn pt(number: i64) -> PartitionTarget {
 }
 
 fn capture_event(id: i64) -> ServerEvent {
-    ServerEvent::Task(SharedTask {
+    ServerEvent::Current(Some(SharedTask {
         id,
         task_type: TaskType::Capture,
         image_id: None,
-    })
+    }))
+}
+
+async fn reporting_server() -> (StubServer, Agent) {
+    let server = stub_server(StubConfig::new()).await;
+    let agent = agent_server(&server.base_url, MAC);
+    (server, agent)
 }
 
 async fn preseed(state: &Arc<ClientState>, task_id: i64, cancel: CancellationToken) {
@@ -147,10 +163,11 @@ async fn wait_until_slot_cleared(state: &Arc<ClientState>) {
 }
 
 #[tokio::test]
-async fn a_task_event_starts_and_stores_the_running_task() {
+async fn a_current_task_while_idle_starts_and_stores_the_running_task() {
+    let (_server, agent) = reporting_server().await;
     let state = Arc::new(ClientState::default());
 
-    handle_message(&offline_agent(), state.clone(), capture_event(7)).await;
+    handle_message(&agent, state.clone(), capture_event(7)).await;
 
     {
         let guard = state.current_task.lock().await;
@@ -162,40 +179,12 @@ async fn a_task_event_starts_and_stores_the_running_task() {
 }
 
 #[tokio::test]
-async fn a_second_task_while_one_runs_is_refused_and_leaves_the_first_intact() {
-    let state = Arc::new(ClientState::default());
-    let first_cancel = CancellationToken::new();
-    preseed(&state, 100, first_cancel.clone()).await;
-
-    handle_message(&offline_agent(), state.clone(), capture_event(200)).await;
-
-    let guard = state.current_task.lock().await;
-    assert_eq!(guard.as_ref().unwrap().task_id, 100);
-    assert!(!first_cancel.is_cancelled());
-}
-
-#[tokio::test]
-async fn cancel_with_a_matching_id_cancels_the_running_task() {
+async fn naming_the_running_task_again_leaves_it_running() {
     let state = Arc::new(ClientState::default());
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_agent(), state.clone(), ServerEvent::Cancel(100)).await;
-
-    assert!(cancel.is_cancelled());
-    assert!(
-        state.current_task.lock().await.is_some(),
-        "cancel signals the token but does not itself clear the slot"
-    );
-}
-
-#[tokio::test]
-async fn cancel_with_a_stale_id_is_ignored() {
-    let state = Arc::new(ClientState::default());
-    let cancel = CancellationToken::new();
-    preseed(&state, 100, cancel.clone()).await;
-
-    handle_message(&offline_agent(), state.clone(), ServerEvent::Cancel(999)).await;
+    handle_message(&offline_agent(), state.clone(), capture_event(100)).await;
 
     assert!(!cancel.is_cancelled());
     assert_eq!(
@@ -205,58 +194,156 @@ async fn cancel_with_a_stale_id_is_ignored() {
 }
 
 #[tokio::test]
-async fn after_completion_the_running_task_slot_is_cleared() {
+async fn naming_another_task_cancels_the_running_one_without_starting_the_other_yet() {
     let state = Arc::new(ClientState::default());
+    let cancel = CancellationToken::new();
+    preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_agent(), state.clone(), capture_event(11)).await;
+    handle_message(&offline_agent(), state.clone(), capture_event(200)).await;
 
-    wait_until_slot_cleared(&state).await;
+    assert!(cancel.is_cancelled());
+    assert_eq!(
+        state.current_task.lock().await.as_ref().unwrap().task_id,
+        100,
+        "the next task starts once the cancelled one has stopped and the agent asks again"
+    );
+}
+
+#[tokio::test]
+async fn naming_no_task_cancels_the_running_one() {
+    let state = Arc::new(ClientState::default());
+    let cancel = CancellationToken::new();
+    preseed(&state, 100, cancel.clone()).await;
+
+    handle_message(&offline_agent(), state.clone(), ServerEvent::Current(None)).await;
+
+    assert!(cancel.is_cancelled());
+    assert!(
+        state.current_task.lock().await.is_some(),
+        "cancel signals the token but does not itself clear the slot"
+    );
+}
+
+#[tokio::test]
+async fn after_completion_the_slot_is_cleared_and_the_agent_becomes_idle() {
+    let (server, agent) = reporting_server().await;
+    let state = Arc::new(ClientState::default());
+    let mut idle = state.idle();
+
+    handle_message(&agent, state.clone(), capture_event(11)).await;
+
+    tokio::time::timeout(Duration::from_secs(5), idle.changed())
+        .await
+        .expect("the agent must announce that it is idle")
+        .unwrap();
     assert!(state.current_task.lock().await.is_none());
+    assert_eq!(
+        server
+            .failed()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>(),
+        [11]
+    );
 }
 
 #[tokio::test]
 async fn run_processes_partition_table_then_plans_then_each_partition_then_the_restored_set() {
     let task = RecordingTask::new(vec![pt(1), pt(2), pt(3)]);
-    let disk = imaged_agent::sys::disk::find_target_disk().await;
-    let result = task.run().await;
-    let log = task.entries();
 
-    match disk {
-        Ok(disk) => {
-            result.expect("run should succeed once the fake owns every hook");
-            assert_eq!(log[0], format!("table:/dev/{}", disk.name));
-            assert_eq!(log[1], format!("plan:{}", disk.name));
-            assert_eq!(
-                &log[2..],
-                ["partition:1", "partition:2", "partition:3", "after:1,2,3"]
-            );
-            assert!(!log.iter().any(|e| e == "finalize"));
-            assert!(!log.iter().any(|e| e.starts_with("finalize_error")));
-        }
-        Err(_) => {
-            assert!(result.is_err());
-            assert!(log.is_empty());
-        }
-    }
+    task.run()
+        .await
+        .expect("run should succeed once the fake owns every hook");
+
+    assert_eq!(
+        task.entries(),
+        [
+            "table:/dev/vdz",
+            "plan:vdz",
+            "partition:1",
+            "partition:2",
+            "partition:3",
+            "after:1,2,3"
+        ]
+    );
 }
 
 #[tokio::test]
 async fn run_bails_on_the_first_partition_error_without_processing_the_rest() {
     let task = RecordingTask::new(vec![pt(1), pt(2), pt(3)]).failing_partition_at(0);
-    let disk = imaged_agent::sys::disk::find_target_disk().await;
-    let result = task.run().await;
-    let log = task.entries();
 
-    assert!(result.is_err());
-    match disk {
-        Ok(_) => {
-            assert!(log.iter().any(|e| e == "partition:1"));
-            assert!(!log.iter().any(|e| e == "partition:2"));
-            assert!(!log.iter().any(|e| e == "partition:3"));
-            assert!(!log.iter().any(|e| e.starts_with("after:")));
-        }
-        Err(_) => assert!(log.is_empty()),
-    }
+    let err = task.run().await.unwrap_err();
+
+    assert_eq!(err.to_string(), "partition 1 failed");
+    assert_eq!(
+        task.entries(),
+        ["table:/dev/vdz", "plan:vdz", "partition:1"]
+    );
+}
+
+#[tokio::test]
+async fn a_reboot_task_neither_looks_for_a_disk_nor_lists_partitions() {
+    let agent = offline_agent();
+    agent
+        .status
+        .task_started(&SharedTask::new(3, TaskType::Reboot, None));
+
+    RebootTask::new(agent.clone(), 3)
+        .run()
+        .await
+        .expect("a reboot has no disk work to fail");
+
+    let task = agent.status.snapshot().task.unwrap();
+    assert_eq!(task.step, Step::Starting);
+    assert!(task.partitions.is_empty());
+}
+
+#[tokio::test]
+async fn the_final_report_is_retried_until_the_server_takes_it() {
+    let server = stub_server(
+        StubConfig::new()
+            .fail_transiently(Route::Failed, 1)
+            .fail_transiently(Route::Finished, 1),
+    )
+    .await;
+    let agent = agent_server(&server.base_url, MAC);
+
+    agent
+        .status
+        .task_started(&SharedTask::new(5, TaskType::Capture, Some(1)));
+    CaptureTask::new(agent.clone(), 5)
+        .finalize_error("sgdisk failed")
+        .await
+        .expect("the failure is reported once the server recovers");
+    assert_eq!(server.failed(), [(5, "sgdisk failed".to_string())]);
+    assert_eq!(
+        agent.status.snapshot().task.unwrap().outcome.unwrap().0,
+        Outcome::Failed("sgdisk failed".into())
+    );
+
+    agent
+        .status
+        .task_started(&SharedTask::new(6, TaskType::Capture, Some(1)));
+    CaptureTask::new(agent.clone(), 6)
+        .finalize()
+        .await
+        .expect("the success is reported once the server recovers");
+    assert_eq!(server.finished(), [6]);
+    assert_eq!(
+        agent.status.snapshot().task.unwrap().outcome.unwrap().0,
+        Outcome::Done
+    );
+}
+
+#[tokio::test]
+async fn a_final_report_the_server_refuses_is_not_retried() {
+    let server = stub_server(StubConfig::new().force(Route::Finished, 400)).await;
+    let agent = agent_server(&server.base_url, MAC);
+
+    let err = CaptureTask::new(agent, 9).finalize().await.unwrap_err();
+
+    assert!(err.to_string().contains("400 Bad Request"), "{err:#}");
+    assert_eq!(server.requests().len(), 1);
 }
 
 #[tokio::test]

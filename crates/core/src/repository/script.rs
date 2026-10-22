@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
-use imaged_model::script::{InputKind, ScriptInput};
-use sqlx::{SqliteConnection, SqlitePool, types::Json};
+use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
+use sqlx::{Executor, Sqlite, SqliteConnection, SqlitePool, types::Json};
 
 use crate::domain::script::{NewScript, Script, ScriptRepository};
 use imaged_model::error::{AppError, Result};
@@ -34,39 +34,8 @@ struct InputRow {
 
 impl SqliteScriptRepository {
     async fn assemble(&self, rows: Vec<ScriptRow>) -> Result<Vec<Script>> {
-        let ids = Json(rows.iter().map(|row| row.id).collect::<Vec<_>>());
-        let mut inputs: HashMap<i64, Vec<ScriptInput>> = HashMap::new();
-        for row in sqlx::query_as!(
-            InputRow,
-            r#"SELECT
-                 script_id,
-                 name,
-                 label,
-                 description,
-                 kind,
-                 required as "required: bool",
-                 default_value,
-                 per_machine as "per_machine: bool",
-                 choices as "choices: Json<Vec<String>>"
-               FROM script_inputs
-               WHERE script_id IN (SELECT value FROM json_each(?))
-               ORDER BY script_id, position"#,
-            ids
-        )
-        .fetch_all(&self.pool)
-        .await?
-        {
-            inputs.entry(row.script_id).or_default().push(ScriptInput {
-                name: row.name,
-                label: row.label,
-                description: row.description,
-                kind: input_kind(&row.kind)?,
-                required: row.required,
-                default_value: row.default_value,
-                per_machine: row.per_machine,
-                choices: row.choices.0,
-            });
-        }
+        let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+        let mut inputs = load_inputs(&self.pool, &ids).await?;
         Ok(rows
             .into_iter()
             .map(|row| Script {
@@ -78,6 +47,46 @@ impl SqliteScriptRepository {
             })
             .collect())
     }
+}
+
+async fn load_inputs<'e, E>(executor: E, ids: &[i64]) -> Result<HashMap<i64, Vec<ScriptInput>>>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let ids = Json(ids);
+    let mut inputs: HashMap<i64, Vec<ScriptInput>> = HashMap::new();
+    for row in sqlx::query_as!(
+        InputRow,
+        r#"SELECT
+             script_id,
+             name,
+             label,
+             description,
+             kind,
+             required as "required: bool",
+             default_value,
+             per_machine as "per_machine: bool",
+             choices as "choices: Json<Vec<String>>"
+           FROM script_inputs
+           WHERE script_id IN (SELECT value FROM json_each(?))
+           ORDER BY script_id, position"#,
+        ids
+    )
+    .fetch_all(executor)
+    .await?
+    {
+        inputs.entry(row.script_id).or_default().push(ScriptInput {
+            name: row.name,
+            label: row.label,
+            description: row.description,
+            kind: input_kind(&row.kind)?,
+            required: row.required,
+            default_value: row.default_value,
+            per_machine: row.per_machine,
+            choices: row.choices.0,
+        });
+    }
+    Ok(inputs)
 }
 
 fn input_kind(value: &str) -> Result<InputKind> {
@@ -142,7 +151,7 @@ impl ScriptRepository for SqliteScriptRepository {
     async fn create(&self, script: &NewScript) -> Result<Script> {
         script.validate()?;
         let mut tx = self.pool.begin().await?;
-        let id = write_script(&mut tx, None, script).await?;
+        let id = write_script(&mut tx, None, &script.name, script).await?;
         tx.commit().await?;
         self.get(id).await
     }
@@ -150,7 +159,7 @@ impl ScriptRepository for SqliteScriptRepository {
     async fn update(&self, id: i64, script: &NewScript) -> Result<Script> {
         script.validate()?;
         let mut tx = self.pool.begin().await?;
-        write_script(&mut tx, Some(id), script).await?;
+        write_script(&mut tx, Some(id), &script.name, script).await?;
         tx.commit().await?;
         self.get(id).await
     }
@@ -185,13 +194,7 @@ impl ScriptRepository for SqliteScriptRepository {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let mut ids = Vec::with_capacity(scripts.len());
         for script in scripts {
-            let existing = sqlx::query_scalar!(
-                r#"SELECT id as "id!" FROM scripts WHERE name = ?"#,
-                script.name
-            )
-            .fetch_optional(&mut *tx)
-            .await?;
-            ids.push(write_script(&mut tx, existing, script).await?);
+            ids.push(import_script(&mut tx, image_id, script).await?);
         }
         link_scripts(&mut tx, image_id, &ids).await?;
         tx.commit().await?;
@@ -220,9 +223,66 @@ impl ScriptRepository for SqliteScriptRepository {
     }
 }
 
+async fn import_script(
+    conn: &mut SqliteConnection,
+    image_id: i64,
+    script: &NewScript,
+) -> Result<i64> {
+    let mut attempt = 1;
+    loop {
+        let name = import_name(&script.name, attempt);
+        let Some(existing) = sqlx::query!(
+            r#"SELECT id as "id!", body FROM scripts WHERE name = ?"#,
+            name
+        )
+        .fetch_optional(&mut *conn)
+        .await?
+        else {
+            return write_script(conn, None, &name, script).await;
+        };
+        let inputs = load_inputs(&mut *conn, &[existing.id])
+            .await?
+            .remove(&existing.id)
+            .unwrap_or_default();
+        if existing.body == script.body && inputs == script.inputs {
+            return Ok(existing.id);
+        }
+        if attempt == 1 && !used_by_other_images(conn, existing.id, image_id).await? {
+            return write_script(conn, Some(existing.id), &name, script).await;
+        }
+        attempt += 1;
+    }
+}
+
+async fn used_by_other_images(
+    conn: &mut SqliteConnection,
+    script_id: i64,
+    image_id: i64,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT EXISTS (
+             SELECT 1 FROM image_scripts WHERE script_id = ? AND image_id <> ?
+           ) as "used!: bool""#,
+        script_id,
+        image_id
+    )
+    .fetch_one(&mut *conn)
+    .await?)
+}
+
+fn import_name(name: &str, attempt: u32) -> String {
+    if attempt == 1 {
+        return name.to_string();
+    }
+    let suffix = format!("-{attempt}");
+    let base = &name[..name.len().min(MAX_SCRIPT_NAME_LEN - suffix.len())];
+    format!("{base}{suffix}")
+}
+
 async fn write_script(
     conn: &mut SqliteConnection,
     id: Option<i64>,
+    name: &str,
     script: &NewScript,
 ) -> Result<i64> {
     let now = Utc::now();
@@ -230,7 +290,7 @@ async fn write_script(
         None => {
             sqlx::query_scalar!(
                 r#"INSERT INTO scripts (name, body, updated_at) VALUES (?, ?, ?) RETURNING id as "id!""#,
-                script.name,
+                name,
                 script.body,
                 now
             )
@@ -240,7 +300,7 @@ async fn write_script(
         Some(id) => {
             let updated = sqlx::query!(
                 "UPDATE scripts SET name = ?, body = ?, updated_at = ? WHERE id = ?",
-                script.name,
+                name,
                 script.body,
                 now,
                 id
@@ -299,7 +359,7 @@ mod tests {
     use crate::domain::script::NewScript;
     use crate::test_support::repos;
     use imaged_model::error::AppError;
-    use imaged_model::script::{InputKind, ScriptInput};
+    use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
 
     fn input(name: &str, kind: InputKind, choices: &[&str]) -> ScriptInput {
         ScriptInput {
@@ -554,7 +614,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn importing_replaces_scripts_by_name_and_attaches_them_in_order() {
+    async fn importing_a_changed_script_another_image_uses_attaches_a_renamed_copy() {
         let (c, _g) = repos().await;
         let other = c.image_repo.create_image("other".into()).await.unwrap();
         let imported = c.image_repo.create_image("imported".into()).await.unwrap();
@@ -584,11 +644,141 @@ mod tests {
             .unwrap();
 
         let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
-        let names: Vec<&str> = attached.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["added", "setup"]);
-        assert_eq!(attached[1].id, original.id);
+        let listed: Vec<(&str, &str)> = attached
+            .iter()
+            .map(|s| (s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(listed, [("added", "x"), ("setup-2", "new")]);
         let used = c.script_repo.get_for_image(other.id).await.unwrap();
-        assert_eq!((used[0].body.as_str(), used[0].inputs.len()), ("new", 0));
+        assert_eq!(used[0].id, original.id);
+        assert_eq!(
+            (used[0].name.as_str(), used[0].body.as_str()),
+            ("setup", "old")
+        );
+        assert_eq!(used[0].inputs, original.inputs);
+    }
+
+    #[tokio::test]
+    async fn importing_the_same_colliding_script_again_reuses_its_renamed_copy() {
+        let (c, _g) = repos().await;
+        let other = c.image_repo.create_image("other".into()).await.unwrap();
+        let original = c
+            .script_repo
+            .create(&new_script("setup", "old", vec![]))
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(other.id, &[original.id])
+            .await
+            .unwrap();
+        let archived = [new_script("setup", "new", vec![])];
+
+        let mut attached = Vec::new();
+        for name in ["first", "second"] {
+            let image = c.image_repo.create_image(name.into()).await.unwrap();
+            c.script_repo
+                .import_for_image(image.id, &archived)
+                .await
+                .unwrap();
+            attached.push(c.script_repo.get_for_image(image.id).await.unwrap()[0].id);
+        }
+
+        assert_eq!(attached[0], attached[1]);
+        let names: Vec<String> = c
+            .script_repo
+            .get_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, ["setup", "setup-2"]);
+    }
+
+    #[tokio::test]
+    async fn a_renamed_import_skips_an_unrelated_library_script_that_holds_the_suffixed_name() {
+        let (c, _g) = repos().await;
+        let other = c.image_repo.create_image("other".into()).await.unwrap();
+        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
+        let original = c
+            .script_repo
+            .create(&new_script("setup", "old", vec![]))
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(other.id, &[original.id])
+            .await
+            .unwrap();
+        let unrelated = c
+            .script_repo
+            .create(&new_script("setup-2", "mine", vec![]))
+            .await
+            .unwrap();
+
+        c.script_repo
+            .import_for_image(imported.id, &[new_script("setup", "new", vec![])])
+            .await
+            .unwrap();
+
+        let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
+        assert_eq!(
+            (attached[0].name.as_str(), attached[0].body.as_str()),
+            ("setup-3", "new")
+        );
+        assert_eq!(c.script_repo.get(unrelated.id).await.unwrap().body, "mine");
+    }
+
+    #[tokio::test]
+    async fn importing_reuses_an_identical_script_and_replaces_one_no_other_image_uses() {
+        let (c, _g) = repos().await;
+        let other = c.image_repo.create_image("other".into()).await.unwrap();
+        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
+        let inputs = vec![input("mode", InputKind::Choice, &["fast", "safe"])];
+        let shared = c
+            .script_repo
+            .create(&new_script("setup", "same", inputs.clone()))
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(other.id, &[shared.id])
+            .await
+            .unwrap();
+        let unused = c
+            .script_repo
+            .create(&new_script("cleanup", "old", vec![]))
+            .await
+            .unwrap();
+
+        c.script_repo
+            .import_for_image(
+                imported.id,
+                &[
+                    new_script("setup", "same", inputs),
+                    new_script("cleanup", "new", vec![]),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
+        let listed: Vec<(i64, &str, &str)> = attached
+            .iter()
+            .map(|s| (s.id, s.name.as_str(), s.body.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [(shared.id, "setup", "same"), (unused.id, "cleanup", "new")]
+        );
+        assert_eq!(c.script_repo.get_all().await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_renamed_import_stays_within_the_name_limit() {
+        let long = "a".repeat(MAX_SCRIPT_NAME_LEN);
+        let renamed = super::import_name(&long, 12);
+        assert_eq!(renamed.len(), MAX_SCRIPT_NAME_LEN);
+        assert!(renamed.ends_with("a-12"), "{renamed}");
+        assert_eq!(super::import_name("setup", 1), "setup");
     }
 
     #[tokio::test]

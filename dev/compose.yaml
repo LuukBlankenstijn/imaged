@@ -1,3 +1,5 @@
+name: imaged
+
 services:
   dnsmasq:
     image: jpillora/dnsmasq
@@ -7,15 +9,18 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      - ./dnsmasq.conf:/etc/dnsmasq.conf:ro
-      - ../assets/ipxe.efi:/tftp/ipxe.efi:ro
-      - ../assets/ipxe-arm64.efi:/tftp/ipxe-arm64.efi:ro
-      - ../assets/undionly.kpxe:/tftp/undionly.kpxe:ro
-      - ../assets/x86_64/vmlinuz:/tftp/x86_64/vmlinuz:ro
-      - ../assets/x86_64/initramfs.cpio.xz:/tftp/x86_64/initramfs.cpio.xz:ro
-      - ../assets/arm64/vmlinuz:/tftp/arm64/vmlinuz:ro
-      - ../assets/arm64/initramfs.cpio.xz:/tftp/arm64/initramfs.cpio.xz:ro
-    restart: unless-stopped
+      - type: bind
+        source: ./dnsmasq.conf
+        target: /etc/dnsmasq.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../assets
+        target: /tftp
+        read_only: true
+        bind:
+          create_host_path: false
 
 networks:
   pxenet:

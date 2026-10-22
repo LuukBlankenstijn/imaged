@@ -9,11 +9,15 @@ use bytes::Bytes;
 use imaged_core::{
     AgentLiveness,
     di::{HostRepo, Liveness, Progress, Registry, TaskRepo},
-    domain::task::Task,
+    domain::task::TaskRepository,
     progress::ProgressBoard,
     registry::Registration,
 };
-use imaged_model::{AgentEvent, ServerEvent, agent::StreamQuery, error::Result};
+use imaged_model::{
+    AgentEvent, ServerEvent, Task,
+    agent::StreamQuery,
+    error::{AppError, Result},
+};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::AgentInfo;
@@ -21,85 +25,118 @@ use crate::AgentInfo;
 #[injectable::inject(host_repo: HostRepo, task_repo: TaskRepo, registry: Registry, liveness: Liveness, progress: Progress)]
 pub async fn start_stream(
     agent: AgentInfo,
-    Query(StreamQuery { disk_size_bytes }): Query<StreamQuery>,
+    Query(query): Query<StreamQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response> {
-    let host = host_repo
-        .upsert_host(agent.mac, disk_size_bytes, agent.ip)
-        .await?;
-    let host_id = host.id;
-    let registration = registry.register(host_id);
-    let pending = task_repo
-        .get_next(host_id)
-        .await?
-        .filter(|task| task.is_dispatchable_to(host_id));
-    let liveness = *liveness;
+    let disk = match (query.disk_size_bytes, query.disk_error) {
+        (Some(size), None) => Ok(size),
+        (None, Some(reason)) => Err(reason),
+        _ => {
+            return Err(AppError::InvalidArgument(
+                "report exactly one of disk_size_bytes and disk_error".into(),
+            ));
+        }
+    };
+    let host = host_repo.upsert_host(agent.mac, disk, agent.ip).await?;
+    let stream = HostStream {
+        host_id: host.id,
+        registration: registry.register(host.id),
+        current: current_task(&**task_repo, host.id).await?,
+        tasks: task_repo,
+        liveness: *liveness,
+    };
     let progress = progress.clone();
 
     Ok(upgrade.on_upgrade(move |socket| async move {
-        serve(socket, host_id, registration, pending, liveness, &progress).await;
+        let host_id = stream.host_id;
+        stream.serve(socket, &progress).await;
         progress.forget(host_id);
     }))
 }
 
-async fn serve(
-    mut socket: WebSocket,
+async fn current_task(tasks: &dyn TaskRepository, host_id: i64) -> Result<Option<Task>> {
+    Ok(tasks
+        .get_next(host_id)
+        .await?
+        .filter(|task| task.is_dispatchable_to(host_id))
+        .map(|task| Task::new(task.id, task.task_type.into(), task.image_id)))
+}
+
+struct HostStream {
     host_id: i64,
-    mut registration: Registration<ServerEvent>,
-    pending: Option<Task>,
+    registration: Registration,
+    current: Option<Task>,
+    tasks: TaskRepo,
     liveness: AgentLiveness,
-    progress: &ProgressBoard,
-) {
-    if let Some(task) = pending {
-        let task = imaged_model::Task::new(task.id, task.task_type.into(), task.image_id);
-        if send(&mut socket, &ServerEvent::from(task)).await.is_err() {
+}
+
+impl HostStream {
+    async fn serve(mut self, mut socket: WebSocket, progress: &ProgressBoard) {
+        if send(&mut socket, self.current).await.is_err() {
             return;
         }
-    }
 
-    let mut last_seen = Instant::now();
-    let mut ping = tokio::time::interval(liveness.ping_interval);
-    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let host_id = self.host_id;
+        let mut last_seen = Instant::now();
+        let mut ping = tokio::time::interval(self.liveness.ping_interval);
+        ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    loop {
-        tokio::select! {
-            event = registration.receiver.recv() => {
-                let Some(event) = event else { break };
-                if send(&mut socket, &event).await.is_err() {
-                    break;
-                }
-            }
-            frame = socket.recv() => match frame {
-                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
-                Some(Ok(message)) => {
-                    last_seen = Instant::now();
-                    if let Message::Text(text) = message {
-                        receive(text.as_str(), host_id, progress);
+        loop {
+            let asked = tokio::select! {
+                biased;
+                frame = socket.recv() => match frame {
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                    Some(Ok(message)) => {
+                        last_seen = Instant::now();
+                        let Message::Text(text) = message else { continue };
+                        match serde_json::from_str(text.as_str()) {
+                            Ok(AgentEvent::Idle) => true,
+                            Ok(AgentEvent::Progress(report)) => {
+                                progress.report(host_id, report);
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::warn!(host_id, err = %e, "ignoring an undecodable agent event");
+                                continue;
+                            }
+                        }
                     }
+                },
+                dispatch = self.registration.receiver.recv() => match dispatch {
+                    Some(()) => false,
+                    None => break,
+                },
+                _ = ping.tick() => {
+                    if last_seen.elapsed() > self.liveness.timeout {
+                        tracing::info!(host_id, "agent stream liveness timeout; closing");
+                        break;
+                    }
+                    if socket.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                    continue;
                 }
-            },
-            _ = ping.tick() => {
-                if last_seen.elapsed() > liveness.timeout {
-                    tracing::info!(host_id, "agent stream liveness timeout; closing");
+            };
+            let current = match current_task(&**self.tasks, host_id).await {
+                Ok(current) => current,
+                Err(e) => {
+                    tracing::warn!(host_id, err = %e, "could not look up the host's current task; closing");
                     break;
                 }
-                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
-                    break;
-                }
+            };
+            if (asked || current != self.current) && send(&mut socket, current).await.is_err() {
+                break;
             }
+            self.current = current;
         }
     }
 }
 
-fn receive(text: &str, host_id: i64, progress: &ProgressBoard) {
-    match serde_json::from_str(text) {
-        Ok(AgentEvent::Progress(report)) => progress.report(host_id, report),
-        Err(e) => tracing::warn!(host_id, err = %e, "ignoring an undecodable agent event"),
-    }
-}
-
-async fn send(socket: &mut WebSocket, event: &ServerEvent) -> std::result::Result<(), axum::Error> {
-    let json = serde_json::to_string(event).map_err(axum::Error::new)?;
+async fn send(
+    socket: &mut WebSocket,
+    current: Option<Task>,
+) -> std::result::Result<(), axum::Error> {
+    let json = serde_json::to_string(&ServerEvent::Current(current)).map_err(axum::Error::new)?;
     socket.send(Message::text(json)).await
 }
 

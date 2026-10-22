@@ -8,7 +8,7 @@ export IMAGED_BOOT_ASSETS
 TARGET_DIR=$(cd "$REPO_DIR" && realpath -m "${CARGO_TARGET_DIR:-target}")
 IMAGED_SERVER=$TARGET_DIR/x86_64-unknown-linux-gnu/debug/imaged-server
 DISKO=github:nix-community/disko/725ea35e410ad83be4931d1bff7e090eacaf3563
-read -ra CASES <<<"${E2E_NIXOS_CASES:-sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi disko:uefi}"
+read -ra CASES <<<"${E2E_NIXOS_CASES:-sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi disko:uefi disko-grub:bios}"
 DISK_SIZE=8G
 MIN_ROOT_BYTES=$((6 * 1024 * 1024 * 1024))
 AGE_KEY=$'# created: 2026-10-13\n# public key: age1e2e\nAGE-SECRET-KEY-1E2EE2EE2E\n'
@@ -74,6 +74,7 @@ public_url = "$IMAGED_URL"
 
 [listen]
 machine = "$SERVER_IP:8080"
+dashboard = "machine"
 tftp = "$SERVER_IP:69"
 
 [script_variables]
@@ -173,10 +174,10 @@ verify_case() {
     local efi
     efi=$(sed -n 's/^efi //p' <<<"$lines")
     [[ $efi == $([[ $FIRMWARE == uefi ]] && echo yes || echo no) ]] || fail "$name booted with efi=$efi on $FIRMWARE firmware"
-    if [[ $config == disko ]]; then
+    if [[ $config == disko* ]]; then
         grep -qE '^swap [0-9a-f-]{36} 1$' <<<"$lines" || fail "$name: the disko swap partition is not active: $(grep '^swap' <<<"$lines")"
     fi
-    log "$name ($config, $FIRMWARE): secrets written with their owners and modes, root grew to $root bytes$([[ $config == disko ]] && echo ", swap active")"
+    log "$name ($config, $FIRMWARE): secrets written with their owners and modes, root grew to $root bytes$([[ $config == disko* ]] && echo ", swap active")"
 }
 
 import_all_images() {

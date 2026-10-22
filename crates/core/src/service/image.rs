@@ -49,23 +49,14 @@ impl ImageService {
         Ok(())
     }
 
-    pub async fn save_partition_table(&self, image_id: i64, data: &[u8]) -> Result<String> {
-        let relative_dir = format!("img-{image_id}");
-        let dir = format!("{}/{}", self.images_path, relative_dir);
-        let relative_filepath = format!("{relative_dir}/{PARTITION_TABLE_FILE}");
-        let path = format!("{}/{}", self.images_path, relative_filepath);
-
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            tracing::error!("failed to create image dir: {e}");
-            AppError::Internal(e.to_string())
-        })?;
-
-        tokio::fs::write(&path, data).await.map_err(|e| {
-            tracing::error!("failed to write parttable: {e}");
-            AppError::Internal(e.to_string())
-        })?;
-
-        Ok(relative_filepath)
+    pub async fn save_partition_table(&self, image_id: i64, data: &[u8]) -> Result {
+        let table = Bytes::copy_from_slice(data);
+        self.store(
+            image_id,
+            PARTITION_TABLE_FILE,
+            futures::stream::iter([Ok(table)]),
+        )
+        .await
     }
 
     pub fn image_dir(&self, image_id: i64) -> String {
@@ -105,49 +96,76 @@ impl ImageService {
         &self,
         image_id: i64,
         partition_number: i64,
-        mut data_stream: S,
+        data_stream: S,
     ) -> Result
     where
         S: Stream<Item = std::result::Result<Bytes, AppError>> + Unpin + Send,
     {
-        let dir = format!("{}/img-{}", self.images_path, image_id);
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| {
-            tracing::error!("failed to create image dir {dir}: {e}");
-            AppError::Internal(e.to_string())
-        })?;
+        self.store(image_id, &partition_file(partition_number), data_stream)
+            .await
+    }
 
-        let file_path = self.get_partition_path(image_id, partition_number);
+    pub async fn commit_import(&self, image_id: i64) -> Result {
+        let import_dir = self.import_dir(image_id);
+        let mut entries = tokio::fs::read_dir(&import_dir)
+            .await
+            .map_err(|e| storage_error(&import_dir, e))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| storage_error(&import_dir, e))?
+        {
+            let path = entry.path();
+            let synced = async {
+                tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .await?
+                    .sync_all()
+                    .await
+            };
+            synced
+                .await
+                .map_err(|e| storage_error(&path.display().to_string(), e))?;
+        }
+        sync_dir(&import_dir).await?;
+        let image_dir = self.image_dir(image_id);
+        tokio::fs::rename(&import_dir, &image_dir)
+            .await
+            .map_err(|e| storage_error(&image_dir, e))?;
+        sync_dir(&self.images_path).await
+    }
+
+    async fn store<S>(&self, image_id: i64, file_name: &str, mut data_stream: S) -> Result
+    where
+        S: Stream<Item = std::result::Result<Bytes, AppError>> + Unpin + Send,
+    {
+        let dir = self.image_dir(image_id);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| storage_error(&dir, e))?;
+        sync_dir(&self.images_path).await?;
+
+        let file_path = format!("{dir}/{file_name}");
         let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = format!(
-            "{}/.{}.tmp.{}.{}",
-            dir,
-            partition_file(partition_number),
-            std::process::id(),
-            seq
-        );
+        let tmp_path = format!("{dir}/.{file_name}.tmp.{}.{seq}", std::process::id());
 
         let write_result = async {
-            let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
-                tracing::error!("failed to create temp partition file {tmp_path}: {e}");
-                AppError::Internal(e.to_string())
-            })?;
+            let mut file = tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(|e| storage_error(&tmp_path, e))?;
             while let Some(chunk) = data_stream.next().await {
                 let chunk = chunk.map_err(|e| {
-                    tracing::error!(
-                        "error reading stream for image {image_id} partition {partition_number}: {e}"
-                    );
+                    tracing::error!("error reading stream for {file_path}: {e}");
                     AppError::InvalidArgument(format!("error reading stream: {e}"))
                 })?;
-                file.write_all(&chunk).await.map_err(|e| {
-                    tracing::error!("failed to write chunk to {tmp_path}: {e}");
-                    AppError::Internal("failed to write stream chunk to file".to_string())
-                })?;
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| storage_error(&tmp_path, e))?;
             }
-            file.flush().await.map_err(|e| {
-                tracing::error!("failed to flush {tmp_path}: {e}");
-                AppError::Internal(e.to_string())
-            })?;
-            Ok::<(), AppError>(())
+            file.sync_all()
+                .await
+                .map_err(|e| storage_error(&tmp_path, e))
         }
         .await;
 
@@ -157,12 +175,11 @@ impl ImageService {
         }
 
         if let Err(e) = tokio::fs::rename(&tmp_path, &file_path).await {
-            tracing::error!("failed to rename {tmp_path} to {file_path}: {e}");
             let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(AppError::Internal(e.to_string()));
+            return Err(storage_error(&file_path, e));
         }
 
-        Ok(())
+        sync_dir(&dir).await
     }
 
     pub async fn read_partition_data(
@@ -188,6 +205,22 @@ async fn remove_dir(dir: impl AsRef<Path>) -> Result<()> {
         }
         _ => Ok(()),
     }
+}
+
+#[cfg(unix)]
+async fn sync_dir(dir: &str) -> Result {
+    let synced = async { tokio::fs::File::open(dir).await?.sync_all().await };
+    synced.await.map_err(|e| storage_error(dir, e))
+}
+
+#[cfg(not(unix))]
+async fn sync_dir(_dir: &str) -> Result {
+    Ok(())
+}
+
+fn storage_error(path: &str, error: std::io::Error) -> AppError {
+    tracing::error!("failed to store {path}: {error}");
+    AppError::Internal(format!("failed to store {path}: {error}"))
 }
 
 #[cfg(test)]
@@ -217,8 +250,7 @@ mod tests {
     #[tokio::test]
     async fn save_partition_table_creates_the_image_dir_when_absent_and_round_trips() {
         let (svc, _d) = service();
-        let rel = svc.save_partition_table(3, b"hello table").await.unwrap();
-        assert_eq!(rel, "img-3/parttable.bin");
+        svc.save_partition_table(3, b"hello table").await.unwrap();
         let back = svc.read_partition_table(3).await.unwrap();
         assert_eq!(back, b"hello table");
     }

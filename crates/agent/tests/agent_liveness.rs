@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{StubConfig, StubServer, agent_server, stub_server};
-use imaged_agent::connection::{self, Backoff};
+use imaged_agent::connection::{self, Timing};
 use imaged_agent::task::ClientState;
 
 const MAC: &str = "aa:bb:cc:dd:ee:01";
 
-const TEST_BACKOFF: Backoff = Backoff {
-    start: Duration::from_millis(5),
-    cap: Duration::from_millis(20),
+const TEST_TIMING: Timing = Timing {
+    retry_start: Duration::from_millis(5),
+    retry_cap: Duration::from_millis(20),
+    server_silence: Duration::from_secs(60),
 };
 
 async fn wait_for(mut ready: impl FnMut() -> bool, within: Duration) -> bool {
@@ -62,7 +63,7 @@ async fn the_agent_answers_server_pings_while_it_waits_for_events() {
     };
 
     tokio::select! {
-        _ = connection::run(agent, state.clone(), 1024, TEST_BACKOFF) => {
+        _ = connection::run(agent, state.clone(), Ok(1024), TEST_TIMING) => {
             unreachable!("the agent must never exit while the connection is healthy")
         }
         _ = driver => {}

@@ -40,21 +40,27 @@ done
 
 hwclock -s 2>/dev/null
 
-lsblk -rno NAME,FSTYPE | while read -r name fstype; do
-    case "$fstype" in
-        ext2|ext3|ext4)
-            echo "Checking /dev/$name"
-            E2FSCK_CONFIG=/etc/e2fsck.conf e2fsck -f -p "/dev/$name"
-            ;;
-        vfat)
-            echo "Checking /dev/$name"
-            fsck.fat -a "/dev/$name"
-            ;;
-    esac
-done
-
 echo "Running dhcp to get an ip"
 /bin/ipconfig -d all
+
+cat > /etc/udhcpc.script <<'EOF'
+#!/bin/sh
+case "$1" in
+    bound|renew) ;;
+    *) exit 0 ;;
+esac
+ip -4 addr show dev "$interface" | grep -q "inet $ip/" && exit 0
+ip -4 addr flush dev "$interface"
+ip addr add "$ip/$mask" dev "$interface"
+for gateway in $router; do
+    ip route add default via "$gateway" dev "$interface" && break
+done
+EOF
+chmod +x /etc/udhcpc.script
+for iface in $(ip -o -4 addr show | awk '$2 != "lo" { print $2 }' | sort -u); do
+    address=$(ip -o -4 addr show dev "$iface" | awk '{ split($4, a, "/"); print a[1]; exit }')
+    udhcpc -f -C -i "$iface" -r "$address" -s /etc/udhcpc.script >/dev/null 2>&1 &
+done
 
 for arg in $(cat /proc/cmdline); do
     case "$arg" in

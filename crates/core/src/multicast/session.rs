@@ -48,7 +48,7 @@ impl Worker {
         })?;
         let participants = self.running(task.id).await?;
         for &host in &participants {
-            self.registry.send_task(host, task);
+            self.registry.dispatch(host);
         }
 
         let files = self.files(image_id).await?;
@@ -414,7 +414,7 @@ mod tests {
             id,
             format!("lab-{id:02}"),
             format!("mac-{id}"),
-            0,
+            Ok(0),
             Some(ip.into()),
         )
     }

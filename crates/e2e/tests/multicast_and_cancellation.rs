@@ -43,6 +43,10 @@ async fn reboot_streams_a_reboot_event_and_completes() {
     let mut stream = harness::connect_agent_stream(s, &mac, DISK)
         .await
         .expect("connect stream");
+    assert_eq!(
+        stream.next_event(Duration::from_secs(5)).await,
+        Some(json!({ "Current": null }))
+    );
 
     let resp = s
         .ui_post("/api/ui/hosts/reboot", &json!({ "host_ids": [host.id] }))
@@ -53,9 +57,9 @@ async fn reboot_streams_a_reboot_event_and_completes() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("reboot event");
-    assert_eq!(event["Task"]["task_type"], "Reboot");
-    assert!(event["Task"]["image_id"].is_null());
-    let task_id = event["Task"]["id"].as_i64().expect("task id");
+    assert_eq!(event["Current"]["task_type"], "Reboot");
+    assert!(event["Current"]["image_id"].is_null());
+    let task_id = event["Current"]["id"].as_i64().expect("task id");
 
     let resp = s.agent_post_empty(&path::finished(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -107,7 +111,13 @@ async fn multicast_creates_one_task_and_hands_it_to_every_connected_agent() {
         .await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let image_id = empty_image(s).await;
+    let image_id = seed::image_with_data(
+        s,
+        &harness::unique_name("cast-img"),
+        b"table",
+        &[(1, "ext4", &[0xAB; 128])],
+    )
+    .await;
 
     let mut s1 = harness::connect_agent_stream(s, &mac1, DISK)
         .await
@@ -115,6 +125,12 @@ async fn multicast_creates_one_task_and_hands_it_to_every_connected_agent() {
     let mut s2 = harness::connect_agent_stream(s, &mac2, DISK)
         .await
         .expect("stream h2");
+    for stream in [&mut s1, &mut s2] {
+        assert_eq!(
+            stream.next_event(Duration::from_secs(5)).await,
+            Some(json!({ "Current": null }))
+        );
+    }
 
     let resp = s
         .ui_post(
@@ -122,27 +138,35 @@ async fn multicast_creates_one_task_and_hands_it_to_every_connected_agent() {
             &json!({ "req": { "host_ids": [h1.id, h2.id, h3.id], "image_id": image_id } }),
         )
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = harness::expect_status(resp, StatusCode::OK).await;
+    let created: serde_json::Value = resp.json().await.expect("multicast task json");
+    let task_id = created["id"].as_i64().expect("task id");
 
     let e1 = s1
         .next_event(Duration::from_secs(5))
         .await
         .expect("h1 event");
-    assert_eq!(e1["Task"]["task_type"], "Multicast");
-    assert_eq!(e1["Task"]["image_id"], image_id);
+    assert_eq!(e1["Current"]["id"], task_id);
+    assert_eq!(e1["Current"]["task_type"], "Multicast");
+    assert_eq!(e1["Current"]["image_id"], image_id);
     let e2 = s2
         .next_event(Duration::from_secs(5))
         .await
         .expect("h2 event");
-    assert_eq!(e2["Task"]["id"], e1["Task"]["id"]);
+    assert_eq!(e2["Current"]["id"], task_id);
 
-    let stored = get_task(s, e1["Task"]["id"].as_i64().expect("task id")).await;
+    let stored = get_task(s, task_id).await;
     assert_eq!(stored.task_type, TaskType::Multicast);
     let mut covered: Vec<i64> = stored.hosts.iter().map(|h| h.host_id).collect();
     covered.sort_unstable();
     let mut expected = vec![h1.id, h2.id, h3.id];
     expected.sort_unstable();
     assert_eq!(covered, expected);
+
+    let resp = s
+        .ui_post("/api/ui/tasks/cancel", &json!({ "id": task_id }))
+        .await;
+    harness::expect_status(resp, StatusCode::OK).await;
 }
 
 #[tokio::test]
@@ -179,9 +203,10 @@ async fn cancelling_propagates_to_running_hosts_but_not_to_a_done_host() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("h1 initial running task");
-    assert_eq!(init["Task"]["id"], task.id);
-    assert!(
-        s2.next_event(Duration::from_millis(300)).await.is_none(),
+    assert_eq!(init["Current"]["id"], task.id);
+    assert_eq!(
+        s2.next_event(Duration::from_secs(5)).await,
+        Some(json!({ "Current": null })),
         "a done host has no next task to stream"
     );
 
@@ -194,10 +219,14 @@ async fn cancelling_propagates_to_running_hosts_but_not_to_a_done_host() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("h1 cancel event");
-    assert_eq!(ev["Cancel"], task.id);
+    assert_eq!(
+        ev,
+        json!({ "Current": null }),
+        "the cancelled task is withdrawn"
+    );
     assert!(
         s2.next_event(Duration::from_millis(300)).await.is_none(),
-        "a done host is not sent a cancel event"
+        "a done host is sent nothing"
     );
 
     let after = get_task(s, task.id).await;
@@ -348,7 +377,7 @@ async fn a_retried_task_reaches_a_host_only_when_it_is_that_hosts_next_task() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("older task streamed first");
-    assert_eq!(init["Task"]["id"], older.id);
+    assert_eq!(init["Current"]["id"], older.id);
 
     let resp = s
         .ui_post("/api/ui/tasks/retry", &json!({ "id": newer.id }))
@@ -424,24 +453,20 @@ async fn deleting_a_host_with_only_terminal_tasks_cascades_its_task_rows() {
 }
 
 #[tokio::test]
-async fn deleting_an_image_cancels_its_active_task() {
+async fn an_image_with_an_active_deploy_cannot_be_deleted() {
     let s = harness::server().await;
 
     let mac = harness::unique_mac();
     let host = seed::host(s, &mac, DISK).await;
     let image_id = empty_image(s).await;
-    let task = s
-        .container
-        .task_repo
-        .create(TaskType::Deploy, vec![host.id], Some(image_id))
-        .await
-        .unwrap();
+    let task_id = seed::deploy_task(s, host.id, image_id).await;
 
     let resp = s
         .ui_post("/api/ui/images/delete", &json!({ "id": image_id }))
         .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert!(get_task(s, task.id).await.aggregate_state().is_cancelled());
+    harness::expect_status(resp, StatusCode::PRECONDITION_FAILED).await;
+
+    assert!(get_task(s, task_id).await.aggregate_state().is_pending());
     assert!(
         s.container
             .image_repo
@@ -449,50 +474,7 @@ async fn deleting_an_image_cancels_its_active_task() {
             .await
             .unwrap()
             .iter()
-            .all(|i| i.id != image_id),
-        "deleted image should not be listed"
+            .any(|i| i.id == image_id),
+        "an image in use must stay listed"
     );
-}
-
-#[tokio::test]
-async fn deleting_an_image_should_cancel_its_referencing_multicast_task() {
-    let s = harness::server().await;
-
-    let mac = harness::unique_mac();
-    let host = seed::host(s, &mac, DISK).await;
-    let image_id = seed::image_with_data(
-        s,
-        &harness::unique_name("cast-img"),
-        b"table",
-        &[(1, "ext4", &[0xCD; 128])],
-    )
-    .await;
-
-    let mut stream = harness::connect_agent_stream(s, &mac, DISK)
-        .await
-        .expect("stream");
-
-    let task = s
-        .container
-        .task_repo
-        .create(TaskType::Multicast, vec![host.id], Some(image_id))
-        .await
-        .unwrap();
-
-    let resp = s
-        .ui_post("/api/ui/images/delete", &json!({ "id": image_id }))
-        .await;
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert!(get_task(s, task.id).await.aggregate_state().is_cancelled());
-    let ev = loop {
-        let ev = stream
-            .next_event(Duration::from_secs(5))
-            .await
-            .expect("cancel event for the referenced task");
-        if !ev["Cancel"].is_null() {
-            break ev;
-        }
-    };
-    assert_eq!(ev["Cancel"], task.id);
 }

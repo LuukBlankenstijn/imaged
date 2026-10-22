@@ -1,11 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use imaged_model::agent::{PostInstall, PostInstallScript};
 use imaged_model::script_env::{AGENT_VARIABLES, INPUT_PREFIX, PROXY_VARIABLES};
@@ -21,6 +22,8 @@ use crate::sys::mount::MountedSystem;
 const SCRIPT_PATH: &str = "/tmp/imaged-script";
 const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
+const LIVE_OUTPUT_BYTES: usize = 1024 * 1024;
+const KEPT_TAIL_BYTES: usize = 256 * 1024;
 
 pub async fn run(agent: &Agent, task_id: i64, partitions: &[PartitionTarget]) -> Result<()> {
     let plan = agent.server.post_install(task_id).await?;
@@ -169,13 +172,15 @@ async fn execute(
     drop(command);
 
     let (exited, on_exit) = tokio::sync::oneshot::channel::<()>();
-    let lines = output_lines(BufReader::new(receiver), script.name.clone()).take_until(async {
-        let _ = on_exit.await;
-        tokio::time::sleep(OUTPUT_GRACE).await;
-    });
+    let lines = bounded(
+        output_lines(BufReader::new(receiver), script.name.clone()).take_until(async {
+            let _ = on_exit.await;
+            tokio::time::sleep(OUTPUT_GRACE).await;
+        }),
+    );
     let upload = agent
         .server
-        .upload_script_output(task_id, script.position, lines);
+        .upload_script_output(task_id, script.position, &script.name, lines);
     let wait = async {
         let status = child.wait().await;
         let _ = exited.send(());
@@ -213,6 +218,60 @@ fn output_lines(
                 }
             }
         }
+    })
+}
+
+struct BoundedOutput<S> {
+    output: Pin<Box<S>>,
+    live: bool,
+    sent: usize,
+    tail: VecDeque<Bytes>,
+    tail_bytes: usize,
+    omitted: usize,
+}
+
+fn bounded(
+    output: impl Stream<Item = Bytes> + Send + 'static,
+) -> impl Stream<Item = Bytes> + Send + 'static {
+    let state = BoundedOutput {
+        output: Box::pin(output),
+        live: true,
+        sent: 0,
+        tail: VecDeque::new(),
+        tail_bytes: 0,
+        omitted: 0,
+    };
+    futures::stream::unfold(Some(state), |state| async move {
+        let mut state = state?;
+        while let Some(chunk) = state.output.next().await {
+            state.live &= state.sent + chunk.len() <= LIVE_OUTPUT_BYTES;
+            if state.live {
+                state.sent += chunk.len();
+                return Some((chunk, Some(state)));
+            }
+            state.tail_bytes += chunk.len();
+            state.tail.push_back(chunk);
+            while state.tail_bytes > KEPT_TAIL_BYTES {
+                let dropped = state.tail.pop_front().expect("a non-empty tail");
+                state.tail_bytes -= dropped.len();
+                state.omitted += dropped.len();
+            }
+        }
+        if state.tail.is_empty() && state.omitted == 0 {
+            return None;
+        }
+        let mut rest = BytesMut::new();
+        if state.omitted > 0 {
+            let marker = format!(
+                "[… {} bytes of output omitted by the agent …]\n",
+                state.omitted
+            );
+            rest.extend_from_slice(marker.as_bytes());
+        }
+        for chunk in state.tail {
+            rest.extend_from_slice(&chunk);
+        }
+        Some((rest.freeze(), None))
     })
 }
 
@@ -307,5 +366,40 @@ mod tests {
             lines,
             [b"one\n".as_slice(), b"two\n", b"three"].map(Bytes::from_static)
         );
+    }
+
+    #[tokio::test]
+    async fn output_past_the_live_limit_is_uploaded_only_as_its_tail_after_a_marker() {
+        let line = |n: usize| Bytes::from(format!("{n:0>1023}\n"));
+        let total_lines = 2 * LIVE_OUTPUT_BYTES / 1024;
+        let output = futures::stream::iter((0..total_lines).map(line));
+
+        let uploaded: Vec<Bytes> = bounded(output).collect().await;
+
+        let live_lines = LIVE_OUTPUT_BYTES / 1024;
+        let tail_lines = KEPT_TAIL_BYTES / 1024;
+        assert_eq!(uploaded.len(), live_lines + 1);
+        assert_eq!(
+            uploaded[..live_lines],
+            (0..live_lines).map(line).collect::<Vec<_>>()
+        );
+        let omitted = (total_lines - live_lines - tail_lines) * 1024;
+        let mut expected_tail =
+            format!("[… {omitted} bytes of output omitted by the agent …]\n").into_bytes();
+        for n in total_lines - tail_lines..total_lines {
+            expected_tail.extend_from_slice(&line(n));
+        }
+        assert_eq!(uploaded[live_lines], expected_tail);
+    }
+
+    #[tokio::test]
+    async fn output_within_the_live_limit_is_uploaded_unchanged() {
+        let output = [b"one\n".as_slice(), b"two\n"].map(Bytes::from_static);
+
+        let uploaded: Vec<Bytes> = bounded(futures::stream::iter(output.clone()))
+            .collect()
+            .await;
+
+        assert_eq!(uploaded, output);
     }
 }

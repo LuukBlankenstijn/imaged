@@ -24,6 +24,7 @@ pub struct PartitionSource {
 pub struct Contents {
     pub name: String,
     pub captured_at: Option<DateTime<Utc>>,
+    pub sector_size: u32,
     pub partition_table: PathBuf,
     pub partitions: Vec<PartitionSource>,
     pub root_partition: Option<i64>,
@@ -73,6 +74,7 @@ where
         format: FORMAT,
         name: contents.name,
         captured_at: contents.captured_at,
+        sector_size: contents.sector_size,
         partition_table: ArchivedFile {
             file: PARTITION_TABLE_FILE.to_string(),
             sha256: partition_table.sha256.clone(),

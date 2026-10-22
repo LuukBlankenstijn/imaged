@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition\n               FROM images WHERE id = ? AND deleted_at IS NULL",
+  "query": "SELECT\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition,\n                 sector_size\n               FROM images WHERE id = ? AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "name": "root_partition",
         "ordinal": 5,
         "type_info": "Integer"
+      },
+      {
+        "name": "sector_size",
+        "ordinal": 6,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -43,8 +48,9 @@
       true,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "1e4df667e95f5c221fab7f87facb77f69b71d273c9f4f629e09e087df7bc60f4"
+  "hash": "f0cde00dfde6fb2a5c83d48081dfc93b46e3b9f792a05c4bc61515db98f8d7b2"
 }

@@ -111,6 +111,7 @@ public_url = "http://$SERVER_IP:8080"
 [listen]
 machine = "$SERVER_IP:8080"
 tftp = "$SERVER_IP:69"
+dashboard = "machine"
 EOF
     start_background imaged-server "$OUT_DIR/imaged-server.log" \
         "$IMAGED_SERVER" --config "$OUT_DIR/imaged.toml"
@@ -153,13 +154,13 @@ capture_source_disk() {
     log "capture VM registered as host $host_id: $(api_get /api/ui/hosts | jq -c --argjson id "$host_id" '.[] | select(.id == $id)')"
 
     CAPTURED_IMAGE_ID=$(api_post /api/ui/images/create \
-        "$(jq -nc --argjson host "$host_id" '{req: {name: "e2e-captured", host_id: $host}}')" | jq -r .id)
+        "$(jq -nc --argjson host "$host_id" '{req: {name: "e2e-captured", host_id: $host}}')" | jq -r .image.id)
     log "created image $CAPTURED_IMAGE_ID, capture task dispatched"
     wait_until 600 "image $CAPTURED_IMAGE_ID to become ready" image_ready "$CAPTURED_IMAGE_ID"
     log "image $CAPTURED_IMAGE_ID ready: $(image_field "$CAPTURED_IMAGE_ID" '[.partitions[] | "p\(.partition_number) \(.fstype) \(.size_bytes)B"] | join(", ")')"
 
     local task_id
-    task_id=$(api_get /api/ui/tasks | jq -r --argjson image "$CAPTURED_IMAGE_ID" '.[] | select(.image_id == $image and .type == "capture") | .id')
+    task_id=$(api_get "/api/ui/tasks?type=capture&limit=200" | jq -r --argjson image "$CAPTURED_IMAGE_ID" '.tasks[] | select(.image_id == $image and .type == "capture") | .id')
     wait_until 60 "capture task $task_id to finish" task_done "$task_id"
     stop_process capture
     assert_root_partition "$CAPTURED_IMAGE_ID" captured
