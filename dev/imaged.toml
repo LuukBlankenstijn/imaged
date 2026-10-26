@@ -3,3 +3,9 @@ public_url = "http://192.168.100.1:8080"
 
 [listen]
 dashboard = "machine"
+
+[script_variables]
+AGE_KEY = """
+# imaged hardware test key, not a real secret
+AGE-SECRET-KEY-1HARDWARETESTHARDWARETEST
+"""
