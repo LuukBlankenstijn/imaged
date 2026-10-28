@@ -1,5 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
+use anyhow::{Result, bail};
+
 use crate::sys::disk::BlockDevice;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,37 +11,58 @@ pub struct PlannedMount {
     pub fstype: String,
 }
 
-pub fn plan_mounts(fstab: &str, disk: &BlockDevice) -> Vec<PlannedMount> {
-    let mut mounts: Vec<PlannedMount> = fstab
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Matching {
+    First,
+    Unique,
+}
+
+pub fn plan_mounts(
+    fstab: &str,
+    disk: &BlockDevice,
+    matching: Matching,
+) -> Result<Vec<PlannedMount>> {
+    let mut mounts = fstab
         .lines()
-        .filter_map(|line| {
-            let line = line.split('#').next().unwrap_or_default();
-            let mut fields = line
-                .split_whitespace()
-                .map(|field| String::from_utf8_lossy(&unescape(field.as_bytes())).into_owned());
-            let (spec, mountpoint, fstype) = (fields.next()?, fields.next()?, fields.next()?);
-            if fstype == "swap" {
-                return None;
-            }
-            let target = relative_target(&mountpoint)?;
-            let Some(partition) = find_partition(disk, &spec) else {
-                tracing::info!(%spec, %mountpoint, "fstab entry is not on the target disk, not mounting it");
-                return None;
-            };
-            let fstype = match (&partition.fstype, fstype.as_str()) {
-                (Some(detected), _) => detected.clone(),
-                (None, "auto") => return None,
-                (None, _) => fstype,
-            };
-            Some(PlannedMount {
-                device: partition.get_device(),
-                target,
-                fstype,
-            })
-        })
-        .collect();
+        .filter_map(|line| plan_mount(line, disk, matching).transpose())
+        .collect::<Result<Vec<_>>>()?;
     mounts.sort_by_key(|mount| mount.target.components().count());
-    mounts
+    Ok(mounts)
+}
+
+fn plan_mount(line: &str, disk: &BlockDevice, matching: Matching) -> Result<Option<PlannedMount>> {
+    let line = line.split('#').next().unwrap_or_default();
+    let mut fields = line
+        .split_whitespace()
+        .map(|field| String::from_utf8_lossy(&unescape(field.as_bytes())).into_owned());
+    let (Some(spec), Some(mountpoint), Some(fstype)) =
+        (fields.next(), fields.next(), fields.next())
+    else {
+        return Ok(None);
+    };
+    if fstype == "swap" {
+        return Ok(None);
+    }
+    let Some(target) = relative_target(&mountpoint) else {
+        if mountpoint == "/" {
+            find_partition(disk, &spec, matching)?;
+        }
+        return Ok(None);
+    };
+    let Some(partition) = find_partition(disk, &spec, matching)? else {
+        tracing::info!(%spec, %mountpoint, "fstab entry is not on the target disk, not mounting it");
+        return Ok(None);
+    };
+    let fstype = match (&partition.fstype, fstype.as_str()) {
+        (Some(detected), _) => detected.clone(),
+        (None, "auto") => return Ok(None),
+        (None, _) => fstype,
+    };
+    Ok(Some(PlannedMount {
+        device: partition.get_device(),
+        target,
+        fstype,
+    }))
 }
 
 fn relative_target(mountpoint: &str) -> Option<PathBuf> {
@@ -57,26 +80,42 @@ fn relative_target(mountpoint: &str) -> Option<PathBuf> {
     (!target.as_os_str().is_empty()).then_some(target)
 }
 
-fn find_partition<'a>(disk: &'a BlockDevice, spec: &str) -> Option<&'a BlockDevice> {
-    let (key, value) = match spec.split_once('=') {
-        Some((key, value)) => (key.to_ascii_lowercase(), value.trim_matches('"')),
-        None => {
-            let path = spec.strip_prefix("/dev/")?;
-            let (key, value) = match path.strip_prefix("disk/by-") {
-                Some(link) => link.split_once('/')?,
-                None => ("name", path),
-            };
-            (key.to_string(), value)
-        }
+fn device_key(spec: &str) -> Option<(String, &str)> {
+    if let Some((key, value)) = spec.split_once('=') {
+        return Some((key.to_ascii_lowercase(), value.trim_matches('"')));
+    }
+    let path = spec.strip_prefix("/dev/")?;
+    let (key, value) = match path.strip_prefix("disk/by-") {
+        Some(link) => link.split_once('/')?,
+        None => ("name", path),
     };
-    disk.children.iter().find(|partition| match key.as_str() {
+    Some((key.to_string(), value))
+}
+
+fn find_partition<'a>(
+    disk: &'a BlockDevice,
+    spec: &str,
+    matching: Matching,
+) -> Result<Option<&'a BlockDevice>> {
+    let Some((key, value)) = device_key(spec) else {
+        return Ok(None);
+    };
+    let mut found = disk.children.iter().filter(|partition| match key.as_str() {
         "uuid" => same_id(&partition.uuid, value),
         "partuuid" => same_id(&partition.partuuid, value),
         "label" => partition.label.as_deref() == Some(value),
         "partlabel" => partition.partlabel.as_deref() == Some(value),
         "name" => partition.name == value,
         _ => false,
-    })
+    });
+    let first = found.next();
+    if matching == Matching::Unique && first.is_some() && found.next().is_some() {
+        bail!(
+            "the image's /etc/fstab names {spec}, which matches more than one partition on {}",
+            disk.name
+        );
+    }
+    Ok(first)
 }
 
 fn same_id(id: &Option<String>, value: &str) -> bool {
@@ -139,6 +178,10 @@ mod tests {
         }
     }
 
+    fn plan(fstab: &str, disk: &BlockDevice) -> Vec<PlannedMount> {
+        plan_mounts(fstab, disk, Matching::First).expect("first-match planning never fails")
+    }
+
     #[test]
     fn mounts_below_the_root_are_planned_parents_first_and_the_rest_is_left_out() {
         let fstab = "\
@@ -154,7 +197,7 @@ server:/export                            /mnt/nfs        nfs     defaults      
 ";
 
         assert_eq!(
-            plan_mounts(fstab, &disk()),
+            plan(fstab, &disk()),
             vec![
                 planned("/dev/nvme0n1p2", "boot", "ext4"),
                 planned("/dev/nvme0n1p3", "srv", "ext4"),
@@ -169,10 +212,10 @@ server:/export                            /mnt/nfs        nfs     defaults      
         disk.children[2].fstype = None;
 
         assert_eq!(
-            plan_mounts("PARTLABEL=srv /srv xfs defaults", &disk),
+            plan("PARTLABEL=srv /srv xfs defaults", &disk),
             vec![planned("/dev/nvme0n1p3", "srv", "xfs")]
         );
-        assert!(plan_mounts("PARTLABEL=srv /srv auto defaults", &disk).is_empty());
+        assert!(plan("PARTLABEL=srv /srv auto defaults", &disk).is_empty());
     }
 
     #[test]
@@ -189,7 +232,7 @@ server:/export                            /mnt/nfs        nfs     defaults      
             "/dev/disk/by-partlabel/srv",
         ] {
             assert_eq!(
-                plan_mounts(&format!("{spec} /srv ext4 defaults 0 2"), &disk()),
+                plan(&format!("{spec} /srv ext4 defaults 0 2"), &disk()),
                 vec![planned("/dev/nvme0n1p3", "srv", "ext4")],
                 "{spec}"
             );
@@ -199,7 +242,7 @@ server:/export                            /mnt/nfs        nfs     defaults      
     #[test]
     fn escaped_mount_points_are_decoded() {
         assert_eq!(
-            plan_mounts("PARTLABEL=srv /srv/my\\040files ext4 defaults", &disk()),
+            plan("PARTLABEL=srv /srv/my\\040files ext4 defaults", &disk()),
             vec![planned("/dev/nvme0n1p3", "srv/my files", "ext4")]
         );
     }
@@ -208,7 +251,7 @@ server:/export                            /mnt/nfs        nfs     defaults      
     fn mount_points_that_could_leave_the_root_are_refused() {
         for mountpoint in ["/srv/../../etc", "srv", "/srv/..", "/"] {
             assert!(
-                plan_mounts(&format!("PARTLABEL=srv {mountpoint} ext4"), &disk()).is_empty(),
+                plan(&format!("PARTLABEL=srv {mountpoint} ext4"), &disk()).is_empty(),
                 "{mountpoint}"
             );
         }
@@ -216,12 +259,44 @@ server:/export                            /mnt/nfs        nfs     defaults      
 
     #[test]
     fn truncated_and_commented_lines_are_ignored() {
-        assert!(
-            plan_mounts("PARTLABEL=srv /srv\n#PARTLABEL=srv /srv ext4\n\n", &disk()).is_empty()
-        );
+        assert!(plan("PARTLABEL=srv /srv\n#PARTLABEL=srv /srv ext4\n\n", &disk()).is_empty());
         assert_eq!(
-            plan_mounts("PARTLABEL=srv /srv ext4 # data", &disk()),
+            plan("PARTLABEL=srv /srv ext4 # data", &disk()),
             vec![planned("/dev/nvme0n1p3", "srv", "ext4")]
         );
+    }
+
+    #[test]
+    fn a_spec_matching_two_partitions_mounts_the_first_unless_matches_must_be_unique() {
+        let mut disk = disk();
+        disk.children[1].label = Some("EFI".to_string());
+        let fstab = "LABEL=EFI /boot vfat defaults\nPARTLABEL=srv /srv ext4 defaults\n";
+
+        assert_eq!(
+            plan(fstab, &disk),
+            vec![
+                planned("/dev/nvme0n1p1", "boot", "vfat"),
+                planned("/dev/nvme0n1p3", "srv", "ext4"),
+            ]
+        );
+        let refused = plan_mounts(fstab, &disk, Matching::Unique).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "the image's /etc/fstab names LABEL=EFI, which matches more than one partition on nvme0n1"
+        );
+        assert_eq!(
+            plan_mounts("PARTLABEL=srv /srv ext4 defaults", &disk, Matching::Unique).unwrap(),
+            vec![planned("/dev/nvme0n1p3", "srv", "ext4")]
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_root_entry_is_refused_when_matches_must_be_unique() {
+        let mut disk = disk();
+        disk.children[2].label = Some("root".to_string());
+        let fstab = "LABEL=root / ext4 defaults\n";
+
+        assert!(plan(fstab, &disk).is_empty());
+        assert!(plan_mounts(fstab, &disk, Matching::Unique).is_err());
     }
 }

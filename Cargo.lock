@@ -2584,6 +2584,7 @@ dependencies = [
  "imaged-model",
  "local-ip-address",
  "mac_address",
+ "parking_lot",
  "ratatui",
  "reqwest",
  "rustix",

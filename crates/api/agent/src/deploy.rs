@@ -1,6 +1,6 @@
 use axum::{Json, body::Body, extract::Path};
 use imaged_core::{
-    di::{HostRepo, ImageRepo, ImageSvc, TaskRepo},
+    di::{HostRepo, ImageRepo, ImageSvc},
     domain::task::{Task, TaskType},
 };
 use imaged_model::{
@@ -16,7 +16,10 @@ pub async fn download_partition_data(
     agent: AgentInfo,
     Path((task_id, partition_number)): Path<(i64, i64)>,
 ) -> Result<Body> {
-    let (_, image_id) = get_restore_task_and_verify(&agent.mac, task_id).await?;
+    let (_, image_id) = get_restore_task_and_verify(&agent.mac, task_id, |task_type| {
+        matches!(task_type, TaskType::Deploy | TaskType::DeployPartition)
+    })
+    .await?;
     if image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
@@ -29,19 +32,20 @@ pub async fn download_partition_data(
     Ok(Body::from_stream(stream))
 }
 
-#[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo, host_repo: HostRepo, task_repo: TaskRepo)]
+#[injectable::inject(image_service: ImageSvc, image_repo: ImageRepo)]
 pub async fn download_partition_table(
     agent: AgentInfo,
     Path(task_id): Path<i64>,
 ) -> Result<Vec<u8>> {
-    let (task, image_id) = get_restore_task_and_verify(&agent.mac, task_id).await?;
+    let (_, image_id) = get_restore_task_and_verify(&agent.mac, task_id, |task_type| {
+        matches!(task_type, TaskType::Deploy | TaskType::Multicast)
+    })
+    .await?;
     if image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
         )));
     };
-    let host_id = host_repo.get_by_mac(&agent.mac).await?.id;
-    task_repo.start(task.id, host_id).await?;
     image_service.read_partition_table(image_id).await
 }
 
@@ -50,7 +54,8 @@ pub async fn download_partitions(
     agent: AgentInfo,
     Path(task_id): Path<i64>,
 ) -> Result<Json<ImageLayout>> {
-    let (task, image_id) = get_restore_task_and_verify(&agent.mac, task_id).await?;
+    let (task, image_id) =
+        get_restore_task_and_verify(&agent.mac, task_id, TaskType::restores).await?;
     let image = image_repo.get(image_id).await?;
     if image.status != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
@@ -65,9 +70,13 @@ pub async fn download_partitions(
     }))
 }
 
-pub(crate) async fn get_restore_task_and_verify(mac: &str, task_id: i64) -> Result<(Task, i64)> {
+pub(crate) async fn get_restore_task_and_verify(
+    mac: &str,
+    task_id: i64,
+    accepts: fn(&TaskType) -> bool,
+) -> Result<(Task, i64)> {
     let task = get_next_task(mac).await?;
-    if task.id != task_id || !matches!(task.task_type, TaskType::Deploy | TaskType::Multicast) {
+    if task.id != task_id || !accepts(&task.task_type) {
         return Err(AppError::InvalidArgument(format!(
             "No restore task for task {task_id} found"
         )));

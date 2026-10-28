@@ -51,6 +51,5 @@ async fn harness_round_trips_a_deploy_over_http() {
         .await
         .expect("first sse event");
     assert_eq!(event["Current"]["id"], task_id);
-    assert_eq!(event["Current"]["task_type"], "Deploy");
-    assert_eq!(event["Current"]["image_id"], image_id);
+    assert_eq!(event["Current"]["work"]["Deploy"]["image_id"], image_id);
 }

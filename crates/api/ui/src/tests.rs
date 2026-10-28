@@ -11,7 +11,7 @@ use core::domain::script::NewScript;
 use core::domain::task::{MAX_TASK_PAGE_SIZE, Task as DTask, TaskQuery, TaskType};
 use core::test_support::container;
 use imaged_model::error::AppError;
-use imaged_model::image::ImageStatus;
+use imaged_model::image::{ImageKind, ImageStatus};
 use imaged_model::script::{InputKind, ScriptInput};
 use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ async fn all_tasks(c: &DIContainer) -> Vec<DTask> {
     c.task_repo
         .list(&TaskQuery {
             states: Vec::new(),
-            task_type: None,
+            task_types: Vec::new(),
             host_id: None,
             before: None,
             limit: MAX_TASK_PAGE_SIZE,
@@ -33,7 +33,11 @@ async fn all_tasks(c: &DIContainer) -> Vec<DTask> {
 }
 
 async fn ready_image(c: &DIContainer, name: &str) -> i64 {
-    let image = c.image_repo.create_image(name.into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image(name.into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
     image.id
 }
@@ -123,6 +127,7 @@ async fn deploy_creates_deploy_task() {
             id: host.id,
             image_id,
             inputs: Default::default(),
+            partition: None,
         }),
     )
     .await
@@ -144,8 +149,16 @@ async fn deploying_or_multicasting_an_image_that_is_not_ready_is_refused_without
         .upsert_host("aa:bb:cc:dd:ee:4a".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let empty = c.image_repo.create_image("empty".into()).await.unwrap();
-    let faulted = c.image_repo.create_image("faulted".into()).await.unwrap();
+    let empty = c
+        .image_repo
+        .create_image("empty".into(), ImageKind::Disk)
+        .await
+        .unwrap();
+    let faulted = c
+        .image_repo
+        .create_image("faulted".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_faulted(faulted.id, "boom").await.unwrap();
 
     for image_id in [empty.id, faulted.id] {
@@ -155,6 +168,7 @@ async fn deploying_or_multicasting_an_image_that_is_not_ready_is_refused_without
                 id: host.id,
                 image_id,
                 inputs: Default::default(),
+                partition: None,
             }),
         )
         .await
@@ -170,6 +184,7 @@ async fn deploying_or_multicasting_an_image_that_is_not_ready_is_refused_without
                 host_ids: vec![host.id],
                 image_id,
                 inputs: Default::default(),
+                partitions: BTreeMap::new(),
             }),
         )
         .await
@@ -202,6 +217,7 @@ async fn a_host_without_a_usable_disk_is_neither_deployed_nor_captured() {
             id: host.id,
             image_id,
             inputs: Default::default(),
+            partition: None,
         }),
     )
     .await
@@ -216,6 +232,7 @@ async fn a_host_without_a_usable_disk_is_neither_deployed_nor_captured() {
         crate::images::create_image(model::CreateImageRequest {
             name: "cap".into(),
             host_id: host.id,
+            partition: None,
         }),
     )
     .await
@@ -238,6 +255,7 @@ async fn capturing_from_an_unknown_host_is_not_found_and_leaves_no_image_behind(
         crate::images::create_image(model::CreateImageRequest {
             name: "orphan".into(),
             host_id: 999,
+            partition: None,
         }),
     )
     .await
@@ -484,7 +502,10 @@ async fn get_all_images_empty_then_reflects_creation() {
         .unwrap();
     assert!(empty.is_empty());
 
-    c.image_repo.create_image("img".into()).await.unwrap();
+    c.image_repo
+        .create_image("img".into(), ImageKind::Disk)
+        .await
+        .unwrap();
 
     let images = core::di::scope(c.clone(), crate::images::get_all_images())
         .await
@@ -507,6 +528,7 @@ async fn create_image_creates_image_and_capture_task() {
         crate::images::create_image(model::CreateImageRequest {
             name: "cap".into(),
             host_id: host.id,
+            partition: None,
         }),
     )
     .await
@@ -525,7 +547,11 @@ async fn create_image_creates_image_and_capture_task() {
 async fn deleting_an_image_cancels_its_capture_then_soft_deletes() {
     let (c, guard) = container().await;
 
-    let free = c.image_repo.create_image("free".into()).await.unwrap();
+    let free = c
+        .image_repo
+        .create_image("free".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     core::di::scope(c.clone(), crate::images::delete_image(free.id))
         .await
         .unwrap();
@@ -535,7 +561,11 @@ async fn deleting_an_image_cancels_its_capture_then_soft_deletes() {
         .upsert_host("aa:bb:cc:dd:ee:0c".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("capturing".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("capturing".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task = c
         .task_repo
         .create(TaskType::Capture, vec![host.id], Some(img.id))
@@ -625,7 +655,11 @@ async fn deleting_an_image_is_refused_while_it_is_being_deployed_or_multicast() 
 #[tokio::test]
 async fn update_image_name_renames() {
     let (c, _guard) = container().await;
-    let img = c.image_repo.create_image("old".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("old".into(), ImageKind::Disk)
+        .await
+        .unwrap();
 
     let updated = core::di::scope(
         c.clone(),
@@ -881,7 +915,11 @@ async fn deleting_a_capturing_image_cancels_its_task_and_succeeds(c: &DIContaine
         .upsert_host("aa:bb:cc:dd:ee:15".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let image = c.image_repo.create_image("busy".into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image("busy".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task = c
         .task_repo
         .create(TaskType::Capture, vec![host.id], Some(image.id))
@@ -925,7 +963,11 @@ async fn multicast_creates_a_task_for_every_host(c: &DIContainer) {
         .upsert_host("aa:bb:cc:dd:ee:17".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let image = c.image_repo.create_image("cast".into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image("cast".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
 
     let response = post(
@@ -1020,7 +1062,7 @@ async fn waking_hosts_is_accepted(c: &DIContainer) {
 async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
     let image = c
         .image_repo
-        .create_image("golden image".into())
+        .create_image("golden image".into(), ImageKind::Disk)
         .await
         .unwrap();
     c.image_service
@@ -1029,7 +1071,7 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
         .unwrap();
     std::fs::write(c.image_service.get_partition_path(image.id, 1), b"data").unwrap();
     c.image_repo
-        .save_partition(image.id, 1, "ext4", 4096)
+        .save_partition(image.id, 1, "ext4", 4096, None, None)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -1053,7 +1095,11 @@ async fn images_are_exported_and_imported_as_archives(c: &DIContainer) {
     assert_eq!(imported.status, model::ImageStatus::Ready);
     assert_eq!(imported.partitions.len(), 1);
 
-    let empty = c.image_repo.create_image("empty".into()).await.unwrap();
+    let empty = c
+        .image_repo
+        .create_image("empty".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     assert_eq!(
         get(&format!("/api/ui/images/{}/export", empty.id))
             .await
@@ -1113,9 +1159,13 @@ async fn scripts_are_managed_and_attached_to_images(c: &DIContainer) {
         ("hostname", 0)
     );
 
-    let image = c.image_repo.create_image("scripted".into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image("scripted".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo
-        .save_partition(image.id, 2, "ext4", 4096)
+        .save_partition(image.id, 2, "ext4", 4096, None, None)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -1217,7 +1267,11 @@ async fn cancelling_a_capture_task_marks_the_image_faulted() {
         .upsert_host("aa:bb:cc:dd:ee:20".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("cap".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("cap".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task = c
         .task_repo
         .create(TaskType::Capture, vec![host.id], Some(img.id))
@@ -1242,7 +1296,11 @@ async fn cancelling_a_multicast_task_cancels_its_rows_without_faulting_the_image
         .upsert_host("aa:bb:cc:dd:ee:21".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("cast".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("cast".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_finished(img.id).await.unwrap();
     let task = c
         .task_repo
@@ -1322,7 +1380,11 @@ async fn retrying_a_task_whose_image_was_deleted_is_rejected() {
         .upsert_host("aa:bb:cc:dd:ee:24".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("doomed".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("doomed".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task = c
         .task_repo
         .create(TaskType::Deploy, vec![host.id], Some(img.id))
@@ -1348,7 +1410,11 @@ async fn retrying_a_multicast_task_notifies_the_manager_to_pick_it_up() {
         .upsert_host("aa:bb:cc:dd:ee:25".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("cast".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("cast".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_finished(img.id).await.unwrap();
     let task = c
         .task_repo
@@ -1416,7 +1482,11 @@ async fn retrying_a_partial_task_resets_only_the_failed_and_cancelled_host_rows(
 #[tokio::test]
 async fn deleting_an_image_soft_deletes_the_row_and_clears_its_on_disk_directory() {
     let (c, guard) = container().await;
-    let img = c.image_repo.create_image("gone".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("gone".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_service
         .save_partition_table(img.id, &[1u8, 2, 3, 4])
         .await
@@ -1488,6 +1558,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
             id: online.id,
             image_id,
             inputs: Default::default(),
+            partition: None,
         }),
     )
     .await
@@ -1500,6 +1571,7 @@ async fn deploying_notifies_a_registered_host_and_is_silent_for_an_unregistered_
             id: offline.id,
             image_id,
             inputs: Default::default(),
+            partition: None,
         }),
     )
     .await
@@ -1544,7 +1616,11 @@ async fn multicast_hands_one_task_to_registered_members_when_its_session_starts(
         .upsert_host("aa:bb:cc:dd:ee:32".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("cast".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("cast".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo.mark_finished(img.id).await.unwrap();
 
     let mut first_conn = c.host_registry.register(first.id);
@@ -1556,6 +1632,7 @@ async fn multicast_hands_one_task_to_registered_members_when_its_session_starts(
             host_ids: vec![first.id, second.id, absent.id],
             image_id: img.id,
             inputs: Default::default(),
+            partitions: BTreeMap::new(),
         }),
     )
     .await
@@ -1593,9 +1670,13 @@ async fn connection_state_snapshot_includes_hosts_registered_before_the_call() {
 }
 
 async fn scripted_image(c: &DIContainer, root: Option<i64>, inputs: Vec<ScriptInput>) -> i64 {
-    let image = c.image_repo.create_image("scripted".into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image("scripted".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     c.image_repo
-        .save_partition(image.id, 2, "ext4", 4096)
+        .save_partition(image.id, 2, "ext4", 4096, None, None)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -1683,6 +1764,7 @@ async fn a_multicast_stores_each_hosts_resolved_input_values_or_is_rejected_with
             shared: typed(&[("site", "lab")]),
             per_machine,
         },
+        partitions: BTreeMap::new(),
     };
 
     let err = core::di::scope(
@@ -1750,6 +1832,7 @@ async fn an_input_taken_from_a_script_variable_stores_the_variables_value() {
                 )]),
             )]),
         },
+        partition: None,
     };
 
     let err = core::di::scope(c.clone(), crate::hosts::deploy(request("NOPE")))
@@ -1792,6 +1875,7 @@ async fn an_image_with_scripts_but_no_root_partition_is_not_deployed() {
             id: host.id,
             image_id: image,
             inputs: Default::default(),
+            partition: None,
         }),
     )
     .await
@@ -1814,7 +1898,11 @@ async fn kicking_a_receiving_host_fails_only_that_host_and_tells_it_to_stop() {
         .upsert_host("aa:bb:cc:dd:ee:41".into(), Ok(1_000_000), None)
         .await
         .unwrap();
-    let img = c.image_repo.create_image("cast".into()).await.unwrap();
+    let img = c
+        .image_repo
+        .create_image("cast".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task = c
         .task_repo
         .create(TaskType::Multicast, vec![kicked.id, kept.id], Some(img.id))
@@ -1846,4 +1934,262 @@ async fn kicking_a_receiving_host_fails_only_that_host_and_tells_it_to_stop() {
     assert_eq!(state(kicked.id), TaskState::Failed);
     assert_eq!(state(kept.id), TaskState::Running);
     assert_eq!(conn.receiver.try_recv(), Ok(()));
+}
+
+const IMAGE_FS_UUID: &str = "1a2b3c4d-0000-4000-8000-00000000abcd";
+const IMAGE_FS_LABEL: &str = "root fs";
+
+fn host_partition(number: i64, size_bytes: u64, uuid: Option<&str>) -> model::HostPartition {
+    model::HostPartition {
+        number,
+        partuuid: format!("0000000{number}-part"),
+        partlabel: None,
+        label: None,
+        uuid: uuid.map(str::to_string),
+        fstype: Some(if number == 1 { "vfat" } else { "ext4" }.into()),
+        size_bytes,
+    }
+}
+
+fn labelled(mut partition: model::HostPartition, label: &str) -> model::HostPartition {
+    partition.label = Some(label.into());
+    partition
+}
+
+async fn inventoried_host(c: &DIContainer, mac: &str, partitions: &[model::HostPartition]) -> i64 {
+    let host = c
+        .host_repo
+        .upsert_host(mac.into(), Ok(1 << 40), None)
+        .await
+        .unwrap();
+    c.host_repo
+        .set_partitions(host.id, partitions)
+        .await
+        .unwrap();
+    host.id
+}
+
+async fn partition_image(c: &DIContainer, size_bytes: i64) -> i64 {
+    let image = c
+        .image_repo
+        .create_image("root".into(), ImageKind::Partition)
+        .await
+        .unwrap();
+    c.image_repo
+        .save_partition(
+            image.id,
+            1,
+            "ext4",
+            size_bytes,
+            Some(IMAGE_FS_UUID),
+            Some(IMAGE_FS_LABEL),
+        )
+        .await
+        .unwrap();
+    c.image_repo.mark_finished(image.id).await.unwrap();
+    image.id
+}
+
+async fn deploy_into(
+    c: &DIContainer,
+    host_id: i64,
+    image_id: i64,
+    partition: Option<&str>,
+) -> Result<model::Task, AppError> {
+    core::di::scope(
+        c.clone(),
+        crate::hosts::deploy(model::DeployRequest {
+            id: host_id,
+            image_id,
+            inputs: Default::default(),
+            partition: partition.map(str::to_string),
+        }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_partition_image_deploys_only_into_a_large_enough_partition_without_a_filesystem_twin() {
+    let (c, _guard) = container().await;
+    let host = inventoried_host(
+        &c,
+        "aa:bb:cc:dd:ee:70",
+        &[
+            host_partition(1, 1 << 29, None),
+            host_partition(2, 1 << 30, Some(IMAGE_FS_UUID)),
+            host_partition(3, 1 << 33, None),
+            host_partition(4, 1 << 33, Some(&IMAGE_FS_UUID.to_uppercase())),
+        ],
+    )
+    .await;
+    let image = partition_image(&c, 1 << 30).await;
+    let disk_image = ready_image(&c, "disk").await;
+
+    let refusal = |result: Result<model::Task, AppError>| match result {
+        Err(AppError::InvalidArgument(_)) => "400",
+        Err(AppError::FailedPrecondition(_)) => "412",
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert_eq!(refusal(deploy_into(&c, host, image, None).await), "400");
+    assert_eq!(
+        refusal(deploy_into(&c, host, disk_image, Some("00000003-part")).await),
+        "400"
+    );
+    assert_eq!(
+        refusal(deploy_into(&c, host, image, Some("missing")).await),
+        "412"
+    );
+    assert_eq!(
+        refusal(deploy_into(&c, host, image, Some("00000001-part")).await),
+        "412"
+    );
+    match deploy_into(&c, host, image, Some("00000003-part")).await {
+        Err(AppError::FailedPrecondition(message)) => {
+            assert!(message.contains("00000002-part"), "{message}")
+        }
+        other => panic!("expected the UUID twin to be refused, got {other:?}"),
+    }
+    assert!(all_tasks(&c).await.is_empty());
+
+    c.host_repo
+        .set_partitions(
+            host,
+            &[
+                labelled(host_partition(2, 1 << 30, None), IMAGE_FS_LABEL),
+                host_partition(3, 1 << 33, None),
+            ],
+        )
+        .await
+        .unwrap();
+    match deploy_into(&c, host, image, Some("00000003-part")).await {
+        Err(AppError::FailedPrecondition(message)) => {
+            assert!(message.contains("00000002-part"), "{message}");
+            assert!(message.contains("labelled `root fs`"), "{message}");
+        }
+        other => panic!("expected the label twin to be refused, got {other:?}"),
+    }
+    assert!(all_tasks(&c).await.is_empty());
+
+    c.host_repo
+        .set_partitions(
+            host,
+            &[
+                labelled(
+                    host_partition(2, 1 << 30, Some(IMAGE_FS_UUID)),
+                    IMAGE_FS_LABEL,
+                ),
+                host_partition(3, 1 << 33, None),
+                labelled(
+                    host_partition(4, 1 << 33, None),
+                    &IMAGE_FS_LABEL.to_uppercase(),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+    let task = deploy_into(&c, host, image, Some("00000002-PART"))
+        .await
+        .unwrap();
+    assert_eq!(task.r#type, model::TaskType::Deploy);
+    assert_eq!(task.hosts[0].partuuid.as_deref(), Some("00000002-part"));
+    let stored = c.task_repo.get(task.id).await.unwrap();
+    assert_eq!(stored.task_type, TaskType::DeployPartition);
+
+    let page = list(
+        &c,
+        model::TaskQuery {
+            task_type: Some(model::TaskType::Deploy),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ids(&page), [task.id]);
+}
+
+#[tokio::test]
+async fn a_partition_multicast_needs_a_target_partition_on_every_host() {
+    let (c, _guard) = container().await;
+    let a = inventoried_host(&c, "aa:bb:cc:dd:ee:71", &[host_partition(2, 1 << 31, None)]).await;
+    let b = inventoried_host(&c, "aa:bb:cc:dd:ee:72", &[host_partition(5, 1 << 31, None)]).await;
+    let stranger = inventoried_host(&c, "aa:bb:cc:dd:ee:73", &[]).await;
+    let image = partition_image(&c, 1 << 30).await;
+    let multicast = |partitions: BTreeMap<i64, String>| {
+        core::di::scope(
+            c.clone(),
+            crate::groups::multicast(model::MulticastRequest {
+                host_ids: vec![a, b],
+                image_id: image,
+                inputs: Default::default(),
+                partitions,
+            }),
+        )
+    };
+
+    let missing = multicast(BTreeMap::from([(a, "00000002-part".to_string())]))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(missing, AppError::InvalidArgument(_)),
+        "{missing:?}"
+    );
+    let stray = multicast(BTreeMap::from([
+        (a, "00000002-part".to_string()),
+        (b, "00000005-part".to_string()),
+        (stranger, "00000002-part".to_string()),
+    ]))
+    .await
+    .unwrap_err();
+    assert!(matches!(stray, AppError::InvalidArgument(_)), "{stray:?}");
+    assert!(all_tasks(&c).await.is_empty());
+
+    let task = multicast(BTreeMap::from([
+        (a, "00000002-part".to_string()),
+        (b, "00000005-part".to_string()),
+    ]))
+    .await
+    .unwrap();
+    assert_eq!(task.r#type, model::TaskType::Multicast);
+    let stored = c.task_repo.get(task.id).await.unwrap();
+    assert_eq!(stored.task_type, TaskType::MulticastPartition);
+    assert_eq!(stored.partuuid(a), Some("00000002-part"));
+    assert_eq!(stored.partuuid(b), Some("00000005-part"));
+}
+
+#[tokio::test]
+async fn capturing_a_partition_needs_an_inventoried_ext_or_vfat_partition() {
+    let (c, _guard) = container().await;
+    let mut swap = host_partition(3, 1 << 30, None);
+    swap.fstype = Some("swap".into());
+    let host = inventoried_host(
+        &c,
+        "aa:bb:cc:dd:ee:74",
+        &[host_partition(2, 1 << 30, Some(IMAGE_FS_UUID)), swap],
+    )
+    .await;
+    let capture = |partition: &str| {
+        core::di::scope(
+            c.clone(),
+            crate::images::create_image(model::CreateImageRequest {
+                name: "root".into(),
+                host_id: host,
+                partition: Some(partition.into()),
+            }),
+        )
+    };
+
+    for refused in ["missing", "00000003-part"] {
+        let err = capture(refused).await.unwrap_err();
+        assert!(matches!(err, AppError::FailedPrecondition(_)), "{err:?}");
+    }
+    assert!(c.image_repo.get_all().await.unwrap().is_empty());
+
+    let captured = capture("00000002-part").await.unwrap();
+    assert_eq!(captured.image.kind, model::ImageKind::Partition);
+    assert_eq!(captured.task.r#type, model::TaskType::Capture);
+    assert_eq!(
+        captured.task.hosts[0].partuuid.as_deref(),
+        Some("00000002-part")
+    );
+    let stored = c.task_repo.get(captured.task.id).await.unwrap();
+    assert_eq!(stored.task_type, TaskType::CapturePartition);
 }

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use derive_more::Constructor;
 use imaged_model::{
     error::{AppError, Result},
-    image::{ImagePartition, ImageStatus},
+    image::{ImageKind, ImagePartition, ImageStatus},
 };
 use sqlx::SqlitePool;
 
@@ -17,11 +17,13 @@ pub struct SqliteImageRepository {
 }
 
 impl SqliteImageRepository {
-    async fn insert(&self, name: String, status: ImageStatus) -> Result<Image> {
+    async fn insert(&self, name: String, kind: ImageKind, status: ImageStatus) -> Result<Image> {
         let status = status.to_string();
+        let kind = kind.to_string();
         let image = sqlx::query!(
-            "INSERT INTO images (name, status) VALUES (?,?) RETURNING *",
+            "INSERT INTO images (name, kind, status) VALUES (?,?,?) RETURNING *",
             name,
+            kind,
             status
         )
         .fetch_one(&self.pool)
@@ -30,6 +32,7 @@ impl SqliteImageRepository {
         Ok(Image {
             id: image.id,
             name: image.name,
+            kind: image_kind(&image.kind)?,
             captured_at: None,
             status: image_status(&image.status)?,
             error: image.error,
@@ -54,6 +57,7 @@ impl ImageRepository for SqliteImageRepository {
             r#"SELECT
                  id as "id!: i64",
                  name,
+                 kind,
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
                  error,
@@ -68,6 +72,7 @@ impl ImageRepository for SqliteImageRepository {
         Ok(Image {
             id: image.id,
             name: image.name,
+            kind: image_kind(&image.kind)?,
             captured_at: image.captured_at,
             status: image_status(&image.status)?,
             error: image.error,
@@ -77,8 +82,8 @@ impl ImageRepository for SqliteImageRepository {
         })
     }
 
-    async fn create_image(&self, name: String) -> Result<Image> {
-        self.insert(name, ImageStatus::Empty).await
+    async fn create_image(&self, name: String, kind: ImageKind) -> Result<Image> {
+        self.insert(name, kind, ImageStatus::Empty).await
     }
 
     async fn update_name(&self, id: i64, name: String) -> Result<Image> {
@@ -87,6 +92,7 @@ impl ImageRepository for SqliteImageRepository {
                RETURNING
                  id as "id!: i64",
                  name,
+                 kind,
                  captured_at as "captured_at: DateTime<Utc>",
                  status,
                  error,
@@ -99,35 +105,14 @@ impl ImageRepository for SqliteImageRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        let partitions = sqlx::query!(
-            r#"SELECT
-                id as "id!: i64",
-                partition_number,
-                fstype,
-                size_bytes
-            FROM image_partitions WHERE image_id = ?"#,
-            id
-        )
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .map(|record| {
-            ImagePartition::new(
-                record.id,
-                record.partition_number,
-                record.fstype,
-                record.size_bytes as u64,
-            )
-        })
-        .collect();
-
         Ok(Image {
             id: image.id,
             name: image.name,
+            kind: image_kind(&image.kind)?,
             captured_at: image.captured_at,
             status: image_status(&image.status)?,
             error: image.error,
-            partitions,
+            partitions: self.get_partitions(id).await?,
             root_partition: image.root_partition,
             sector_size: sector_size(image.sector_size)?,
         })
@@ -163,6 +148,7 @@ impl ImageRepository for SqliteImageRepository {
             SELECT 
                 i.id AS "image_id!",
                 i.name AS "image_name!",
+                i.kind AS "image_kind!",
                 i.status AS "image_status!",
                 i.error AS "error",
                 i.captured_at as "captured_at: DateTime<Utc>",
@@ -171,7 +157,9 @@ impl ImageRepository for SqliteImageRepository {
                 p.id AS "p_id?: i64",
                 p.partition_number AS "p_num?: i64",
                 p.fstype AS "p_fstype?",
-                p.size_bytes AS "p_size?: i64"
+                p.size_bytes AS "p_size?: i64",
+                p.fs_uuid AS "p_fs_uuid?",
+                p.fs_label AS "p_fs_label?"
             FROM images i
             LEFT JOIN image_partitions p ON i.id = p.image_id
             WHERE i.deleted_at IS NULL
@@ -194,6 +182,7 @@ impl ImageRepository for SqliteImageRepository {
                     let image = Image {
                         id,
                         name: row.image_name,
+                        kind: image_kind(&row.image_kind)?,
                         captured_at: row.captured_at,
                         status: image_status(&row.image_status)?,
                         error: row.error,
@@ -208,9 +197,14 @@ impl ImageRepository for SqliteImageRepository {
             if let (Some(p_id), Some(p_num), Some(p_fstype), Some(p_size)) =
                 (row.p_id, row.p_num, row.p_fstype, row.p_size)
             {
-                entry
-                    .partitions
-                    .push(ImagePartition::new(p_id, p_num, p_fstype, p_size as u64));
+                entry.partitions.push(ImagePartition::new(
+                    p_id,
+                    p_num,
+                    p_fstype,
+                    p_size as u64,
+                    row.p_fs_uuid,
+                    row.p_fs_label,
+                ));
             }
         }
 
@@ -229,23 +223,29 @@ impl ImageRepository for SqliteImageRepository {
         partition_number: i64,
         fstype: &str,
         size_bytes: i64,
+        fs_uuid: Option<&str>,
+        fs_label: Option<&str>,
     ) -> Result<ImagePartition> {
         let partition = sqlx::query!(
             r#"
-                INSERT INTO image_partitions 
-                    (image_id, partition_number, fstype, size_bytes) 
-                VALUES 
-                    (?,?,?,?)
+                INSERT INTO image_partitions
+                    (image_id, partition_number, fstype, size_bytes, fs_uuid, fs_label)
+                VALUES
+                    (?,?,?,?,?,?)
                 RETURNING
                     id as "id!: i64",
                     partition_number,
                     fstype,
-                    size_bytes
+                    size_bytes,
+                    fs_uuid,
+                    fs_label
             "#,
             image_id,
             partition_number,
             fstype,
             size_bytes,
+            fs_uuid,
+            fs_label,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -254,6 +254,8 @@ impl ImageRepository for SqliteImageRepository {
             partition.partition_number,
             partition.fstype,
             partition.size_bytes as u64,
+            partition.fs_uuid,
+            partition.fs_label,
         ))
     }
 
@@ -284,6 +286,12 @@ impl ImageRepository for SqliteImageRepository {
             "UPDATE images SET status = ?, root_partition = NULL, sector_size = ? WHERE id = ?",
             status,
             sector_size,
+            id
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query!(
+            "UPDATE image_scripts SET root_partition = NULL WHERE image_id = ?",
             id
         )
         .execute(&mut *tx)
@@ -320,8 +328,8 @@ impl ImageRepository for SqliteImageRepository {
         Ok(())
     }
 
-    async fn start_import(&self, name: String) -> Result<Image> {
-        self.insert(name, ImageStatus::Importing).await
+    async fn start_import(&self, name: String, kind: ImageKind) -> Result<Image> {
+        self.insert(name, kind, ImageStatus::Importing).await
     }
 
     async fn finish_import(
@@ -342,11 +350,13 @@ impl ImageRepository for SqliteImageRepository {
                 ))
             })?;
             sqlx::query!(
-                "INSERT INTO image_partitions (image_id, partition_number, fstype, size_bytes) VALUES (?,?,?,?)",
+                "INSERT INTO image_partitions (image_id, partition_number, fstype, size_bytes, fs_uuid, fs_label) VALUES (?,?,?,?,?,?)",
                 id,
                 partition.partition_number,
                 partition.fstype,
-                size_bytes
+                size_bytes,
+                partition.fs_uuid,
+                partition.fs_label
             )
             .execute(&mut *tx)
             .await?;
@@ -390,7 +400,9 @@ impl ImageRepository for SqliteImageRepository {
                 id as "id!: i64",
                 partition_number,
                 fstype,
-                size_bytes
+                size_bytes,
+                fs_uuid,
+                fs_label
             FROM image_partitions WHERE image_id = ? ORDER BY partition_number"#,
             id
         )
@@ -403,6 +415,8 @@ impl ImageRepository for SqliteImageRepository {
                 partition.partition_number,
                 partition.fstype,
                 partition.size_bytes as u64,
+                partition.fs_uuid,
+                partition.fs_label,
             )
         })
         .collect())
@@ -416,6 +430,13 @@ fn image_status(value: &str) -> Result<ImageStatus> {
     })
 }
 
+fn image_kind(value: &str) -> Result<ImageKind> {
+    value.parse::<ImageKind>().map_err(|e| {
+        tracing::info!(err=%e, "failed to convert string to ImageKind");
+        AppError::Internal("conversion error".to_string())
+    })
+}
+
 fn sector_size(value: i64) -> Result<u32> {
     u32::try_from(value)
         .map_err(|_| AppError::Internal(format!("stored sector size {value} is out of range")))
@@ -423,6 +444,7 @@ fn sector_size(value: i64) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    use imaged_model::image::ImageKind;
     use sqlx::Row;
 
     use crate::domain::image::NewImagePartition;
@@ -442,7 +464,11 @@ mod tests {
     #[tokio::test]
     async fn create_image_starts_empty_with_name_and_no_capture_time() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("golden".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("golden".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         assert_eq!(img.name, "golden");
         assert_eq!(img.status, ImageStatus::Empty);
         assert!(img.captured_at.is_none());
@@ -453,7 +479,11 @@ mod tests {
     #[tokio::test]
     async fn get_status_of_freshly_created_image_is_empty() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("golden".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("golden".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let status = c.image_repo.get_status(img.id).await.unwrap();
         assert_eq!(status, ImageStatus::Empty);
     }
@@ -468,9 +498,21 @@ mod tests {
     #[tokio::test]
     async fn get_all_orders_images_by_id_ascending() {
         let (c, _g) = repos().await;
-        let a = c.image_repo.create_image("a".into()).await.unwrap();
-        let b = c.image_repo.create_image("b".into()).await.unwrap();
-        let cc = c.image_repo.create_image("c".into()).await.unwrap();
+        let a = c
+            .image_repo
+            .create_image("a".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let b = c
+            .image_repo
+            .create_image("b".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let cc = c
+            .image_repo
+            .create_image("c".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let ids: Vec<i64> = c
             .image_repo
             .get_all()
@@ -485,22 +527,30 @@ mod tests {
     #[tokio::test]
     async fn get_all_groups_partitions_onto_their_image_ordered_by_partition_number() {
         let (c, _g) = repos().await;
-        let img1 = c.image_repo.create_image("one".into()).await.unwrap();
-        let img2 = c.image_repo.create_image("two".into()).await.unwrap();
-        c.image_repo
-            .save_partition(img1.id, 3, "ext4", 30)
+        let img1 = c
+            .image_repo
+            .create_image("one".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let img2 = c
+            .image_repo
+            .create_image("two".into(), ImageKind::Disk)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img1.id, 1, "vfat", 10)
+            .save_partition(img1.id, 3, "ext4", 30, None, None)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img1.id, 2, "ext4", 20)
+            .save_partition(img1.id, 1, "vfat", 10, None, None)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img2.id, 1, "ext4", 99)
+            .save_partition(img1.id, 2, "ext4", 20, None, None)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img2.id, 1, "ext4", 99, None, None)
             .await
             .unwrap();
 
@@ -517,8 +567,16 @@ mod tests {
     #[tokio::test]
     async fn get_all_excludes_soft_deleted_images() {
         let (c, _g) = repos().await;
-        let keep = c.image_repo.create_image("keep".into()).await.unwrap();
-        let gone = c.image_repo.create_image("gone".into()).await.unwrap();
+        let keep = c
+            .image_repo
+            .create_image("keep".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let gone = c
+            .image_repo
+            .create_image("gone".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.delete_image(gone.id).await.unwrap();
 
         let ids: Vec<i64> = c
@@ -536,9 +594,13 @@ mod tests {
     #[tokio::test]
     async fn save_partition_round_trips_fstype_and_size_through_get_partitions() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo
-            .save_partition(img.id, 1, "ext4", 4096)
+            .save_partition(img.id, 1, "ext4", 4096, None, None)
             .await
             .unwrap();
 
@@ -552,17 +614,21 @@ mod tests {
     #[tokio::test]
     async fn get_partitions_orders_by_partition_number() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo
-            .save_partition(img.id, 5, "ext4", 1)
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img.id, 2, "ext4", 1)
+            .save_partition(img.id, 5, "ext4", 1, None, None)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img.id, 8, "ext4", 1)
+            .save_partition(img.id, 2, "ext4", 1, None, None)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img.id, 8, "ext4", 1, None, None)
             .await
             .unwrap();
 
@@ -580,10 +646,14 @@ mod tests {
     #[tokio::test]
     async fn save_partition_return_value_reports_the_partition_number_it_was_given() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let returned = c
             .image_repo
-            .save_partition(img.id, 7, "ext4", 1)
+            .save_partition(img.id, 7, "ext4", 1, None, None)
             .await
             .unwrap();
         assert_eq!(returned.partition_number, 7);
@@ -594,12 +664,19 @@ mod tests {
     #[tokio::test]
     async fn re_saving_the_same_partition_number_errors_on_the_unique_constraint() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo
-            .save_partition(img.id, 1, "ext4", 10)
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
             .await
             .unwrap();
-        let again = c.image_repo.save_partition(img.id, 1, "vfat", 20).await;
+        c.image_repo
+            .save_partition(img.id, 1, "ext4", 10, None, None)
+            .await
+            .unwrap();
+        let again = c
+            .image_repo
+            .save_partition(img.id, 1, "vfat", 20, None, None)
+            .await;
         assert!(
             again.is_err(),
             "expected UNIQUE(image_id, partition_number) violation"
@@ -614,9 +691,13 @@ mod tests {
     #[tokio::test]
     async fn size_bytes_near_i64_max_round_trips_as_u64() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo
-            .save_partition(img.id, 1, "ext4", i64::MAX)
+            .save_partition(img.id, 1, "ext4", i64::MAX, None, None)
             .await
             .unwrap();
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
@@ -626,9 +707,13 @@ mod tests {
     #[tokio::test]
     async fn a_negative_size_bytes_is_reachable_and_wraps_to_a_huge_u64() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo
-            .save_partition(img.id, 1, "ext4", -1)
+            .save_partition(img.id, 1, "ext4", -1, None, None)
             .await
             .unwrap();
         let parts = c.image_repo.get_partitions(img.id).await.unwrap();
@@ -638,10 +723,14 @@ mod tests {
     #[tokio::test]
     async fn a_freshly_inserted_partition_always_has_a_non_null_id() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let returned = c
             .image_repo
-            .save_partition(img.id, 1, "ext4", 1)
+            .save_partition(img.id, 1, "ext4", 1, None, None)
             .await
             .unwrap();
         assert!(returned.id > 0);
@@ -652,7 +741,11 @@ mod tests {
     #[tokio::test]
     async fn get_all_returns_an_internal_error_when_an_image_row_has_an_unexpected_status_string() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         sqlx::query("UPDATE images SET status = ? WHERE id = ?")
             .bind("bogus")
             .bind(img.id)
@@ -666,7 +759,11 @@ mod tests {
     #[tokio::test]
     async fn get_status_of_an_unexpected_status_string_is_an_internal_error_not_a_panic() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         sqlx::query("UPDATE images SET status = ? WHERE id = ?")
             .bind("bogus")
             .bind(img.id)
@@ -680,7 +777,11 @@ mod tests {
     #[tokio::test]
     async fn start_capture_moves_an_empty_image_to_capturing() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.start_capture(img.id, 512).await.unwrap();
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
@@ -691,7 +792,11 @@ mod tests {
     #[tokio::test]
     async fn mark_finished_moves_capturing_to_ready_and_records_a_capture_time() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.start_capture(img.id, 512).await.unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         assert_eq!(
@@ -705,7 +810,11 @@ mod tests {
     #[tokio::test]
     async fn mark_faulted_moves_capturing_to_faulted_and_records_the_error() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.start_capture(img.id, 512).await.unwrap();
         c.image_repo
             .mark_faulted(img.id, "disk exploded")
@@ -722,7 +831,11 @@ mod tests {
     #[tokio::test]
     async fn transitions_are_unconditional_so_mark_finished_promotes_an_empty_image_to_ready() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         assert_eq!(
             c.image_repo.get_status(img.id).await.unwrap(),
@@ -733,7 +846,11 @@ mod tests {
     #[tokio::test]
     async fn mark_faulted_overwrites_a_ready_image_from_its_unexpected_source_state() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         c.image_repo
             .mark_faulted(img.id, "regressed")
@@ -748,13 +865,17 @@ mod tests {
     #[tokio::test]
     async fn start_capture_atomically_clears_partitions_and_flips_status_to_capturing() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
-        c.image_repo
-            .save_partition(img.id, 1, "ext4", 10)
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
             .await
             .unwrap();
         c.image_repo
-            .save_partition(img.id, 2, "vfat", 20)
+            .save_partition(img.id, 1, "ext4", 10, None, None)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(img.id, 2, "vfat", 20, None, None)
             .await
             .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
@@ -780,7 +901,11 @@ mod tests {
     #[tokio::test]
     async fn delete_image_is_a_soft_delete_that_keeps_the_row_name_and_sets_deleted_at() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("survivor".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("survivor".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
 
         let row = sqlx::query("SELECT name, deleted_at FROM images WHERE id = ?")
@@ -797,7 +922,11 @@ mod tests {
     #[tokio::test]
     async fn get_status_still_resolves_a_soft_deleted_image_because_it_has_no_deleted_at_filter() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.mark_finished(img.id).await.unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
         assert_eq!(
@@ -809,7 +938,11 @@ mod tests {
     #[tokio::test]
     async fn get_does_not_resolve_a_soft_deleted_image() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
         let err = c.image_repo.get(img.id).await.unwrap_err();
         assert!(matches!(err, AppError::NotFound(_)), "got {err:?}");
@@ -818,7 +951,11 @@ mod tests {
     #[tokio::test]
     async fn finish_import_makes_an_importing_image_ready_with_its_partitions_and_capture_time() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.start_import("imported".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .start_import("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         assert_eq!(img.status, ImageStatus::Importing);
         let captured_at = "2026-01-02T03:04:05.678Z".parse().unwrap();
 
@@ -831,6 +968,8 @@ mod tests {
                     partition_number: 1,
                     fstype: "ntfs".into(),
                     size_bytes: 1 << 40,
+                    fs_uuid: None,
+                    fs_label: None,
                 }],
                 Some(1),
                 4096,
@@ -849,7 +988,11 @@ mod tests {
     #[tokio::test]
     async fn finish_import_of_an_image_deleted_mid_import_is_not_found_and_adds_no_partitions() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.start_import("imported".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .start_import("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo.delete_image(img.id).await.unwrap();
 
         let err = c
@@ -861,6 +1004,8 @@ mod tests {
                     partition_number: 1,
                     fstype: "ntfs".into(),
                     size_bytes: 4096,
+                    fs_uuid: None,
+                    fs_label: None,
                 }],
                 None,
                 512,
@@ -885,9 +1030,13 @@ mod tests {
     #[tokio::test]
     async fn the_root_partition_must_be_one_of_the_image_partitions() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.image_repo
-            .save_partition(img.id, 2, "ext4", 20)
+            .save_partition(img.id, 2, "ext4", 20, None, None)
             .await
             .unwrap();
 
@@ -916,10 +1065,14 @@ mod tests {
     #[tokio::test]
     async fn recapturing_forgets_the_root_partition_and_records_the_new_sector_size() {
         let (c, _g) = repos().await;
-        let img = c.image_repo.create_image("img".into()).await.unwrap();
+        let img = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         assert_eq!(img.sector_size, 512);
         c.image_repo
-            .save_partition(img.id, 1, "ext4", 20)
+            .save_partition(img.id, 1, "ext4", 20, None, None)
             .await
             .unwrap();
         c.image_repo

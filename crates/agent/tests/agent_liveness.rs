@@ -63,7 +63,7 @@ async fn the_agent_answers_server_pings_while_it_waits_for_events() {
     };
 
     tokio::select! {
-        _ = connection::run(agent, state.clone(), Ok(1024), TEST_TIMING) => {
+        _ = connection::run(agent, state.clone(), async || Err("no disk".to_string()), TEST_TIMING) => {
             unreachable!("the agent must never exit while the connection is healthy")
         }
         _ = driver => {}

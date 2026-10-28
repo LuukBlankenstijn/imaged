@@ -41,4 +41,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 async-compression.workspace = true
 axum = { workspace = true, features = ["ws"] }
+parking_lot = "0.12.5"
 tokio = { workspace = true, features = ["net", "io-util", "fs", "time", "test-util"] }

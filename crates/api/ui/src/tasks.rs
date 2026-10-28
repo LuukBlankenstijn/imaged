@@ -10,7 +10,7 @@ use crate::model::TaskStatus;
 #[cfg(feature = "server")]
 use imaged_core::di::{ImageRepo, MulticastMgr, Progress, Registry, TaskRepo};
 #[cfg(feature = "server")]
-use imaged_core::domain::task::{Task as DTask, TaskQuery as DTaskQuery, TaskType};
+use imaged_core::domain::task::{Task as DTask, TaskQuery as DTaskQuery};
 #[cfg(feature = "server")]
 use imaged_model::error::AppError;
 use imaged_model::error::Result;
@@ -26,7 +26,10 @@ pub async fn list_tasks(query: TaskQuery) -> Result<TaskPage> {
     let page = task_repo
         .list(&DTaskQuery {
             states: query.status.map(status_states).unwrap_or_default(),
-            task_type: query.task_type.map(Into::into),
+            task_types: query
+                .task_type
+                .map(|task_type| task_type.stored_types())
+                .unwrap_or_default(),
             host_id: query.host_id,
             before: query.before,
             limit: query.limit.unwrap_or(DEFAULT_PAGE_SIZE),
@@ -70,13 +73,13 @@ pub async fn cancel_task(id: i64) -> Result<()> {
 pub(crate) async fn cancel_active(task: &DTask) -> Result<()> {
     task_repo.cancel(task.id).await?;
     if let Some(image_id) = task.image_id
-        && task.task_type == TaskType::Capture
+        && task.task_type.captures()
     {
         image_repo
             .mark_faulted(image_id, "Capture task was cancelled by user")
             .await?;
     }
-    if task.task_type == TaskType::Multicast {
+    if task.task_type.multicasts() {
         multicast_mgr.wake();
     }
     for host in task
@@ -95,9 +98,7 @@ pub(crate) async fn cancel_active(task: &DTask) -> Result<()> {
 pub async fn kick_host(req: KickRequest) -> Result<()> {
     let KickRequest { task_id, host_id } = req;
     let task = task_repo.get(task_id).await?;
-    if task.task_type != TaskType::Multicast
-        || !task.hosts_in(TaskState::Running).any(|h| h == host_id)
-    {
+    if !task.task_type.multicasts() || !task.hosts_in(TaskState::Running).any(|h| h == host_id) {
         return Err(AppError::InvalidArgument(format!(
             "cannot kick host {host_id} from task {task_id}, host is not receiving the multicast"
         )));
@@ -132,7 +133,7 @@ pub async fn retry_task(id: i64) -> Result<()> {
         )));
     }
     task_repo.retry(task.id).await?;
-    if task.task_type == TaskType::Multicast {
+    if task.task_type.multicasts() {
         multicast_mgr.wake();
         return Ok(());
     }

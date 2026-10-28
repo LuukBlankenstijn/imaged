@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT script_id, root_partition FROM image_scripts WHERE image_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "script_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "1a67bda877f769e18085308a5812533f7570af2f0ba7eecc6b1ab560aa11b940"
+}

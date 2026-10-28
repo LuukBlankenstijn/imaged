@@ -11,13 +11,17 @@ use tokio::sync::watch;
 
 use imaged_agent::server::{Server, Uplink};
 use imaged_agent::status::{Identity, Status};
+use imaged_agent::sys::disk::HostDisk;
 use imaged_core::domain::script::NewScript;
 use imaged_core::domain::task::{Task, TaskType};
 use imaged_core::progress::Snapshot;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::ServerEvent;
-use imaged_model::agent::{ImagePartition, MacAddress, PostInstall, PostInstallScript};
-use imaged_model::image::ImageStatus;
+use imaged_model::agent::{
+    ImagePartition, MacAddress, PartitionUpload, PostInstall, PostInstallScript,
+};
+use imaged_model::host::HostPartition;
+use imaged_model::image::{ImageKind, ImageStatus};
 use imaged_model::progress::{HostProgress, Stage};
 use imaged_model::script::{InputKind, InputValues, ScriptInput};
 use imaged_model::task::TaskState;
@@ -26,6 +30,27 @@ const DISK: u64 = 8 * 1024 * 1024 * 1024;
 const AGENT_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
 const WAIT: Duration = Duration::from_secs(5);
 const SILENCE_LIMIT: Duration = Duration::from_secs(30);
+const FS_UUID: &str = "0b8c5c3e-7f6e-4d4b-9c1a-1e2f3a4b5c6d";
+const PARTUUID: &str = "6a1c0b3e-0000-4000-8000-000000000002";
+
+fn usable() -> Result<HostDisk, String> {
+    Ok(HostDisk {
+        size_bytes: DISK,
+        partitions: Vec::new(),
+    })
+}
+
+fn root_partition() -> HostPartition {
+    HostPartition {
+        number: 2,
+        partuuid: PARTUUID.to_string(),
+        partlabel: Some("root".to_string()),
+        label: Some("nixos".to_string()),
+        uuid: Some(FS_UUID.to_string()),
+        fstype: Some("ext4".to_string()),
+        size_bytes: DISK / 2,
+    }
+}
 
 fn uplink(progress: watch::Receiver<Option<HostProgress>>) -> Uplink {
     Uplink {
@@ -64,7 +89,7 @@ async fn connect_events_registers_an_unknown_host_with_its_disk_size_and_ip() {
     assert!(s.container.host_repo.get_by_mac(&mac).await.is_err());
 
     let events = agent
-        .connect_events(&Ok(DISK), uplink(watch::channel(None).1), SILENCE_LIMIT)
+        .connect_events(&usable(), uplink(watch::channel(None).1), SILENCE_LIMIT)
         .await
         .expect("connect events");
     let mut events = std::pin::pin!(events);
@@ -100,13 +125,13 @@ async fn the_pending_capture_task_is_the_first_server_event() {
     let image = s
         .container
         .image_repo
-        .create_image(harness::unique_name("rc-events"))
+        .create_image(harness::unique_name("rc-events"), ImageKind::Disk)
         .await
         .expect("create image");
     let task_id = seed::capture_task(s, host.id, image.id).await;
 
     let events = agent
-        .connect_events(&Ok(DISK), uplink(watch::channel(None).1), SILENCE_LIMIT)
+        .connect_events(&usable(), uplink(watch::channel(None).1), SILENCE_LIMIT)
         .await
         .expect("connect events");
     let mut events = std::pin::pin!(events);
@@ -119,8 +144,7 @@ async fn the_pending_capture_task_is_the_first_server_event() {
         event,
         ServerEvent::Current(Some(imaged_model::Task::new(
             task_id,
-            imaged_model::TaskType::Capture,
-            Some(image.id)
+            imaged_model::Work::Capture { image_id: image.id }
         )))
     );
 
@@ -136,18 +160,23 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
     let image = s
         .container
         .image_repo
-        .create_image(harness::unique_name("rc-capture"))
+        .create_image(harness::unique_name("rc-capture"), ImageKind::Disk)
         .await
         .expect("create image");
     let task_id = seed::capture_task(s, host.id, image.id).await;
 
-    let table = b"real-client-partition-table".to_vec();
     agent
-        .upload_partition_table(task_id, 4096, Bytes::from(table.clone()))
+        .mark_started(task_id, Some(4096))
         .await
-        .expect("upload partition table");
+        .expect("start the capture");
     let task = s.container.task_repo.get(task_id).await.unwrap();
     assert_eq!(host_state(&task, host.id), TaskState::Running);
+
+    let table = b"real-client-partition-table".to_vec();
+    agent
+        .upload_partition_table(task_id, Bytes::from(table.clone()))
+        .await
+        .expect("upload partition table");
 
     let plain: Vec<u8> = (0..20_000u32).map(|i| (i % 241) as u8).collect();
     let compressed = seed::zstd(&plain).await;
@@ -155,8 +184,12 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
         .upload_partition_data(
             task_id,
             1,
-            "ext4".to_string(),
-            plain.len() as i64,
+            &PartitionUpload {
+                filesystem: "ext4".to_string(),
+                size: plain.len() as i64,
+                fs_uuid: Some(FS_UUID.to_string()),
+                fs_label: Some("root fs&x=1".to_string()),
+            },
             Cursor::new(compressed.clone()),
         )
         .await
@@ -164,6 +197,8 @@ async fn a_capture_through_the_client_yields_a_ready_image_holding_the_uploaded_
     assert_eq!(uploaded.partition_number, 1);
     assert_eq!(uploaded.fstype, "ext4");
     assert_eq!(uploaded.size_bytes, plain.len() as u64);
+    assert_eq!(uploaded.fs_uuid.as_deref(), Some(FS_UUID));
+    assert_eq!(uploaded.fs_label.as_deref(), Some("root fs&x=1"));
     assert_eq!(stored_partitions(s, image.id).await, vec![uploaded.clone()]);
 
     agent
@@ -251,10 +286,18 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
             vec![host.id],
             Some(image_id),
             &BTreeMap::from([(host.id, values)]),
+            &BTreeMap::new(),
         )
         .await
         .expect("create deploy task")
         .id;
+
+    agent
+        .mark_started(task_id, None)
+        .await
+        .expect("start the restore");
+    let task = s.container.task_repo.get(task_id).await.unwrap();
+    assert_eq!(host_state(&task, host.id), TaskState::Running);
 
     let layout = agent.image_layout(task_id).await.expect("image layout");
     assert_eq!(layout.sector_size, 512);
@@ -276,8 +319,6 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
         .await
         .expect("download partition table");
     assert_eq!(downloaded_table.as_ref(), table.as_slice());
-    let task = s.container.task_repo.get(task_id).await.unwrap();
-    assert_eq!(host_state(&task, host.id), TaskState::Running);
 
     for (number, plain) in [(1i64, &ext4), (2i64, &vfat)] {
         let mut reader = agent
@@ -296,7 +337,6 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
     assert_eq!(
         post_install,
         PostInstall {
-            root_partition: Some(1),
             proxy: s.container.script_proxy.as_deref().map(str::to_owned),
             variables: (*s.container.script_variables).clone(),
             scripts: vec![PostInstallScript {
@@ -304,6 +344,7 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
                 name: script.name.clone(),
                 body: script.body.clone(),
                 inputs: BTreeMap::from([("hostname".to_string(), "pc-42".to_string())]),
+                root_partition: 1,
             }],
         }
     );
@@ -375,6 +416,17 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
     assert!(message.contains("400"), "{message}");
 
     let err = agent
+        .mark_started(queued, None)
+        .await
+        .expect_err("starting a queued task is refused");
+    assert!(
+        err.to_string().contains(&format!(
+            "Task {queued} is not the next task for host {mac}"
+        )),
+        "{err}"
+    );
+
+    let err = agent
         .image_layout(queued)
         .await
         .expect_err("listing a queued task's partitions is refused");
@@ -385,7 +437,7 @@ async fn a_call_for_a_task_that_is_not_next_surfaces_the_servers_message() {
     );
 
     let err = agent
-        .upload_partition_table(current, 512, Bytes::from_static(b"table"))
+        .upload_partition_table(current, Bytes::from_static(b"table"))
         .await
         .expect_err("capturing into a deploy task is refused");
     assert!(
@@ -411,14 +463,13 @@ async fn progress_reported_through_the_client_is_shown_until_the_agent_disconnec
     });
     status.task_started(&imaged_model::Task::new(
         4_242,
-        imaged_model::TaskType::Deploy,
-        None,
+        imaged_model::Work::Deploy { image_id: 1 },
     ));
     let mut board = s.container.progress_board.watch();
 
     let mut events = Box::pin(
         agent
-            .connect_events(&Ok(DISK), uplink(status.uplink()), SILENCE_LIMIT)
+            .connect_events(&usable(), uplink(status.uplink()), SILENCE_LIMIT)
             .await
             .expect("connect events"),
     );
@@ -445,4 +496,214 @@ async fn progress_reported_through_the_client_is_shown_until_the_agent_disconnec
         .await
         .expect("the progress is forgotten once the agent disconnects")
         .unwrap();
+}
+
+#[tokio::test]
+async fn connecting_reports_the_disks_partitions_until_the_disk_becomes_unusable() {
+    let s = harness::server().await;
+    let (agent, mac) = agent(s);
+    let disk = Ok(HostDisk {
+        size_bytes: DISK,
+        partitions: vec![root_partition()],
+    });
+
+    let mut events = Box::pin(
+        agent
+            .connect_events(&disk, uplink(watch::channel(None).1), SILENCE_LIMIT)
+            .await
+            .expect("connect events"),
+    );
+    assert_eq!(events.next().await, Some(ServerEvent::Current(None)));
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+        if host.partitions == [root_partition()] {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the inventory never arrived: {:?}",
+            host.partitions
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(events);
+
+    let _events = agent
+        .connect_events(
+            &Err("multiple disks found".to_string()),
+            uplink(watch::channel(None).1),
+            SILENCE_LIMIT,
+        )
+        .await
+        .expect("connect events");
+    let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+    assert_eq!(host.disk, Err("multiple disks found".to_string()));
+    assert!(host.partitions.is_empty(), "{:?}", host.partitions);
+}
+
+#[tokio::test]
+async fn a_partition_capture_through_the_client_stores_partition_one_with_its_filesystem_uuid() {
+    let s = harness::server().await;
+    let (agent, mac) = agent(s);
+    let host = seed::host(s, &mac, DISK).await;
+    let image = s
+        .container
+        .image_repo
+        .create_image(
+            harness::unique_name("rc-partition-capture"),
+            ImageKind::Partition,
+        )
+        .await
+        .expect("create image");
+    let task_id =
+        seed::partition_task(s, TaskType::CapturePartition, host.id, image.id, PARTUUID).await;
+
+    let mut events = Box::pin(
+        agent
+            .connect_events(&usable(), uplink(watch::channel(None).1), SILENCE_LIMIT)
+            .await
+            .expect("connect events"),
+    );
+    assert_eq!(
+        events.next().await,
+        Some(ServerEvent::Current(Some(imaged_model::Task::new(
+            task_id,
+            imaged_model::Work::CapturePartition {
+                image_id: image.id,
+                partuuid: PARTUUID.to_string(),
+            }
+        ))))
+    );
+
+    agent
+        .mark_started(task_id, Some(512))
+        .await
+        .expect("start the capture");
+    let err = agent
+        .upload_partition_table(task_id, Bytes::from_static(b"table"))
+        .await
+        .expect_err("a partition capture has no partition table");
+    assert!(
+        err.to_string()
+            .contains(&format!("No capture task for task {task_id} found")),
+        "{err}"
+    );
+    let plain: Vec<u8> = (0..20_000u32).map(|i| (i % 239) as u8).collect();
+    let uploaded = agent
+        .upload_partition_data(
+            task_id,
+            1,
+            &PartitionUpload {
+                filesystem: "ext4".to_string(),
+                size: DISK as i64 / 2,
+                fs_uuid: Some(FS_UUID.to_string()),
+                fs_label: None,
+            },
+            Cursor::new(seed::zstd(&plain).await),
+        )
+        .await
+        .expect("upload the partition");
+    agent
+        .report_root_partition(task_id, 1)
+        .await
+        .expect("report root partition");
+    agent.mark_finished(task_id).await.expect("mark finished");
+
+    let stored = s.container.image_repo.get(image.id).await.unwrap();
+    assert_eq!(stored.kind, ImageKind::Partition);
+    assert_eq!(stored.status, ImageStatus::Ready);
+    assert_eq!(stored.root_partition, Some(1));
+    assert_eq!(stored.sector_size, 512);
+    assert_eq!(stored.partitions, vec![uploaded.clone()]);
+    assert_eq!(uploaded.fs_uuid.as_deref(), Some(FS_UUID));
+    assert_eq!(uploaded.size_bytes, DISK / 2);
+    assert!(
+        !std::path::Path::new(&s.container.image_service.get_partition_table_path(image.id))
+            .exists(),
+        "a partition image stores no partition table"
+    );
+}
+
+#[tokio::test]
+async fn a_partition_deploy_through_the_client_downloads_partition_one_and_no_table() {
+    let s = harness::server().await;
+    let (agent, mac) = agent(s);
+    let host = seed::host(s, &mac, DISK).await;
+    let plain: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+    let image_id = seed::partition_image(
+        s,
+        &harness::unique_name("rc-partition-deploy"),
+        "ext4",
+        &plain,
+        FS_UUID,
+    )
+    .await;
+    let task_id =
+        seed::partition_task(s, TaskType::DeployPartition, host.id, image_id, PARTUUID).await;
+
+    let mut events = Box::pin(
+        agent
+            .connect_events(&usable(), uplink(watch::channel(None).1), SILENCE_LIMIT)
+            .await
+            .expect("connect events"),
+    );
+    assert_eq!(
+        events.next().await,
+        Some(ServerEvent::Current(Some(imaged_model::Task::new(
+            task_id,
+            imaged_model::Work::DeployPartition {
+                image_id,
+                partuuid: PARTUUID.to_string(),
+            }
+        ))))
+    );
+
+    agent
+        .mark_started(task_id, None)
+        .await
+        .expect("start the deploy");
+    let task = s.container.task_repo.get(task_id).await.unwrap();
+    assert_eq!(host_state(&task, host.id), TaskState::Running);
+
+    let layout = agent.image_layout(task_id).await.expect("image layout");
+    assert_eq!(layout.partitions, stored_partitions(s, image_id).await);
+    assert_eq!(
+        layout
+            .partitions
+            .iter()
+            .map(|p| (p.partition_number, p.size_bytes, p.fs_uuid.as_deref()))
+            .collect::<Vec<_>>(),
+        [(1, plain.len() as u64, Some(FS_UUID))]
+    );
+    let err = agent
+        .partition_table(task_id)
+        .await
+        .expect_err("a partition deploy has no partition table");
+    assert!(
+        err.to_string()
+            .contains(&format!("No restore task for task {task_id} found")),
+        "{err}"
+    );
+    let mut compressed = Vec::new();
+    agent
+        .partition_data(task_id, 1)
+        .await
+        .expect("download the partition")
+        .read_to_end(&mut compressed)
+        .await
+        .expect("read the partition");
+    assert_eq!(seed::unzstd(&compressed).await, plain);
+    assert!(
+        agent
+            .post_install(task_id)
+            .await
+            .expect("post install")
+            .scripts
+            .is_empty()
+    );
+
+    agent.mark_finished(task_id).await.expect("mark finished");
+    let task = s.container.task_repo.get(task_id).await.unwrap();
+    assert_eq!(host_state(&task, host.id), TaskState::Done);
 }

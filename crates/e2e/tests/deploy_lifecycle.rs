@@ -3,7 +3,7 @@ use std::time::Duration;
 use imaged_core::domain::task::{Task, TaskType};
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::path;
-use imaged_model::image::ImageStatus;
+use imaged_model::image::{ImageKind, ImageStatus};
 use imaged_model::task::TaskState;
 use reqwest::StatusCode;
 use serde_json::json;
@@ -54,8 +54,7 @@ async fn a_deploy_runs_end_to_end_in_the_agents_order() {
         .await
         .expect("task event");
     assert_eq!(event["Current"]["id"], task_id);
-    assert_eq!(event["Current"]["task_type"], "Deploy");
-    assert_eq!(event["Current"]["image_id"], image_id);
+    assert_eq!(event["Current"]["work"]["Deploy"]["image_id"], image_id);
 
     let task = s.container.task_repo.get(task_id).await.unwrap();
     assert_eq!(host_state(&task, host.id), TaskState::Pending);
@@ -85,14 +84,17 @@ async fn a_deploy_runs_end_to_end_in_the_agents_order() {
         "listing partitions must not start the task"
     );
 
-    let resp = s.agent_get(&path::partition_table(task_id), &mac).await;
+    let resp = s.agent_post_empty(&path::started(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let table = resp.bytes().await.expect("parttable bytes");
-    assert_eq!(table.as_ref(), parttable.as_slice());
 
     let task = s.container.task_repo.get(task_id).await.unwrap();
     assert_eq!(host_state(&task, host.id), TaskState::Running);
     assert_eq!(task.aggregate_state(), TaskState::Running);
+
+    let resp = s.agent_get(&path::partition_table(task_id), &mac).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let table = resp.bytes().await.expect("parttable bytes");
+    assert_eq!(table.as_ref(), parttable.as_slice());
 
     for (n, plain) in [(1i64, &ext4), (2i64, &vfat)] {
         let resp = s.agent_get(&path::partition_data(task_id, n), &mac).await;
@@ -143,8 +145,7 @@ async fn a_dashboard_deploy_reaches_a_connected_agent() {
         .await
         .expect("dashboard deploy pushed to the agent");
     assert_eq!(event["Current"]["id"], task_id);
-    assert_eq!(event["Current"]["task_type"], "Deploy");
-    assert_eq!(event["Current"]["image_id"], image_id);
+    assert_eq!(event["Current"]["work"]["Deploy"]["image_id"], image_id);
 
     drop(stream);
 }
@@ -189,7 +190,7 @@ async fn a_non_ready_image_is_a_precondition_failure_on_every_download() {
     let image = s
         .container
         .image_repo
-        .create_image(harness::unique_name("unready-img"))
+        .create_image(harness::unique_name("unready-img"), ImageKind::Disk)
         .await
         .unwrap();
     let task_id = seed::deploy_task(s, host.id, image.id).await;
@@ -379,7 +380,7 @@ async fn a_large_partition_streams_byte_exact() {
 }
 
 #[tokio::test]
-async fn fetching_the_parttable_twice_keeps_the_task_running() {
+async fn starting_a_deploy_twice_keeps_the_task_running_on_one_row() {
     let s = harness::server().await;
     let mac = harness::unique_mac();
     let host = seed::host(s, &mac, DISK).await;
@@ -393,6 +394,8 @@ async fn fetching_the_parttable_twice_keeps_the_task_running() {
     .await;
     let task_id = seed::deploy_task(s, host.id, image_id).await;
 
+    let resp = s.agent_post_empty(&path::started(task_id), &mac).await;
+    assert_eq!(resp.status(), StatusCode::OK);
     let resp = s.agent_get(&path::partition_table(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let first = resp.bytes().await.unwrap();
@@ -401,6 +404,8 @@ async fn fetching_the_parttable_twice_keeps_the_task_running() {
     let task = s.container.task_repo.get(task_id).await.unwrap();
     assert_eq!(host_state(&task, host.id), TaskState::Running);
 
+    let resp = s.agent_post_empty(&path::started(task_id), &mac).await;
+    assert_eq!(resp.status(), StatusCode::OK);
     let resp = s.agent_get(&path::partition_table(task_id), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let second = resp.bytes().await.unwrap();

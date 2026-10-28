@@ -1,27 +1,32 @@
 pub mod capture;
-pub mod deploy;
-pub mod multicast;
 pub mod reboot;
+pub mod restore;
+pub mod shape;
+pub mod source;
 
-pub use capture::CaptureTask;
-pub use deploy::DeployTask;
-pub use multicast::MulticastTask;
+pub use capture::Capture;
 pub use reboot::RebootTask;
+pub use restore::Restore;
+pub use shape::{Shape, SinglePartition, WholeDisk};
+pub use source::{Http, Multicast, Source};
 
 use std::time::Duration;
 
 use derive_more::Display;
 use enum_dispatch::enum_dispatch;
-use imaged_disk::Progress;
+use imaged_model::Work;
 
 use crate::agent::Agent;
 use crate::server::Rejected;
-use crate::status::{Outcome, PartitionProgress, Phase, Step};
-use crate::sys::disk::{BlockDevice, PartitionTarget};
+use crate::status::Outcome;
 
 const PARTCLONE_LOG: &str = "/tmp/partclone-log";
+const PARTTABLE_TMP: &str = "/parttable.bin";
 const REPORT_RETRY_START: Duration = Duration::from_secs(1);
 const REPORT_RETRY_CAP: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug)]
+pub struct Fresh;
 
 #[allow(
     async_fn_in_trait,
@@ -33,33 +38,7 @@ pub trait ClientTaskExt: std::fmt::Display {
 
     fn agent(&self) -> &Agent;
 
-    async fn run(&self) -> anyhow::Result<()> {
-        image_target_disk(self).await
-    }
-
-    async fn target_disk(&self) -> anyhow::Result<BlockDevice> {
-        crate::sys::disk::find_target_disk().await
-    }
-
-    async fn handle_partition_table(&self, _: &str) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn plan_partitions(&self, disk: &BlockDevice) -> anyhow::Result<Vec<PartitionTarget>> {
-        disk.formatted_partitions()
-    }
-
-    async fn handle_partition(
-        &self,
-        _: PartitionTarget,
-        _: PartitionProgress,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn after_partitions(&self, _: &[PartitionTarget]) -> anyhow::Result<()> {
-        Ok(())
-    }
+    async fn run(&self) -> anyhow::Result<()>;
 
     async fn finalize(&self) -> anyhow::Result<()> {
         report_finished(self).await
@@ -76,27 +55,6 @@ pub trait ClientTaskExt: std::fmt::Display {
             .task_ended(Outcome::Failed(err.to_string()));
         Ok(())
     }
-}
-
-async fn image_target_disk(task: &(impl ClientTaskExt + ?Sized)) -> anyhow::Result<()> {
-    let status = &task.agent().status;
-    let disk = task.target_disk().await?;
-
-    status.update_task(|task| task.step = Step::PartitionTable);
-    task.handle_partition_table(&disk.get_device()).await?;
-
-    let disk = task.target_disk().await?;
-
-    let partitions = task.plan_partitions(&disk).await?;
-    let progress = status.partitions(&partitions);
-    for (index, (partition, progress)) in partitions.iter().zip(progress).enumerate() {
-        progress.report(Progress::default());
-        task.handle_partition(partition.clone(), progress).await?;
-        status.update_task(|task| task.partitions[index].phase = Phase::Done);
-    }
-
-    status.update_task(|task| task.step = Step::Finishing);
-    task.after_partitions(&partitions).await
 }
 
 async fn report<Report>(
@@ -132,40 +90,37 @@ async fn finish_and_reboot(task: &impl ClientTaskExt) -> anyhow::Result<()> {
     crate::reboot::after_countdown(task.agent()).await
 }
 
-async fn image_partitions(
-    agent: &Agent,
-    task_id: i64,
-    disk: &BlockDevice,
-) -> anyhow::Result<Vec<PartitionTarget>> {
-    let layout = agent.server.image_layout(task_id).await?;
-    if layout.partitions.is_empty() {
-        anyhow::bail!("image for task {task_id} has no partitions to restore");
-    }
-    layout
-        .partitions
-        .into_iter()
-        .map(|p| disk.partition_target(p.partition_number, p.fstype))
-        .collect()
-}
-
 #[derive(Display)]
 #[display("{_variant}")]
 #[enum_dispatch(ClientTaskExt)]
 pub enum Task {
-    Capture(capture::CaptureTask),
-    Deploy(deploy::DeployTask),
-    Multicast(multicast::MulticastTask),
-    Reboot(reboot::RebootTask),
+    Capture(Capture<WholeDisk>),
+    CapturePartition(Capture<SinglePartition>),
+    Deploy(Restore<Http, WholeDisk>),
+    Multicast(Restore<Multicast, WholeDisk>),
+    DeployPartition(Restore<Http, SinglePartition>),
+    MulticastPartition(Restore<Multicast, SinglePartition>),
+    Reboot(RebootTask),
 }
 
 impl Task {
     pub fn new(agent: Agent, task: &imaged_model::Task) -> Self {
         let id = task.id;
-        match task.task_type {
-            imaged_model::TaskType::Capture => Self::Capture(CaptureTask::new(agent, id)),
-            imaged_model::TaskType::Deploy => Self::Deploy(DeployTask::new(agent, id)),
-            imaged_model::TaskType::Multicast => Self::Multicast(MulticastTask::new(agent, id)),
-            imaged_model::TaskType::Reboot => Self::Reboot(RebootTask::new(agent, id)),
+        let partition = |partuuid: &String| SinglePartition::new(partuuid.clone());
+        match &task.work {
+            Work::Capture { .. } => Capture::new(agent, id, WholeDisk).into(),
+            Work::CapturePartition { partuuid, .. } => {
+                Capture::new(agent, id, partition(partuuid)).into()
+            }
+            Work::Deploy { .. } => Restore::new(agent, id, Http, WholeDisk).into(),
+            Work::Multicast { .. } => Restore::new(agent, id, Multicast, WholeDisk).into(),
+            Work::DeployPartition { partuuid, .. } => {
+                Restore::new(agent, id, Http, partition(partuuid)).into()
+            }
+            Work::MulticastPartition { partuuid, .. } => {
+                Restore::new(agent, id, Multicast, partition(partuuid)).into()
+            }
+            Work::Reboot => RebootTask::new(agent, id).into(),
         }
     }
 }

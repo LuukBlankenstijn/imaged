@@ -12,3 +12,14 @@ pub enum ConnectionChange {
     Connected(Vec<i64>),
     Changed(HostConnectionEvent),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostPartition {
+    pub number: i64,
+    pub partuuid: String,
+    pub partlabel: Option<String>,
+    pub label: Option<String>,
+    pub uuid: Option<String>,
+    pub fstype: Option<String>,
+    pub size_bytes: u64,
+}

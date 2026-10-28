@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::{Stream, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -14,6 +14,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use imaged_core::AgentLiveness;
 use imaged_core::di::DIContainer;
 use imaged_core::test_support::{self, TestDir};
+use imaged_model::AgentEvent;
 use imaged_model::agent::{MAC_HEADER, route};
 
 pub mod seed;
@@ -300,7 +301,15 @@ pub async fn connect_agent_stream(
 /// An agent control connection nobody ever reads from, so tungstenite never
 /// answers the server's liveness pings.
 pub struct SilentAgent {
-    _ws: WsStream,
+    ws: WsStream,
+}
+
+impl SilentAgent {
+    pub async fn send(&mut self, event: &AgentEvent) -> anyhow::Result<()> {
+        let json = serde_json::to_string(event)?;
+        self.ws.send(Message::text(json)).await?;
+        Ok(())
+    }
 }
 
 pub async fn connect_silent_agent(
@@ -309,7 +318,7 @@ pub async fn connect_silent_agent(
     disk_size_bytes: u64,
 ) -> anyhow::Result<SilentAgent> {
     Ok(SilentAgent {
-        _ws: connect_ws(s, mac, disk_size_bytes).await?,
+        ws: connect_ws(s, mac, disk_size_bytes).await?,
     })
 }
 

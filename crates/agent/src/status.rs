@@ -245,17 +245,19 @@ impl Status {
     }
 
     pub fn task_started(&self, task: &Task) {
+        let kind = task.work.task_type();
         self.update(|state| {
             state.reboot = Reboot::NotPlanned;
             state.task = Some(TaskState {
                 id: task.id,
-                kind: task.task_type,
-                image_id: task.image_id,
+                kind,
+                image_id: task.work.image_id(),
                 started: Instant::now(),
                 step: Step::Starting,
                 partitions: Vec::new(),
                 scripts: Vec::new(),
-                multicast: (task.task_type == TaskType::Multicast).then(MulticastState::default),
+                multicast: matches!(kind, TaskType::Multicast | TaskType::MulticastPartition)
+                    .then(MulticastState::default),
                 outcome: None,
             });
         });
@@ -342,6 +344,7 @@ impl PartitionProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use imaged_model::Work;
 
     fn status() -> Status {
         Status::new(Identity {
@@ -357,6 +360,8 @@ mod tests {
             number,
             filesystem,
             size,
+            fs_uuid: None,
+            fs_label: None,
         }
     }
 
@@ -369,7 +374,7 @@ mod tests {
     }
 
     fn deploying(status: &Status) -> Vec<PartitionProgress> {
-        status.task_started(&Task::new(7, TaskType::Deploy, Some(3)));
+        status.task_started(&Task::new(7, Work::Deploy { image_id: 3 }));
         status.partitions(&[
             target(1, Filesystem::Vfat, 100),
             target(2, Filesystem::Swap, 10_000),
@@ -407,7 +412,7 @@ mod tests {
     #[test]
     fn partitions_without_imaged_bytes_do_not_divide_by_zero() {
         let status = status();
-        status.task_started(&Task::new(7, TaskType::Deploy, None));
+        status.task_started(&Task::new(7, Work::Deploy { image_id: 3 }));
         let partitions = status.partitions(&[target(1, Filesystem::Swap, 10)]);
 
         partitions[0].report(halfway());
@@ -459,7 +464,7 @@ mod tests {
     #[test]
     fn multicast_totals_carry_over_from_file_to_file() {
         let status = status();
-        status.task_started(&Task::new(8, TaskType::Multicast, Some(3)));
+        status.task_started(&Task::new(8, Work::Multicast { image_id: 3 }));
         let second = Duration::from_secs(1);
 
         status.multicast_sample(1, receive(10, 0.02, 40), second);

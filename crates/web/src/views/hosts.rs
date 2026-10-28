@@ -12,6 +12,9 @@ use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
 use crate::components::modal::{ConfirmDialog, Modal};
+use crate::components::partitions::{
+    HostPartitionList, OverwriteWarning, PartitionTargetPicker, deploy_target, overwrite_message,
+};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner, StatusDot,
@@ -188,12 +191,15 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
     let ip_display = host.ip.clone().unwrap_or_else(|| "\u{2014}".to_string());
     let disk = host.disk_size_bytes.map(format_bytes);
     let disk_error = host.disk_error.clone();
+    let partitions = host.partitions.clone();
+    let partition_count = partitions.len();
     let connected = use_connection(host_id);
     let delay = index * 40;
 
     let mut editing = use_signal(|| false);
     let mut draft = use_signal(String::new);
     let mut deploy_open = use_signal(|| false);
+    let mut partitions_open = use_signal(|| false);
     let mut reboot_open = use_signal(|| false);
     let mut delete_open = use_signal(|| false);
 
@@ -267,7 +273,23 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
             td { class: "px-4 py-3 font-mono text-xs text-fog-400", "{ip_display}" }
             td { class: "px-4 py-3 font-mono text-xs text-fog-300",
                 match (disk, disk_error) {
-                    (Some(size), _) => rsx! { "{size}" },
+                    (Some(size), _) => rsx! {
+                        div { class: "flex items-center gap-2",
+                            span { "{size}" }
+                            if partition_count > 0 {
+                                button {
+                                    class: "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-fog-500 transition-colors hover:bg-ink-700 hover:text-fog-100",
+                                    aria_expanded: partitions_open().to_string(),
+                                    onclick: move |_| partitions_open.toggle(),
+                                    "{partition_count} partition(s)"
+                                    Icon {
+                                        name: "chevron",
+                                        class: if partitions_open() { "w-3 h-3 rotate-180 transition-transform" } else { "w-3 h-3 transition-transform" },
+                                    }
+                                }
+                            }
+                        }
+                    },
                     (None, reason) => rsx! {
                         span { class: "text-warn", "no usable disk" }
                         if let Some(reason) = reason {
@@ -361,6 +383,13 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
                 }
             }
         }
+        if partitions_open() && partition_count > 0 {
+            tr { class: "border-t border-line/30",
+                td { colspan: 6, class: "px-4 pb-3 pt-1",
+                    HostPartitionList { partitions }
+                }
+            }
+        }
     }
 }
 
@@ -369,8 +398,15 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
     let host_id = host.id;
     let images = use_resource(|| async move { get_all_images().await });
     let selected = use_signal(|| None::<i64>);
+    let partition = use_signal(|| None::<String>);
     let inputs = use_signal(|| None::<DeployInputs>);
     let mut busy = use_signal(|| false);
+    let erases_disk = match &*images.read() {
+        Some(Ok(list)) => !list
+            .iter()
+            .any(|i| Some(i.id) == selected() && i.kind.is_partition()),
+        _ => true,
+    };
 
     rsx! {
         Modal {
@@ -379,7 +415,9 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
             dismissible: !busy(),
             onclose: move |_| onclose.call(()),
             title: "Deploy image",
-            EraseWarning { hosts: vec![host.clone()] }
+            if erases_disk {
+                EraseWarning { hosts: vec![host.clone()] }
+            }
             {
                 match &*images.read() {
                     Some(Ok(list)) => {
@@ -391,11 +429,17 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                         let chosen = selected()
                             .and_then(|id| ready.iter().find(|i| i.id == id))
                             .cloned();
+                        let target = chosen
+                            .as_ref()
+                            .zip(partition())
+                            .and_then(|(image, uuid)| deploy_target(image, &host, &uuid));
                         let request = deploy_request(
                             host_id,
-                            chosen.as_ref().map(|i| i.id),
+                            chosen.as_ref(),
+                            target.as_ref().map(|p| p.partuuid.as_str()),
                             inputs.read().as_ref(),
                         );
+                        let into_partition = chosen.as_ref().is_some_and(|i| i.kind.is_partition());
                         if ready.is_empty() {
                             rsx! {
                                 EmptyState {
@@ -406,6 +450,12 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                         } else {
                             rsx! {
                                 ImagePicker { images: ready, selected }
+                                if let Some(image) = chosen.clone().filter(|i| i.kind.is_partition()) {
+                                    PartitionTargetPicker { image, host: host.clone(), selected: partition }
+                                    if let Some(target) = target.as_ref() {
+                                        OverwriteWarning { message: overwrite_message(target, &host) }
+                                    }
+                                }
                                 if let Some(image) = chosen {
                                     DeployInputsForm {
                                         image,
@@ -446,7 +496,7 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
                                         } else {
                                             Icon { name: "deploy", class: "w-3.5 h-3.5" }
                                         }
-                                        "Erase disk and deploy"
+                                        if into_partition { "Overwrite partition and deploy" } else { "Erase disk and deploy" }
                                     }
                                 }
                             }
@@ -477,6 +527,7 @@ mod tests {
             disk_size_bytes: Some(0),
             disk_error: None,
             ip: ip.map(str::to_string),
+            partitions: Vec::new(),
         }
     }
 

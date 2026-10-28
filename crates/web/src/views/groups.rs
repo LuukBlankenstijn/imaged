@@ -16,6 +16,9 @@ use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::menu::{ActionMenu, MenuItem};
 use crate::components::modal::{ConfirmDialog, Modal};
+use crate::components::partitions::{
+    MatchBy, OverwriteWarning, PartitionMatcher, multicast_targets,
+};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
     Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner, StatusDot,
@@ -540,6 +543,8 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
     let members = use_resource(move || async move { get_hosts_by_group(group_id).await });
     let selected = use_signal(|| None::<i64>);
     let inputs = use_signal(|| None::<DeployInputs>);
+    let match_by = use_signal(|| MatchBy::Label);
+    let match_value = use_signal(String::new);
     let mut busy = use_signal(|| false);
 
     let loaded = match (&*images.read(), &*members.read()) {
@@ -570,17 +575,39 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
                         .and_then(|id| ready.iter().find(|i| i.id == id))
                         .cloned();
                     let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
+                    let into_partition = chosen.as_ref().is_some_and(|i| i.kind.is_partition());
+                    let targets = chosen
+                        .as_ref()
+                        .filter(|i| i.kind.is_partition())
+                        .and_then(|image| multicast_targets(image, &hosts, match_by(), &match_value()));
                     let request = multicast_request(
                         &host_ids,
-                        chosen.as_ref().map(|i| i.id),
+                        chosen.as_ref(),
+                        targets,
                         inputs.read().as_ref(),
                     );
                     rsx! {
-                        EraseWarning { hosts: hosts.clone() }
+                        if !into_partition {
+                            EraseWarning { hosts: hosts.clone() }
+                        }
                         if ready.is_empty() {
                             EmptyState { title: "No ready images", hint: "Capture an image first." }
                         } else {
                             ImagePicker { images: ready, selected }
+                            if let Some(image) = chosen.clone().filter(|i| i.kind.is_partition()) {
+                                PartitionMatcher {
+                                    image,
+                                    hosts: hosts.clone(),
+                                    by: match_by,
+                                    value: match_value,
+                                }
+                                OverwriteWarning {
+                                    message: format!(
+                                        "Overwrites the matched partition on each of these {} host(s); other partitions are untouched. This cannot be undone.",
+                                        host_ids.len()
+                                    ),
+                                }
+                            }
                             if let Some(image) = chosen {
                                 DeployInputsForm { image, hosts, inputs }
                             }
@@ -615,7 +642,11 @@ fn MulticastModal(group_id: i64, onclose: EventHandler<()>, on_done: EventHandle
                                     } else {
                                         Icon { name: "multicast", class: "w-3.5 h-3.5" }
                                     }
-                                    "Erase {host_ids.len()} disk(s) and multicast"
+                                    if into_partition {
+                                        "Overwrite {host_ids.len()} partition(s) and multicast"
+                                    } else {
+                                        "Erase {host_ids.len()} disk(s) and multicast"
+                                    }
                                 }
                             }
                         }

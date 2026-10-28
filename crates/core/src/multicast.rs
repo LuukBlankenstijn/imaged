@@ -92,7 +92,10 @@ struct Worker {
 
 impl Worker {
     async fn fail_orphans(&self) -> Result {
-        self.tasks.fail_running(TaskType::Multicast, ORPHANED).await
+        for task_type in [TaskType::Multicast, TaskType::MulticastPartition] {
+            self.tasks.fail_running(task_type, ORPHANED).await?;
+        }
+        Ok(())
     }
 
     async fn run(self, mut woken: watch::Receiver<()>) {
@@ -184,6 +187,7 @@ mod tests {
     use crate::di::DIContainer;
     use crate::progress::Snapshot;
     use crate::test_support::container;
+    use imaged_model::image::ImageKind;
     use imaged_model::{get_multicast_port, multicast_group};
     use scuttlecast::{error::ProtoError, receiver::Receiver};
     use std::{
@@ -222,11 +226,14 @@ mod tests {
     async fn image(c: &DIContainer, parttable: &[u8], partition: &[u8]) -> i64 {
         let image = c
             .image_repo
-            .create_image(format!("cast-{}", IMAGE_ID.fetch_add(1, Ordering::Relaxed)))
+            .create_image(
+                format!("cast-{}", IMAGE_ID.fetch_add(1, Ordering::Relaxed)),
+                ImageKind::Disk,
+            )
             .await
             .unwrap();
         c.image_repo
-            .save_partition(image.id, 1, "ext4", partition.len() as i64)
+            .save_partition(image.id, 1, "ext4", partition.len() as i64, None, None)
             .await
             .unwrap();
         let table = PathBuf::from(c.image_service.get_partition_table_path(image.id));

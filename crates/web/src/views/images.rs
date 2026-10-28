@@ -4,16 +4,19 @@ use crate::api::hosts::*;
 use crate::api::images::*;
 use crate::api::scripts::{
     get_all_scripts, get_image_scripts, set_image_scripts, set_root_partition,
+    set_script_root_partition,
 };
+use crate::components::deploy_inputs::scripts_lack_root;
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
+use crate::components::partitions::{capture_sources, partition_summary};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::*;
 use crate::format::{format_bytes, format_relative};
 use crate::model::{
-    CreateImageRequest, Image, ImageScriptsRequest, ImageStatus, RootPartitionRequest, Script,
-    UpdateName,
+    CreateImageRequest, Image, ImagePartition, ImageScriptsRequest, ImageStatus,
+    RootPartitionRequest, Script, ScriptRootRequest, UpdateName,
 };
 
 #[component]
@@ -23,13 +26,22 @@ pub fn Images() -> Element {
 
     let mut new_name = use_signal(String::new);
     let mut host_id = use_signal(|| 0i64);
+    let mut source = use_signal(String::new);
     let mut capturing = use_signal(|| false);
 
     let can_create = !new_name.read().trim().is_empty() && host_id() != 0 && !capturing();
     let polled = images.read();
+    let sources = match &*hosts.read() {
+        Some(Ok(list)) => list
+            .iter()
+            .find(|h| h.id == host_id())
+            .map(capture_sources)
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
 
     rsx! {
-        PageHeader { title: "Images", subtitle: "Captured disk images available to deploy",
+        PageHeader { title: "Images", subtitle: "Captured disk and partition images available to deploy",
             ImportButton { on_imported: move |_| images.restart() }
         }
 
@@ -60,7 +72,10 @@ pub fn Images() -> Element {
                             id: "capture-host",
                             class: "w-full appearance-none rounded-md border border-ink-600 bg-ink-900/60 px-3 py-1.5 pr-9 font-mono text-sm text-fog-100 focus:border-amber-500/60 focus:outline-none focus-visible:glow-amber",
                             value: "{host_id}",
-                            onchange: move |e| host_id.set(e.value().parse().unwrap_or(0)),
+                            onchange: move |e| {
+                                host_id.set(e.value().parse().unwrap_or(0));
+                                source.set(String::new());
+                            },
                             option { value: "0", disabled: true, "select host…" }
                             {
                                 match &*hosts.read() {
@@ -78,21 +93,50 @@ pub fn Images() -> Element {
                         }
                     }
                 }
+                div { class: "min-w-56",
+                    label {
+                        class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        r#for: "capture-source",
+                        "Source"
+                    }
+                    div { class: "relative",
+                        select {
+                            id: "capture-source",
+                            class: "w-full appearance-none rounded-md border border-ink-600 bg-ink-900/60 px-3 py-1.5 pr-9 font-mono text-sm text-fog-100 focus:border-amber-500/60 focus:outline-none focus-visible:glow-amber disabled:opacity-40",
+                            disabled: host_id() == 0,
+                            onchange: move |e| source.set(e.value()),
+                            option { value: "", selected: source().is_empty(), "whole disk" }
+                            for p in sources.iter() {
+                                option {
+                                    key: "{p.partuuid}",
+                                    value: "{p.partuuid}",
+                                    selected: source() == p.partuuid,
+                                    {format!("partition {}", partition_summary(p))}
+                                }
+                            }
+                        }
+                        div { class: "pointer-events-none absolute inset-y-0 right-2 flex items-center text-fog-500",
+                            Icon { name: "chevron", class: "w-4 h-4" }
+                        }
+                    }
+                }
                 Button {
                     variant: ButtonVariant::Primary,
                     disabled: !can_create,
                     onclick: move |_| {
                         let name = new_name.read().trim().to_string();
                         let hid = host_id();
+                        let partition = Some(source()).filter(|uuid| !uuid.is_empty());
                         if name.is_empty() || hid == 0 {
                             return;
                         }
                         let mut images = images;
                         let mut new_name = new_name;
                         let mut host_id = host_id;
+                        let mut source = source;
                         capturing.set(true);
                         spawn(async move {
-                            match create_image(CreateImageRequest { name, host_id: hid }).await {
+                            match create_image(CreateImageRequest { name, host_id: hid, partition }).await {
                                 Ok(capture) => {
                                     toast_success(
                                         "Capture queued",
@@ -100,6 +144,7 @@ pub fn Images() -> Element {
                                     );
                                     new_name.set(String::new());
                                     host_id.set(0);
+                                    source.set(String::new());
                                     images.restart();
                                 }
                                 Err(e) => toast_error("Capture failed", e.to_string()),
@@ -126,7 +171,7 @@ pub fn Images() -> Element {
                     Card {
                         EmptyState {
                             title: "No images captured",
-                            hint: "Capture a disk image from a source host to build the deploy library.",
+                            hint: "Capture a disk or partition image from a source host to build the deploy library.",
                         }
                     }
                 },
@@ -203,11 +248,10 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
 
     let id = image.id;
     let mut image_scripts = use_resource(move || async move { get_image_scripts(id).await });
-    let script_count = match &*image_scripts.read() {
-        Some(Ok(list)) => list.len(),
-        _ => 0,
+    let (script_count, missing_root) = match &*image_scripts.read() {
+        Some(Ok(list)) => (list.len(), scripts_lack_root(&image, list)),
+        _ => (0, false),
     };
-    let missing_root = script_count > 0 && image.root_partition.is_none();
     let status = image.status;
     let name = image.name.clone();
     let total: u64 = image.partitions.iter().map(|p| p.size_bytes).sum();
@@ -304,6 +348,9 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                     if missing_root {
                         Badge { tone: Tone::Warn, "no root partition" }
                     }
+                    if image.kind.is_partition() {
+                        Badge { tone: Tone::Neutral, "partition" }
+                    }
                     ImageStatusBadge { status }
                     Button {
                         variant: if setup_open() { ButtonVariant::Primary } else { ButtonVariant::Ghost },
@@ -335,7 +382,7 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                 if missing_root {
                     div { class: "flex items-start gap-2 border-t border-warn/20 bg-warn/5 px-4 py-2 font-mono text-xs text-warn",
                         Icon { name: "alert", class: "mt-0.5 w-3.5 h-3.5 shrink-0" }
-                        span { "Post-install scripts are attached but no root partition is set: deploys of this image are refused until one is selected." }
+                        span { "Post-install scripts are attached but not every one has a root partition: deploys of this image are refused until an image root is selected or each script picks its own." }
                     }
                 }
                 if setup_open() {
@@ -345,6 +392,7 @@ fn ImageRow(image: Image, index: usize, on_changed: EventHandler<()>) -> Element
                             Some(Ok(current)) => rsx! {
                                 ImageScriptList {
                                     image_id: id,
+                                    partitions: image.partitions.clone(),
                                     current: current.clone(),
                                     on_saved: move |_| image_scripts.restart(),
                                 }
@@ -441,7 +489,12 @@ fn RootPartitionPicker(image: Image, on_changed: EventHandler<()>) -> Element {
 }
 
 #[component]
-fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<()>) -> Element {
+fn ImageScriptList(
+    image_id: i64,
+    partitions: Vec<ImagePartition>,
+    current: Vec<Script>,
+    on_saved: EventHandler<()>,
+) -> Element {
     let all_scripts = use_resource(|| async move { get_all_scripts().await });
     let mut draft = use_signal({
         let seed = current.clone();
@@ -479,6 +532,15 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
                             span { class: "w-5 font-mono text-xs text-fog-600", "{index + 1}" }
                             span { class: "min-w-0 flex-1 truncate font-mono text-sm text-fog-100", "{script.name}" }
                             span { class: "font-mono text-[11px] text-fog-600", "{script.inputs.len()} input(s)" }
+                            ScriptRootPicker {
+                                image_id,
+                                position: index as i64,
+                                script_name: script.name.clone(),
+                                saved: current.iter().find(|s| s.id == script.id).and_then(|s| s.root_partition),
+                                partitions: partitions.clone(),
+                                disabled: dirty || saving(),
+                                on_saved,
+                            }
                             Button {
                                 variant: ButtonVariant::Subtle,
                                 class: "px-1.5",
@@ -548,6 +610,56 @@ fn ImageScriptList(image_id: i64, current: Vec<Script>, on_saved: EventHandler<(
                         });
                     },
                     "Save"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ScriptRootPicker(
+    image_id: i64,
+    position: i64,
+    script_name: String,
+    saved: Option<i64>,
+    partitions: Vec<ImagePartition>,
+    disabled: bool,
+    on_saved: EventHandler<()>,
+) -> Element {
+    let mut shown = use_signal(|| saved);
+    use_effect(use_reactive!(|saved| shown.set(saved)));
+    let hint = if disabled {
+        "Save the script order before changing a script's root partition"
+    } else {
+        "Partition the script runs chrooted in"
+    };
+
+    rsx! {
+        select {
+            class: "{FIELD_CLASSES} w-36 py-1 font-mono text-xs disabled:opacity-40",
+            aria_label: "Root partition of {script_name}",
+            title: hint,
+            disabled: disabled || partitions.is_empty(),
+            onchange: move |e| {
+                let partition_number = e.value().parse::<i64>().ok();
+                shown.set(partition_number);
+                spawn(async move {
+                    match set_script_root_partition(ScriptRootRequest { image_id, position, partition_number }).await {
+                        Ok(_) => on_saved.call(()),
+                        Err(err) => {
+                            shown.set(saved);
+                            toast_error("Script root partition not saved", err.to_string());
+                        }
+                    }
+                });
+            },
+            option { value: "", selected: shown().is_none(), "image root" }
+            for p in partitions.iter() {
+                option {
+                    key: "{p.partition_number}",
+                    value: "{p.partition_number}",
+                    selected: shown() == Some(p.partition_number),
+                    {format!("root #{} · {}", p.partition_number, p.fstype)}
                 }
             }
         }

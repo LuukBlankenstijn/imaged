@@ -5,6 +5,7 @@ use crate::api::tasks::{cancel_task, get_script_runs, kick_host, list_tasks, ret
 use crate::components::hooks::{use_poll, use_poll_while};
 use crate::components::icons::Icon;
 use crate::components::modal::ConfirmDialog;
+use crate::components::partitions::partition_name;
 use crate::components::progress::use_task_progress;
 use crate::components::toast::toast_error;
 use crate::components::ui::{
@@ -13,7 +14,7 @@ use crate::components::ui::{
 };
 use crate::format::{format_bytes, format_duration, format_relative};
 use crate::model::{
-    HostProgress, KickRequest, MulticastProgress, ReceiverProgress, ScriptRun, Stage, Task,
+    Host, HostProgress, KickRequest, MulticastProgress, ReceiverProgress, ScriptRun, Stage, Task,
     TaskHost, TaskProgress, TaskQuery, TaskState, TaskStatus, TaskType, TransferPhase,
 };
 
@@ -65,6 +66,10 @@ pub fn Tasks() -> Element {
         tasks.reload();
     };
     let polled = tasks.read();
+    let inventory: Vec<Host> = match &*hosts.read() {
+        Some(Ok(list)) => list.clone(),
+        _ => Vec::new(),
+    };
     let next_cursor = polled.value.as_ref().and_then(|page| page.next_cursor);
     let on_first_page = cursors.read().is_empty();
 
@@ -134,6 +139,7 @@ pub fn Tasks() -> Element {
                                 key: "{t.id}",
                                 task: t.clone(),
                                 index: i,
+                                inventory: inventory.clone(),
                                 on_changed: move |_| tasks.restart(),
                             }
                         }
@@ -176,16 +182,51 @@ pub fn Tasks() -> Element {
     }
 }
 
-pub(crate) fn reimaged_hosts(task: &Task) -> Vec<String> {
-    task.hosts
+pub(crate) fn task_partition(host: &TaskHost, inventory: &[Host]) -> Option<String> {
+    let partuuid = host.partuuid.as_deref()?;
+    let known = inventory
         .iter()
-        .filter(|h| matches!(h.state, TaskState::Failed | TaskState::Cancelled))
-        .map(|h| h.host_name.clone())
-        .collect()
+        .find(|h| h.id == host.host_id)
+        .and_then(|h| h.partitions.iter().find(|p| p.partuuid == partuuid));
+    Some(match known {
+        Some(partition) => format!("partition {}", partition_name(partition)),
+        None => format!("partition {partuuid}"),
+    })
+}
+
+pub(crate) fn retry_message(task: &Task, inventory: &[Host]) -> String {
+    let image = task.image_name.as_deref().unwrap_or("\u{2014}");
+    let again = task
+        .hosts
+        .iter()
+        .filter(|h| matches!(h.state, TaskState::Failed | TaskState::Cancelled));
+    if task.hosts.iter().any(|h| h.partuuid.is_some()) {
+        let targets: Vec<String> = again
+            .map(|h| match task_partition(h, inventory) {
+                Some(partition) => format!("{partition} on {}", h.host_name),
+                None => h.host_name.clone(),
+            })
+            .collect();
+        format!(
+            "Retrying overwrites {} again with {image}; other partitions are untouched. Continue?",
+            targets.join(", ")
+        )
+    } else {
+        let names: Vec<&str> = again.map(|h| h.host_name.as_str()).collect();
+        format!(
+            "Retrying erases the disks of {} again and restores {image} onto them. Continue?",
+            names.join(", ")
+        )
+    }
 }
 
 #[component]
-fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
+fn TaskRow(
+    task: Task,
+    index: usize,
+    inventory: Vec<Host>,
+    on_changed: EventHandler<()>,
+) -> Element {
     let task_id = task.id;
     let mut expanded = use_signal(|| false);
     let mut cancel_open = use_signal(|| false);
@@ -204,7 +245,8 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
         TaskState::Cancelled | TaskState::Failed | TaskState::Partial
     );
     let restores_disk = matches!(task.r#type, TaskType::Deploy | TaskType::Multicast);
-    let reimaged = reimaged_hosts(&task).join(", ");
+    let partition_task = task.hosts.iter().any(|h| h.partuuid.is_some());
+    let retry_text = retry_message(&task, &inventory);
 
     let image_label = task
         .image_name
@@ -225,7 +267,8 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
             let receiver = multicast
                 .filter(|_| running)
                 .and_then(|m| m.receivers.iter().find(|r| r.host_id == h.host_id).cloned());
-            (h.clone(), reported, receiver)
+            let partition = task_partition(h, &inventory);
+            (h.clone(), reported, receiver, partition)
         })
         .collect();
     let receiving = multicast.is_some();
@@ -270,6 +313,9 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
                     onclick: move |_| expanded.toggle(),
                     Icon { name: "chevron", class: if expanded() { "w-4 h-4 rotate-180 transition-transform text-fog-500" } else { "w-4 h-4 transition-transform text-fog-500" } }
                     TaskTypeBadge { r#type: task.r#type }
+                    if partition_task {
+                        Badge { tone: Tone::Neutral, "partition" }
+                    }
                     TaskStateBadge { state: task.state }
                     div { class: "min-w-0 flex-1 truncate text-sm text-fog-300",
                         span { class: "font-mono text-xs text-fog-500", "#{task.id} " }
@@ -317,11 +363,12 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
             if expanded() {
                 div { class: "border-t border-line/60 px-4 py-3",
                     div { class: "flex flex-col gap-2",
-                        for (h, reported, receiver) in hosts.iter() {
+                        for (h, reported, receiver, partition) in hosts.iter() {
                             TaskHostRow {
                                 key: "{h.host_id}",
                                 task_id,
                                 host: h.clone(),
+                                partition: partition.clone(),
                                 progress: reported.clone(),
                                 receiver: receiver.clone(),
                                 kickable: receiving && h.state == TaskState::Running,
@@ -335,7 +382,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
             ConfirmDialog {
                 open: cancel_open(),
                 title: "Cancel task",
-                message: "Cancelling interrupts an in-progress disk operation on the target hosts. Continue?",
+                message: if partition_task { "Cancelling interrupts an in-progress partition operation on the target hosts. Continue?" } else { "Cancelling interrupts an in-progress disk operation on the target hosts. Continue?" },
                 confirm_label: "Cancel task",
                 danger: true,
                 onconfirm: move |_| {
@@ -347,8 +394,8 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
             ConfirmDialog {
                 open: retry_open(),
                 title: "Retry task",
-                message: format!("Retrying erases the disks of {reimaged} again and restores {image_label} onto them. Continue?"),
-                confirm_label: "Erase and retry",
+                message: retry_text,
+                confirm_label: if partition_task { "Overwrite and retry" } else { "Erase and retry" },
                 danger: true,
                 onconfirm: move |_| {
                     retry_open.set(false);
@@ -380,6 +427,7 @@ fn TaskRow(task: Task, index: usize, on_changed: EventHandler<()>) -> Element {
 fn TaskHostRow(
     task_id: i64,
     host: TaskHost,
+    partition: Option<String>,
     progress: Option<HostProgress>,
     receiver: Option<ReceiverProgress>,
     kickable: bool,
@@ -398,6 +446,9 @@ fn TaskHostRow(
                     span { class: "text-fog-100", "{host.host_name}" }
                     span { class: "font-mono text-xs text-fog-500", "{host.mac_address}" }
                     TaskStateBadge { state: host.state }
+                    if let Some(partition) = partition {
+                        span { class: "font-mono text-xs text-fog-400", "{partition}" }
+                    }
                     if let Some(started) = host.started_at {
                         span { class: "font-mono text-xs text-fog-600", "start {format_relative(started)}" }
                     }
@@ -684,6 +735,7 @@ mod tests {
             error: None,
             started_at: None,
             finished_at: None,
+            partuuid: None,
         }
     }
 
@@ -785,23 +837,71 @@ mod tests {
         assert!(!missing.contains("holding up"), "{missing}");
     }
 
-    #[test]
-    fn retrying_names_only_the_hosts_whose_disks_are_erased_again() {
-        let task = Task {
+    fn multicast_task(hosts: Vec<TaskHost>) -> Task {
+        Task {
             id: 3,
             r#type: TaskType::Multicast,
-            hosts: vec![
-                task_host(1, TaskState::Done),
-                task_host(2, TaskState::Failed),
-                task_host(3, TaskState::Cancelled),
-            ],
+            hosts,
             image_id: Some(9),
             state: TaskState::Partial,
             created_at: 0,
             image_name: Some("golden".to_string()),
             image_deleted: false,
-        };
+        }
+    }
 
-        assert_eq!(reimaged_hosts(&task), ["lab-2", "lab-3"]);
+    #[test]
+    fn retrying_names_only_the_hosts_whose_disks_are_erased_again() {
+        let task = multicast_task(vec![
+            task_host(1, TaskState::Done),
+            task_host(2, TaskState::Failed),
+            task_host(3, TaskState::Cancelled),
+        ]);
+
+        let message = retry_message(&task, &[]);
+
+        assert!(message.contains("lab-2, lab-3"), "{message}");
+        assert!(!message.contains("lab-1"), "{message}");
+        assert!(message.contains("erases the disks"), "{message}");
+    }
+
+    #[test]
+    fn retrying_a_partition_task_names_each_target_partition_and_spares_the_disk() {
+        let target = |host_id: i64, state, partuuid: &str| TaskHost {
+            partuuid: Some(partuuid.to_string()),
+            ..task_host(host_id, state)
+        };
+        let inventory = [Host {
+            id: 2,
+            mac_address: "aa:bb:cc:dd:ee:02".to_string(),
+            name: "lab-2".to_string(),
+            disk_size_bytes: Some(1 << 30),
+            disk_error: None,
+            ip: None,
+            partitions: vec![crate::model::HostPartition {
+                number: 2,
+                partuuid: "p-2".to_string(),
+                partlabel: Some("root".to_string()),
+                label: None,
+                uuid: None,
+                fstype: Some("ext4".to_string()),
+                size_bytes: 1 << 29,
+            }],
+        }];
+        let task = multicast_task(vec![
+            target(1, TaskState::Done, "p-1"),
+            target(2, TaskState::Failed, "p-2"),
+            target(3, TaskState::Cancelled, "gone"),
+        ]);
+
+        let message = retry_message(&task, &inventory);
+
+        assert!(
+            message.contains("partition #2 (root) on lab-2"),
+            "{message}"
+        );
+        assert!(message.contains("partition gone on lab-3"), "{message}");
+        assert!(!message.contains("lab-1"), "{message}");
+        assert!(!message.contains("erases the disks"), "{message}");
     }
 }

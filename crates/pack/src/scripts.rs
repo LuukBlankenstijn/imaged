@@ -7,7 +7,9 @@ use anyhow::{Context as _, bail};
 use imaged_archive::Script;
 use imaged_model::script::{ScriptInput, validate_script};
 
-pub async fn load(paths: &[PathBuf]) -> anyhow::Result<Vec<Script>> {
+use crate::cli::ScriptRoot;
+
+pub async fn load(paths: &[PathBuf], roots: &[ScriptRoot]) -> anyhow::Result<Vec<Script>> {
     let mut names = HashSet::with_capacity(paths.len());
     let mut scripts = Vec::with_capacity(paths.len());
     for path in paths {
@@ -16,6 +18,23 @@ pub async fn load(paths: &[PathBuf]) -> anyhow::Result<Vec<Script>> {
             bail!("script `{}` is given more than once", script.name);
         }
         scripts.push(script);
+    }
+    for root in roots {
+        let script = scripts
+            .iter_mut()
+            .find(|script| script.name == root.name)
+            .with_context(|| {
+                format!(
+                    "--script-root names script `{}`, which is not given with --script",
+                    root.name
+                )
+            })?;
+        if script.root_partition.replace(root.partition).is_some() {
+            bail!(
+                "--script-root for script `{}` is given more than once",
+                root.name
+            );
+        }
     }
     Ok(scripts)
 }
@@ -35,7 +54,12 @@ async fn load_one(path: &Path) -> anyhow::Result<Script> {
     let inputs = read_inputs(&path.with_extension("inputs.json")).await?;
     validate_script(&name, &body, &inputs)
         .with_context(|| format!("script {} is invalid", path.display()))?;
-    Ok(Script { name, body, inputs })
+    Ok(Script {
+        name,
+        body,
+        inputs,
+        root_partition: None,
+    })
 }
 
 async fn read_inputs(path: &Path) -> anyhow::Result<Vec<ScriptInput>> {

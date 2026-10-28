@@ -16,7 +16,8 @@ use tracing::{info, warn};
 
 use crate::agent::Agent;
 use crate::status::{Identity, ScriptPhase};
-use crate::sys::disk::PartitionTarget;
+use crate::sys::disk::{PartitionTarget, find_target_disk};
+use crate::sys::fstab::Matching;
 use crate::sys::mount::MountedSystem;
 
 const SCRIPT_PATH: &str = "/tmp/imaged-script";
@@ -25,13 +26,25 @@ const OUTPUT_GRACE: Duration = Duration::from_secs(2);
 const LIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 const KEPT_TAIL_BYTES: usize = 256 * 1024;
 
-pub async fn run(agent: &Agent, task_id: i64, partitions: &[PartitionTarget]) -> Result<()> {
+#[derive(Debug)]
+struct Run<'a> {
+    root: &'a PartitionTarget,
+    first: usize,
+    scripts: &'a [PostInstallScript],
+}
+
+pub async fn run(
+    agent: &Agent,
+    task_id: i64,
+    restored: &[PartitionTarget],
+    matching: Matching,
+) -> Result<()> {
     let plan = agent.server.post_install(task_id).await?;
     if plan.scripts.is_empty() {
         return Ok(());
     }
-    let root = root_partition(&plan, partitions)?;
-    let disk = crate::sys::disk::find_target_disk().await?;
+    let runs = runs(&plan.scripts, restored)?;
+    let disk = find_target_disk().await?;
     agent.status.update_task(|task| {
         task.scripts = plan
             .scripts
@@ -39,11 +52,38 @@ pub async fn run(agent: &Agent, task_id: i64, partitions: &[PartitionTarget]) ->
             .map(|script| (script.name.clone(), ScriptPhase::Waiting))
             .collect();
     });
-    let system = MountedSystem::mount(root, &disk)?;
-    let ran = run_scripts(agent, task_id, &system, &plan).await;
-    let unmounted = system.unmount();
-    ran?;
-    unmounted
+    for run in runs {
+        let system = MountedSystem::mount(run.root, &disk, matching)?;
+        let ran = run_scripts(agent, task_id, &system, &plan, &run).await;
+        let unmounted = system.unmount();
+        ran?;
+        unmounted?;
+    }
+    Ok(())
+}
+
+fn runs<'a>(
+    scripts: &'a [PostInstallScript],
+    restored: &'a [PartitionTarget],
+) -> Result<Vec<Run<'a>>> {
+    let mut first = 0;
+    scripts
+        .chunk_by(|a, b| a.root_partition == b.root_partition)
+        .map(|scripts| {
+            let number = scripts[0].root_partition;
+            let root = restored
+                .iter()
+                .find(|partition| partition.number == number)
+                .with_context(|| format!("root partition {number} was not restored"))?;
+            let run = Run {
+                root,
+                first,
+                scripts,
+            };
+            first += scripts.len();
+            Ok(run)
+        })
+        .collect()
 }
 
 async fn run_scripts(
@@ -51,9 +91,10 @@ async fn run_scripts(
     task_id: i64,
     system: &MountedSystem,
     plan: &PostInstall,
+    run: &Run<'_>,
 ) -> Result<()> {
     let identity = agent.status.snapshot().identity;
-    for (index, script) in plan.scripts.iter().enumerate() {
+    for (index, script) in (run.first..).zip(run.scripts) {
         let env = script_env(script, &identity, plan.proxy.as_deref(), &plan.variables);
         agent
             .status
@@ -68,19 +109,6 @@ async fn run_scripts(
         }
     }
     Ok(())
-}
-
-fn root_partition<'a>(
-    plan: &PostInstall,
-    partitions: &'a [PartitionTarget],
-) -> Result<&'a PartitionTarget> {
-    let number = plan
-        .root_partition
-        .context("the image has post-install scripts but no root partition")?;
-    partitions
-        .iter()
-        .find(|partition| partition.number == number)
-        .with_context(|| format!("root partition {number} was not restored"))
 }
 
 fn script_env(
@@ -290,7 +318,60 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
+            root_partition: 1,
         }
+    }
+
+    fn rooted(position: i64, root_partition: i64) -> PostInstallScript {
+        PostInstallScript {
+            position,
+            root_partition,
+            ..script(&[])
+        }
+    }
+
+    fn restored(number: i64) -> PartitionTarget {
+        PartitionTarget {
+            device: format!("/dev/vda{number}"),
+            number,
+            filesystem: imaged_disk::Filesystem::Ext4,
+            size: 1,
+            fs_uuid: None,
+            fs_label: None,
+        }
+    }
+
+    #[test]
+    fn consecutive_scripts_on_the_same_root_share_one_mount_in_script_order() {
+        let scripts = [rooted(0, 2), rooted(1, 2), rooted(2, 3), rooted(3, 2)];
+        let partitions = [restored(1), restored(2), restored(3)];
+
+        let runs: Vec<_> = runs(&scripts, &partitions)
+            .unwrap()
+            .into_iter()
+            .map(|run| {
+                let positions: Vec<i64> = run.scripts.iter().map(|s| s.position).collect();
+                (run.root.device.as_str(), run.first, positions)
+            })
+            .collect();
+
+        assert_eq!(
+            runs,
+            [
+                ("/dev/vda2", 0, vec![0, 1]),
+                ("/dev/vda3", 2, vec![2]),
+                ("/dev/vda2", 3, vec![3]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_script_rooted_on_a_partition_that_was_not_restored_stops_every_run() {
+        let scripts = [rooted(0, 1), rooted(1, 5)];
+
+        let e = runs(&scripts, &[restored(1)]).unwrap_err();
+
+        assert_eq!(e.to_string(), "root partition 5 was not restored");
     }
 
     fn agent() -> Identity {

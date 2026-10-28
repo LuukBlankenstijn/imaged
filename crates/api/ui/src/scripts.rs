@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 
 use crate::model::{
-    Image, ImageScriptsRequest, RootPartitionRequest, Script, ScriptRequest, UpdateScriptRequest,
+    Image, ImageScriptsRequest, RootPartitionRequest, Script, ScriptRequest, ScriptRootRequest,
+    UpdateScriptRequest,
 };
 
 #[cfg(feature = "server")]
@@ -59,6 +60,14 @@ pub async fn set_image_scripts(req: ImageScriptsRequest) -> Result<()> {
         .set_for_image(req.image_id, &req.script_ids)
         .await?;
     Ok(())
+}
+
+#[post("/api/ui/images/scripts/root")]
+#[inject(script_repo: ScriptRepo)]
+pub async fn set_script_root_partition(req: ScriptRootRequest) -> Result<()> {
+    script_repo
+        .set_root_for_image(req.image_id, req.position, req.partition_number)
+        .await
 }
 
 #[post("/api/ui/images/root-partition")]

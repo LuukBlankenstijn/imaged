@@ -1,72 +1,189 @@
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 use chrono::Utc;
 use imaged_archive::manifest::{PARTITION_TABLE_FILE, partition_file};
-use imaged_archive::{Contents, Manifest, PartitionSource, write_archive};
+use imaged_archive::{Contents, Manifest, PartitionSource, Script, write_archive};
 use imaged_disk::{
     Filesystem, Partition, backup_partition_table, clone_compressed, holds_system, root_partition,
 };
+use imaged_model::image::ImageKind;
 use tempfile::TempDir;
 use tokio::fs::File;
+use tokio::io::AsyncSeekExt as _;
 use tracing::info;
 
-use crate::blkid;
+use crate::blkid::{self, Probe};
 use crate::cli::Args;
 use crate::extract::extract;
 use crate::scripts;
+use crate::shrink::shrink_ext;
 
 const PARTCLONE_LOG: &str = "partclone.log";
+const PARTITION_SECTOR_SIZE: u32 = 512;
+const GPT: &str = "gpt";
 
 struct Extracted {
-    partition: Partition,
     filesystem: Filesystem,
+    fs_uuid: Option<String>,
+    fs_label: Option<String>,
     path: PathBuf,
+}
+
+struct Packed {
+    kind: ImageKind,
+    sector_size: u32,
+    partition_table: Option<PathBuf>,
+    partitions: Vec<PartitionSource>,
+    systems: Vec<i64>,
 }
 
 pub async fn run(args: Args) -> anyhow::Result<()> {
     let captured_at = Utc::now();
-    let scripts = scripts::load(&args.scripts).await?;
+    let scripts = scripts::load(&args.scripts, &args.script_roots).await?;
     let work = TempDir::new().context("creating a temporary directory")?;
 
-    let partition_table = work.path().join(PARTITION_TABLE_FILE);
-    let table = backup_partition_table(&args.disk, &partition_table)
-        .await
-        .context("backing up the partition table")?;
-
-    let mut partitions = Vec::with_capacity(table.partitions.len());
-    let mut systems = Vec::new();
-    for &partition in &table.partitions {
-        let Some(extracted) = extract_formatted(&args.disk, partition, work.path()).await? else {
-            continue;
-        };
-        if args.root_partition.is_none()
-            && holds_system(partition.number, extracted.filesystem, &extracted.path).await
-        {
-            systems.push(partition.number);
+    let probe = blkid::probe(&args.image).await?;
+    let packed = match probe {
+        Probe {
+            fstype: Some(fstype),
+            uuid,
+            label,
+            pttype,
+        } if pttype.as_deref() != Some(GPT) => {
+            pack_partition(&args, &fstype, uuid, label, work.path()).await?
         }
-        partitions.push(clone_partition(extracted, work.path()).await?);
-    }
-    let root_partition = choose_root(args.root_partition, &partitions, &systems)?;
+        _ => pack_disk(&args, work.path()).await?,
+    };
+    let root_partition = choose_root(args.root_partition, &packed.partitions, &packed.systems)?;
+    check_script_roots(&scripts, &packed.partitions)?;
 
     let contents = Contents {
         name: args.name,
         captured_at: Some(captured_at),
-        sector_size: table.sector_size,
-        partition_table,
-        partitions,
+        kind: packed.kind,
+        sector_size: packed.sector_size,
+        partition_table: packed.partition_table,
+        partitions: packed.partitions,
         root_partition,
         scripts,
     };
     let manifest = write(contents, &args.output).await?;
     info!(
         output = %args.output.display(),
+        kind = %manifest.kind,
         partitions = manifest.partitions.len(),
         root_partition = ?manifest.root_partition,
         scripts = manifest.scripts.len(),
-        "packed the disk image"
+        "packed the image"
     );
     Ok(())
+}
+
+async fn pack_disk(args: &Args, dir: &Path) -> anyhow::Result<Packed> {
+    let partition_table = dir.join(PARTITION_TABLE_FILE);
+    let table = backup_partition_table(&args.image, &partition_table)
+        .await
+        .context("backing up the partition table")?;
+
+    let mut partitions = Vec::with_capacity(table.partitions.len());
+    let mut systems = Vec::new();
+    for &partition in &table.partitions {
+        let Some(extracted) = extract_formatted(&args.image, partition, dir).await? else {
+            continue;
+        };
+        let number = partition.number;
+        if args.root_partition.is_none()
+            && holds_system(number, extracted.filesystem, &extracted.path).await
+        {
+            systems.push(number);
+        }
+        let path = clone_partition(number, extracted.filesystem, &extracted.path, dir).await?;
+        remove(&extracted.path).await?;
+        partitions.push(PartitionSource {
+            number,
+            fstype: extracted.filesystem.as_str().to_owned(),
+            size_bytes: partition.size_bytes,
+            fs_uuid: extracted.fs_uuid,
+            fs_label: extracted.fs_label,
+            path,
+        });
+    }
+    Ok(Packed {
+        kind: ImageKind::Disk,
+        sector_size: table.sector_size,
+        partition_table: Some(partition_table),
+        partitions,
+        systems,
+    })
+}
+
+async fn pack_partition(
+    args: &Args,
+    fstype: &str,
+    fs_uuid: Option<String>,
+    fs_label: Option<String>,
+    dir: &Path,
+) -> anyhow::Result<Packed> {
+    let supported = ImageKind::Partition.fstypes();
+    let filesystem = Filesystem::detect(Some(fstype))
+        .ok()
+        .flatten()
+        .filter(|filesystem| supported.contains(&filesystem.as_str()))
+        .with_context(|| {
+            format!(
+                "{} holds neither a GPT partition table nor a supported filesystem: found {fstype}, expected one of {}",
+                args.image.display(),
+                supported.join(", ")
+            )
+        })?;
+    let number = 1;
+    let image_size = file_size(&args.image).await?;
+    info!(filesystem = %filesystem, size_bytes = image_size, "packing a filesystem image as a partition image");
+
+    let (source, size_bytes) = if filesystem.is_ext() {
+        let copy = dir.join(format!("p-{number}.raw"));
+        let whole = Partition {
+            number,
+            offset: 0,
+            size_bytes: image_size,
+        };
+        extract(&args.image, whole, &copy).await?;
+        let size_bytes = shrink_ext(&copy).await?;
+        (copy, size_bytes)
+    } else {
+        (args.image.clone(), image_size)
+    };
+
+    let mut systems = Vec::new();
+    if args.root_partition.is_none() && holds_system(number, filesystem, &source).await {
+        systems.push(number);
+    }
+    let path = clone_partition(number, filesystem, &source, dir).await?;
+    if source != args.image {
+        remove(&source).await?;
+    }
+    Ok(Packed {
+        kind: ImageKind::Partition,
+        sector_size: PARTITION_SECTOR_SIZE,
+        partition_table: None,
+        partitions: vec![PartitionSource {
+            number,
+            fstype: filesystem.as_str().to_owned(),
+            size_bytes,
+            fs_uuid,
+            fs_label,
+            path,
+        }],
+        systems,
+    })
+}
+
+async fn file_size(path: &Path) -> anyhow::Result<u64> {
+    let failed = || format!("inspecting {}", path.display());
+    let mut file = File::open(path).await.with_context(failed)?;
+    file.seek(SeekFrom::End(0)).await.with_context(failed)
 }
 
 async fn extract_formatted(
@@ -82,13 +199,14 @@ async fn extract_formatted(
         "extracting partition"
     );
     extract(disk, partition, &path).await?;
-    let fstype = blkid::fstype(&path).await?;
-    match Filesystem::detect(fstype.as_deref())
+    let probe = blkid::probe(&path).await?;
+    match Filesystem::detect(probe.fstype.as_deref())
         .with_context(|| format!("cannot pack partition {number}"))?
     {
         Some(filesystem) => Ok(Some(Extracted {
-            partition,
             filesystem,
+            fs_uuid: probe.uuid,
+            fs_label: probe.label,
             path,
         })),
         None => {
@@ -102,6 +220,10 @@ async fn extract_formatted(
     }
 }
 
+fn packed_numbers(packed: &[PartitionSource]) -> Vec<i64> {
+    packed.iter().map(|p| p.number).collect()
+}
+
 fn choose_root(
     requested: Option<i64>,
     packed: &[PartitionSource],
@@ -109,7 +231,7 @@ fn choose_root(
 ) -> anyhow::Result<Option<i64>> {
     if let Some(root) = requested {
         if !packed.iter().any(|p| p.number == root) {
-            let packed: Vec<i64> = packed.iter().map(|p| p.number).collect();
+            let packed = packed_numbers(packed);
             bail!("root partition {root} is not one of the packed partitions {packed:?}");
         }
         return Ok(Some(root));
@@ -121,31 +243,39 @@ fn choose_root(
     Ok(root)
 }
 
-async fn clone_partition(extracted: Extracted, dir: &Path) -> anyhow::Result<PartitionSource> {
-    let number = extracted.partition.number;
+fn check_script_roots(scripts: &[Script], packed: &[PartitionSource]) -> anyhow::Result<()> {
+    for script in scripts {
+        if let Some(root) = script.root_partition
+            && !packed.iter().any(|p| p.number == root)
+        {
+            let packed = packed_numbers(packed);
+            bail!(
+                "script `{}` root partition {root} is not one of the packed partitions {packed:?}",
+                script.name
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn clone_partition(
+    number: i64,
+    filesystem: Filesystem,
+    source: &Path,
+    dir: &Path,
+) -> anyhow::Result<PathBuf> {
     let path = dir.join(partition_file(number));
-    info!(partition = number, filesystem = %extracted.filesystem, "cloning partition");
+    info!(partition = number, filesystem = %filesystem, "cloning partition");
     let failed = || format!("cloning partition {number}");
-    let mut compressed = clone_compressed(
-        extracted.filesystem,
-        &extracted.path,
-        &dir.join(PARTCLONE_LOG),
-        |_| {},
-    )
-    .with_context(failed)?;
+    let mut compressed = clone_compressed(filesystem, source, &dir.join(PARTCLONE_LOG), |_| {})
+        .with_context(failed)?;
     let mut file = File::create(&path)
         .await
         .with_context(|| format!("creating {}", path.display()))?;
     tokio::io::copy(&mut compressed, &mut file)
         .await
         .with_context(failed)?;
-    remove(&extracted.path).await?;
-    Ok(PartitionSource {
-        number,
-        fstype: extracted.filesystem.as_str().to_owned(),
-        size_bytes: extracted.partition.size_bytes,
-        path,
-    })
+    Ok(path)
 }
 
 async fn write(contents: Contents, output: &Path) -> anyhow::Result<Manifest> {

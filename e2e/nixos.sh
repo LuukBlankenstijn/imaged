@@ -2,13 +2,14 @@
 # usage: nix develop .#e2e -c e2e/nixos.sh  (env: E2E_NIXOS_CASES="sdboot:uefi grub-bios:bios ...", E2E_OUT, CARGO_TARGET_DIR, IMAGED_BOOT_ASSETS)
 export E2E_OUT=${E2E_OUT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/out/nixos}
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+source "$E2E_DIR/disk.sh"
 
 IMAGED_BOOT_ASSETS=$(realpath -m "${IMAGED_BOOT_ASSETS:-$REPO_DIR/assets}")
 export IMAGED_BOOT_ASSETS
 TARGET_DIR=$(cd "$REPO_DIR" && realpath -m "${CARGO_TARGET_DIR:-target}")
 IMAGED_SERVER=$TARGET_DIR/x86_64-unknown-linux-gnu/debug/imaged-server
 DISKO=github:nix-community/disko/725ea35e410ad83be4931d1bff7e090eacaf3563
-read -ra CASES <<<"${E2E_NIXOS_CASES:-sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi disko:uefi disko-grub:bios}"
+read -ra CASES <<<"${E2E_NIXOS_CASES:-sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi disko:uefi disko-grub:bios partition:uefi partition-grub-bios:bios}"
 DISK_SIZE=8G
 MIN_ROOT_BYTES=$((6 * 1024 * 1024 * 1024))
 AGE_KEY=$'# created: 2026-10-13\n# public key: age1e2e\nAGE-SECRET-KEY-1E2EE2EE2E\n'
@@ -99,7 +100,11 @@ import_image() {
     [[ $script == imaged-nixos-* ]] || fail "image $config runs script $script"
     [[ $kinds == '["age_key:secret:false","app_token:secret:true","nested:secret:true"]' ]] ||
         fail "image $config declares unexpected inputs: $kinds"
-    log "imported $config as image ${IMAGE_IDS[$config]} with secret inputs $kinds"
+    local kind expected=disk
+    [[ $config == partition* ]] && expected=partition
+    kind=$(image_field "${IMAGE_IDS[$config]}" .kind)
+    [[ $kind == "$expected" ]] || fail "image $config is a $kind image, expected $expected: $(image_json "${IMAGE_IDS[$config]}")"
+    log "imported $config as $kind image ${IMAGE_IDS[$config]} with secret inputs $kinds"
 }
 
 deploy_finished() {
@@ -109,16 +114,23 @@ deploy_finished() {
 }
 
 deploy_case() {
-    local name=$1 config=$2 mac=$3 disk=$4 tap=$5
+    local name=$1 config=$2 mac=$3 disk=$4 tap=$5 partition=${6:-}
     start_network_boot_vm "$name" "$mac" "$disk" "$tap"
     wait_until 300 "the $name agent to register" host_registered "$mac"
-    local host_id request
+    local host_id request target=
     host_id=$(host_id_for_mac "$mac")
+    if [[ -n $partition ]]; then
+        wait_until 60 "the $name agent to report its partitions" host_reports_partition "$host_id" "$partition"
+        target=$(api_get /api/ui/hosts | jq -r --argjson id "$host_id" --argjson n "$partition" \
+            '.[] | select(.id == $id) | .partitions[] | select(.number == $n) | .partuuid')
+        log "deploying $config into partition $partition ($target) of $name"
+    fi
     request=$(jq -nc --argjson host "$host_id" --argjson image "${IMAGE_IDS[$config]}" \
-        --arg token "$(app_token "$name")" --arg nested "$(app_token "$name-nested")" \
-        '{req: {id: $host, image_id: $image, inputs: {
+        --arg token "$(app_token "$name")" --arg nested "$(app_token "$name-nested")" --arg target "$target" \
+        '{req: ({id: $host, image_id: $image, inputs: {
             shared: {age_key: {variable: "AGE_KEY"}},
-            per_machine: {($host | tostring): {app_token: {value: $token}, nested: {value: $nested}}}}}}')
+            per_machine: {($host | tostring): {app_token: {value: $token}, nested: {value: $nested}}}}}
+            + if $target == "" then {} else {partition: $target} end)}')
     DEPLOY_VM=$name
     DEPLOY_TASK_ID=$(api_post /api/ui/hosts/deploy "$request" | jq -r .id)
     unwatch "$name"
@@ -126,6 +138,41 @@ deploy_case() {
     api_get "/api/ui/tasks/$DEPLOY_TASK_ID/hosts/$host_id/scripts" | jq -r '.[] | .output' >"$OUT_DIR/$name.script.log"
     wait_for_exit "$name" 120
     log "deployed $config to $name; post-install output in $(relative "$OUT_DIR/$name.script.log")"
+}
+
+host_reports_partition() {
+    api_get /api/ui/hosts | jq -e --argjson id "$1" --argjson n "$2" \
+        '.[] | select(.id == $id) | .partitions | any(.number == $n)' >/dev/null
+}
+
+prepartition_disk() {
+    local disk=$1 work
+    work=$(mktemp -d)
+    sgdisk --clear \
+        --new=1:1MiB:+1MiB --typecode=1:ef02 --change-name=1:bios \
+        --new=2:0:+256MiB --typecode=2:ef00 --change-name=2:ESP \
+        --new=3:0:0 --typecode=3:8300 --change-name=3:root \
+        "$disk" >/dev/null
+    mkfs.vfat -F 32 -n ESP -C "$work/esp.img" "$(partition_kib "$disk" 2)" >/dev/null
+    write_partition "$disk" 2 "$work/esp.img"
+    rm -rf "$work"
+    partition_layout "$disk" >"$OUT_DIR/$(basename "$disk" .raw).layout.json"
+    log "partitioned $(relative "$disk"): p1 BIOS boot, p2 vfat ESP labelled ESP, p3 empty root"
+}
+
+partition_label() {
+    local start size
+    read -r start size < <(partition_sectors "$1" "$2")
+    blkid -p -O $((start * 512)) -o value -s LABEL "$1"
+}
+
+verify_partition_table() {
+    local name=$1 disk=$2
+    diff "$OUT_DIR/$name.layout.json" <(partition_layout "$disk") >&2 ||
+        fail "$name: the partition table changed after the partition deploy and boot"
+    [[ $(partition_label "$disk" 2) == ESP && $(partition_label "$disk" 3) == nixos ]] ||
+        fail "$name: p2 is labelled '$(partition_label "$disk" 2)' and p3 '$(partition_label "$disk" 3)', expected ESP and nixos"
+    log "$name: partition table unchanged by the deploy and boot, p2 still the ESP, p3 the nixos root"
 }
 
 booted() {
@@ -197,17 +244,25 @@ run_case() {
     local disk=$OUT_DIR/$name.raw
     rm -f "$disk"
     truncate -s "$DISK_SIZE" "$disk"
+    local partition=
+    if [[ $config == partition* ]]; then
+        prepartition_disk "$disk"
+        partition=3
+    fi
     import_image "$config"
-    deploy_case "$name" "$config" "$mac" "$disk" "tap-$index"
+    deploy_case "$name" "$config" "$mac" "$disk" "tap-$index" "$partition"
     boot_case "$name" "$disk"
     verify_case "$name" "$config"
+    if [[ -n $partition ]]; then
+        verify_partition_table "$name" "$disk"
+    fi
 }
 
 if [[ -z ${E2E_IN_NAMESPACE:-} ]]; then
-    require_commands nix cargo unshare ip qemu-system-x86_64 dnsmasq curl jq
+    require_commands nix cargo unshare ip qemu-system-x86_64 dnsmasq curl jq sgdisk sfdisk blkid mkfs.vfat
     [[ -r /dev/kvm && -w /dev/kvm ]] || fail "/dev/kvm is not accessible"
     mkdir -p "$OUT_DIR"
-    rm -rf "$OUT_DIR/imaged-data" "$OUT_DIR"/*.raw "$OUT_DIR"/*.log "$OUT_DIR"/*.fd "$OUT_DIR/steps.txt"
+    rm -rf "$OUT_DIR/imaged-data" "$OUT_DIR"/*.raw "$OUT_DIR"/*.log "$OUT_DIR"/*.fd "$OUT_DIR"/*.layout.json "$OUT_DIR/steps.txt"
     run_step invalid check_invalid_configurations
     run_step build-images build_archives
     run_step build-server build_server

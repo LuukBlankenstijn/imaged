@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO image_partitions\n                    (image_id, partition_number, fstype, size_bytes, fs_uuid, fs_label)\n                VALUES\n                    (?,?,?,?,?,?)\n                RETURNING\n                    id as \"id!: i64\",\n                    partition_number,\n                    fstype,\n                    size_bytes,\n                    fs_uuid,\n                    fs_label\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "partition_number",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "fstype",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "size_bytes",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "fs_uuid",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "fs_label",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "0666063b23cce383c304ecbf67833c8478e241aa3c08c0563742589dc5b8cefe"
+}

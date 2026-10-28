@@ -6,9 +6,12 @@ use std::time::Duration;
 
 use common::{StreamBehavior, StubConfig, StubServer, agent_server, fake_bins, stub_server};
 use imaged_agent::connection::{self, Timing};
+use imaged_agent::sys::disk::HostDisk;
 use imaged_agent::task::ClientState;
+use imaged_model::agent::ImagePartition;
+use imaged_model::host::HostPartition;
 use imaged_model::progress::{HostProgress, Stage};
-use imaged_model::{AgentEvent, ServerEvent, Task, TaskType};
+use imaged_model::{AgentEvent, ServerEvent, Task, Work};
 use tokio_util::sync::CancellationToken;
 
 const MAC: &str = "aa:bb:cc:dd:ee:ff";
@@ -22,8 +25,8 @@ const TEST_TIMING: Timing = Timing {
     server_silence: Duration::from_secs(60),
 };
 
-// A fake `lsblk` that blocks before reporting no usable disks. The block keeps
-// `find_target_disk` (the first thing every task's `run` awaits) pending, so a started
+// A fake `lsblk` that blocks before reporting no usable disks. A deploy reports that it
+// started and fetches the image layout, then blocks in `find_target_disk`, so a started
 // task stays registered in `ClientState` for the duration of the test; the empty result
 // means that if it ever unblocks it bails safely without touching any hardware.
 fn install_blocking_lsblk(dir: &Path) {
@@ -36,6 +39,25 @@ fn install_blocking_lsblk(dir: &Path) {
         .permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&path, perms).expect("chmod fake lsblk");
+}
+
+fn disk() -> HostDisk {
+    HostDisk {
+        size_bytes: 1024,
+        partitions: vec![HostPartition {
+            number: 1,
+            partuuid: "aaaa-01".to_string(),
+            partlabel: None,
+            label: Some("root".to_string()),
+            uuid: Some("0b8c5c3e".to_string()),
+            fstype: Some("ext4".to_string()),
+            size_bytes: 512,
+        }],
+    }
+}
+
+fn deploy(task_id: i64) -> Task {
+    Task::new(task_id, Work::Deploy { image_id: 1 })
 }
 
 async fn current_task_id(state: &ClientState) -> Option<i64> {
@@ -94,13 +116,20 @@ async fn wait_for_upgrades(server: &StubServer, at_least: usize) {
 
 #[tokio::test]
 async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_the_running_task() {
-    let fakes = fake_bins();
+    let fakes = fake_bins().await;
     install_blocking_lsblk(fakes.dir());
 
-    let task = Task::new(TASK_ID, TaskType::Deploy, Some(1));
     let server = stub_server(
         StubConfig::new()
-            .with_event(ServerEvent::Current(Some(task)))
+            .with_partitions(vec![ImagePartition {
+                id: 1,
+                partition_number: 1,
+                fstype: "ext4".to_string(),
+                size_bytes: 512,
+                fs_uuid: None,
+                fs_label: None,
+            }])
+            .with_event(ServerEvent::Current(Some(deploy(TASK_ID))))
             .stream_behavior(StreamBehavior::HoldOpen),
     )
     .await;
@@ -155,16 +184,12 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        server.send_event(ServerEvent::Current(Some(Task::new(
-            TASK_ID + 1,
-            TaskType::Deploy,
-            Some(1),
-        ))));
+        server.send_event(ServerEvent::Current(Some(deploy(TASK_ID + 1))));
         wait_for_task(&state, Some(TASK_ID + 1)).await;
     };
 
     tokio::select! {
-        _ = connection::run(agent, state.clone(), Ok(1024), TEST_TIMING) => {
+        _ = connection::run(agent, state.clone(), async || Ok(disk()), TEST_TIMING) => {
             unreachable!("the agent must never exit because the connection dropped")
         }
         _ = driver => {}
@@ -172,12 +197,11 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
 }
 
 #[tokio::test]
-async fn the_latest_progress_is_sent_on_connect_and_again_after_a_reconnect() {
+async fn the_partitions_and_the_latest_progress_are_sent_on_every_connect() {
     let server = stub_server(StubConfig::new().stream_behavior(StreamBehavior::HoldOpen)).await;
     let agent = agent_server(&server.base_url, MAC);
-    agent
-        .status
-        .task_started(&Task::new(TASK_ID, TaskType::Deploy, Some(1)));
+    agent.status.task_started(&deploy(TASK_ID));
+    let partitions = AgentEvent::Partitions(disk().partitions);
     let reported = AgentEvent::Progress(HostProgress {
         task_id: TASK_ID,
         fraction: 0.0,
@@ -185,15 +209,42 @@ async fn the_latest_progress_is_sent_on_connect_and_again_after_a_reconnect() {
     });
 
     let driver = async {
-        wait_for_agent_events(&server, 1).await;
+        wait_for_agent_events(&server, 2).await;
         server.close_connections();
         wait_for_upgrades(&server, 2).await;
-        wait_for_agent_events(&server, 2).await;
-        assert_eq!(server.agent_events(), [reported.clone(), reported]);
+        wait_for_agent_events(&server, 4).await;
+        assert_eq!(
+            server.agent_events(),
+            [partitions.clone(), reported.clone(), partitions, reported]
+        );
     };
 
     tokio::select! {
-        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), Ok(1024), TEST_TIMING) => {
+        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), async || Ok(disk()), TEST_TIMING) => {
+            unreachable!("the agent must never exit because the connection dropped")
+        }
+        _ = driver => {}
+    }
+}
+
+#[tokio::test]
+async fn an_agent_without_a_usable_disk_reports_no_partitions() {
+    let server = stub_server(StubConfig::new().stream_behavior(StreamBehavior::HoldOpen)).await;
+    let agent = agent_server(&server.base_url, MAC);
+    agent.status.task_started(&deploy(TASK_ID));
+    let unusable = async || Err("multiple disks found".to_string());
+
+    let driver = async {
+        wait_for_agent_events(&server, 1).await;
+        assert!(
+            matches!(server.agent_events().as_slice(), [AgentEvent::Progress(_)]),
+            "{:?}",
+            server.agent_events()
+        );
+    };
+
+    tokio::select! {
+        _ = connection::run(agent.clone(), Arc::new(ClientState::default()), unusable, TEST_TIMING) => {
             unreachable!("the agent must never exit because the connection dropped")
         }
         _ = driver => {}
@@ -210,7 +261,7 @@ async fn a_server_that_goes_silent_is_given_up_on_and_reconnected_to() {
     };
 
     tokio::select! {
-        _ = connection::run(agent, Arc::new(ClientState::default()), Ok(1024), timing) => {
+        _ = connection::run(agent, Arc::new(ClientState::default()), async || Ok(disk()), timing) => {
             unreachable!("the agent must never exit because the server went silent")
         }
         _ = wait_for_upgrades(&server, 3) => {}

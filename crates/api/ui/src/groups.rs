@@ -47,13 +47,15 @@ pub async fn delete_group(id: i64) -> Result<()> {
 #[post("/api/ui/groups/multicast")]
 #[inject(task_repo: TaskRepo, multicast_mgr: MulticastMgr)]
 pub async fn multicast(req: MulticastRequest) -> Result<Task> {
-    let inputs = crate::hosts::host_inputs(req.image_id, &req.host_ids, req.inputs).await?;
+    let plan =
+        crate::hosts::plan_restore(req.image_id, &req.host_ids, req.inputs, req.partitions).await?;
     let task = task_repo
         .create_with_inputs(
-            TaskType::Multicast,
+            TaskType::multicast(plan.kind),
             req.host_ids,
             Some(req.image_id),
-            &inputs,
+            &plan.inputs,
+            &plan.partuuids,
         )
         .await?;
     multicast_mgr.wake();

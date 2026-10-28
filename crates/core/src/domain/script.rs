@@ -7,6 +7,7 @@ use imaged_model::error::{AppError, Result};
 use imaged_model::script::ResolvedInputs;
 
 use crate::domain::host::Host;
+use crate::domain::image::Image;
 
 #[derive(Debug, Clone)]
 pub struct Script {
@@ -28,6 +29,32 @@ impl NewScript {
     pub fn validate(&self) -> Result {
         validate_script(&self.name, &self.body, &self.inputs)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageScript {
+    pub script: Script,
+    pub root_partition: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewImageScript {
+    pub script: NewScript,
+    pub root_partition: Option<i64>,
+}
+
+pub fn script_roots(image: &Image, scripts: &[ImageScript]) -> Result<Vec<i64>> {
+    scripts
+        .iter()
+        .map(|s| {
+            s.root_partition.or(image.root_partition).ok_or_else(|| {
+                AppError::FailedPrecondition(format!(
+                    "image {} has post-install script `{}` but no root partition",
+                    image.name, s.script.name
+                ))
+            })
+        })
+        .collect()
 }
 
 pub fn resolve_inputs(
@@ -123,11 +150,18 @@ pub trait ScriptRepository: Send + Sync {
 
     async fn delete(&self, id: i64) -> Result;
 
-    async fn import_for_image(&self, image_id: i64, scripts: &[NewScript]) -> Result;
+    async fn import_for_image(&self, image_id: i64, scripts: &[NewImageScript]) -> Result;
 
-    async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>>;
+    async fn get_for_image(&self, image_id: i64) -> Result<Vec<ImageScript>>;
 
     async fn set_for_image(&self, image_id: i64, script_ids: &[i64]) -> Result;
+
+    async fn set_root_for_image(
+        &self,
+        image_id: i64,
+        position: i64,
+        partition_number: Option<i64>,
+    ) -> Result;
 }
 
 #[cfg(test)]
@@ -175,6 +209,7 @@ mod tests {
                     format!("52:54:00:00:00:0{id}"),
                     Ok(0),
                     None,
+                    Vec::new(),
                 )
             })
             .collect()

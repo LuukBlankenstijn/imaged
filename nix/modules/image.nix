@@ -10,7 +10,9 @@ let
   cfg = config.imaged.image;
   host = config;
   disko = options ? disko && config.disko.devices.disk != { };
+  partition = cfg.kind == "partition";
   efi = cfg.partitionTableType != "legacy+gpt";
+  onDisk = device: lib.hasPrefix "/dev/" (toString device);
 
   secretOptions =
     { name, ... }:
@@ -171,6 +173,12 @@ let
       toplevel = imageConfig.system.build.toplevel;
       script = pkgs.writeText "${name}.sh" (postInstall imageConfig);
       closure = pkgs.closureInfo { rootPaths = [ toplevel ]; };
+      start = if partition then "0" else "$(partx -g -o START --nr ${toString rootPartition} ${raw})";
+      source =
+        if partition then
+          "the partition image"
+        else
+          "partition ${toString rootPartition} of the disk image";
     in
     pkgs.runCommand imageConfig.image.fileName
       {
@@ -191,11 +199,11 @@ let
           echo "$missing" >&2
           exit 1
         fi
-        start=$(partx -g -o START --nr ${toString rootPartition} ${raw})
+        start=${start}
         debugfs -R 'rdump /nix/var/nix/profiles .' "${raw}?offset=$((start * 512))" || true
         installed=$(cd profiles && readlink "$(readlink system)" || true)
         if [ "$installed" != ${toplevel} ]; then
-          echo "partition ${toString rootPartition} of the disk image installs the system '$installed', but the post-install script runs ${toplevel}" >&2
+          echo "${source} installs the system '$installed', but the post-install script runs ${toplevel}" >&2
           exit 1
         fi
         mkdir -p $out scripts
@@ -348,7 +356,6 @@ let
     imageConfig:
     let
       imaged = [ "/" ] ++ lib.optional efi "/boot";
-      onDisk = device: lib.hasPrefix "/dev/" (toString device);
       extraMounts = lib.filter (fs: !lib.elem fs.mountPoint imaged && onDisk fs.device) (
         lib.attrValues imageConfig.fileSystems
       );
@@ -368,6 +375,28 @@ let
         }; describe the disk with disko instead or use a swap file";
       }
     ];
+
+  partitionAssertions =
+    imageConfig:
+    let
+      swaps = lib.filter (swap: onDisk swap.device) imageConfig.swapDevices;
+    in
+    [
+      {
+        assertion = !disko;
+        message = "imaged.image.kind = \"partition\" packs only the root filesystem, but disko describes a whole disk; remove disko or use imaged.image.kind = \"disk\"";
+      }
+      {
+        assertion = !imageConfig.boot.growPartition;
+        message = "imaged.image.kind = \"partition\" deploys into an existing partition and never changes the partition table, but boot.growPartition would grow the root partition at boot";
+      }
+      {
+        assertion = swaps == [ ];
+        message = "the imaged partition image holds only the root filesystem, but swapDevices uses ${
+          lib.concatMapStringsSep ", " (swap: toString swap.device) swaps
+        }; use a swap file";
+      }
+    ];
 in
 {
   options.imaged.image = {
@@ -381,6 +410,22 @@ in
       defaultText = lib.literalExpression "config.system.name";
       description = "Image name stored in the archive. The archive file is named after it, with characters that may not appear in store paths replaced by `-`.";
     };
+    kind = mkOption {
+      type = types.enum [
+        "disk"
+        "partition"
+      ];
+      default = "disk";
+      description = ''
+        What the image holds. `disk` is a whole disk with its partition
+        table, laid out by disko or by `partitionTableType`. `partition` is
+        only the ext4 root filesystem (label `nixos`): deploying it
+        overwrites one existing partition of the host and leaves the
+        partition table and the other partitions alone, so `/boot` and any
+        other filesystems come from the configuration's own `fileSystems`.
+        Partition images cannot use disko.
+      '';
+    };
     partitionTableType = mkOption {
       type = types.enum [
         "efi"
@@ -389,9 +434,10 @@ in
       ];
       default = "efi";
       description = ''
-        Disk layout when the configuration does not use disko: an ESP (`efi`),
-        an ESP plus a BIOS boot partition (`hybrid`) or only a BIOS boot
-        partition (`legacy+gpt`), each followed by the ext4 root.
+        Disk layout of a `disk` image when the configuration does not use
+        disko: an ESP (`efi`), an ESP plus a BIOS boot partition (`hybrid`)
+        or only a BIOS boot partition (`legacy+gpt`), each followed by the
+        ext4 root. Partition images ignore it.
       '';
     };
     additionalSpace = mkOption {
@@ -413,7 +459,7 @@ in
 
   config = lib.mkMerge [
     {
-      boot.growPartition = lib.mkDefault true;
+      boot.growPartition = lib.mkDefault (!partition);
       fileSystems."/".autoResize = lib.mkDefault true;
       image.modules.imaged =
         {
@@ -424,8 +470,45 @@ in
           ...
         }:
         let
+          partitionImage = import "${modulesPath}/../lib/make-disk-image.nix" {
+            inherit lib config pkgs;
+            name = "imaged-partition";
+            baseName = "nixos";
+            format = "raw";
+            partitionTableType = "none";
+            inherit (cfg) additionalSpace;
+            installBootLoader = false;
+            copyChannel = false;
+          };
+          activatedPartitionImage = pkgs.vmTools.runInLinuxVM (
+            pkgs.runCommand "imaged-partition-activated"
+              {
+                preVM = ''
+                  mkdir $out
+                  cp --sparse=always ${partitionImage}/nixos.img $out/nixos.img
+                  chmod u+w $out/nixos.img
+                  diskImage=$out/nixos.img
+                '';
+                buildInputs = [
+                  pkgs.util-linux
+                  pkgs.e2fsprogs
+                  pkgs.nixos-enter
+                ];
+                memSize = 1024;
+              }
+              ''
+                mkdir /mnt
+                mount /dev/vda /mnt
+                nixos-enter --root /mnt -- true
+                umount -R /mnt
+                tune2fs -T now -c 0 -i 0 /dev/vda
+                tune2fs -f -T 19700101 /dev/vda
+              ''
+          );
           raw =
-            if disko then
+            if partition then
+              "${activatedPartitionImage}/nixos.img"
+            else if disko then
               "${config.system.build.diskoImages}/${(lib.head (lib.attrValues config.disko.devices.disk)).imageName}.raw"
             else
               "${
@@ -439,7 +522,9 @@ in
                 }
               }/nixos.img";
           rootPartition =
-            if disko then
+            if partition then
+              1
+            else if disko then
               (lib.findFirst (p: p.content.mountpoint or null == "/") null (diskoPartitions config))._index or 0
             else
               {
@@ -456,7 +541,14 @@ in
               assertions =
                 systemAssertions config
                 ++ secretAssertions config
-                ++ (if disko then diskoAssertions config else makeDiskImageAssertions config);
+                ++ (
+                  if partition then
+                    partitionAssertions config
+                  else if disko then
+                    diskoAssertions config
+                  else
+                    makeDiskImageAssertions config
+                );
               image.extension = "imaged";
               image.baseName = lib.mkDefault (lib.strings.sanitizeDerivationName cfg.name);
               system.build.image = packArchive config raw rootPartition;
@@ -477,7 +569,7 @@ in
         fsType = "ext4";
         autoResize = true;
       };
-      fileSystems."/boot" = lib.mkIf efi (
+      fileSystems."/boot" = lib.mkIf (efi && !partition) (
         lib.mkForce {
           device = "/dev/disk/by-label/ESP";
           fsType = "vfat";

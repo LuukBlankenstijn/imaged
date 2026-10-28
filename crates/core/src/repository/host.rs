@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+
 use derive_more::Constructor;
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool, types::Json};
 
 use crate::domain::{self, host::Host};
-use imaged_model::{agent::MacAddress, error::Result};
+use imaged_model::{
+    agent::MacAddress,
+    error::{AppError, Result},
+    host::HostPartition,
+};
 
 #[derive(Debug, Constructor)]
 pub struct SqliteHostRepository {
@@ -19,18 +25,71 @@ struct HostRow {
     ip: Option<String>,
 }
 
-impl From<HostRow> for Host {
-    fn from(value: HostRow) -> Self {
-        let disk = match value.disk_error {
+impl HostRow {
+    fn into_host(self, partitions: Vec<HostPartition>) -> Host {
+        let disk = match self.disk_error {
             Some(reason) => Err(reason),
-            None => Ok(value.disk_size_bytes as u64),
+            None => Ok(self.disk_size_bytes as u64),
         };
-        Self::new(value.id, value.name, value.mac, disk, value.ip)
+        Host::new(self.id, self.name, self.mac, disk, self.ip, partitions)
     }
 }
 
 fn canonical_mac(mac: &str) -> Result<String> {
     Ok(mac.parse::<MacAddress>()?.to_string())
+}
+
+async fn load_partitions<'e, E>(
+    executor: E,
+    ids: &[i64],
+) -> Result<HashMap<i64, Vec<HostPartition>>>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let ids = Json(ids);
+    let mut partitions: HashMap<i64, Vec<HostPartition>> = HashMap::new();
+    for row in sqlx::query!(
+        r#"SELECT host_id, number, partuuid, partlabel, label, uuid, fstype, size_bytes
+           FROM host_partitions
+           WHERE host_id IN (SELECT value FROM json_each(?))
+           ORDER BY host_id, number"#,
+        ids
+    )
+    .fetch_all(executor)
+    .await?
+    {
+        partitions
+            .entry(row.host_id)
+            .or_default()
+            .push(HostPartition {
+                number: row.number,
+                partuuid: row.partuuid,
+                partlabel: row.partlabel,
+                label: row.label,
+                uuid: row.uuid,
+                fstype: row.fstype,
+                size_bytes: row.size_bytes as u64,
+            });
+    }
+    Ok(partitions)
+}
+
+impl SqliteHostRepository {
+    async fn assemble(&self, rows: Vec<HostRow>) -> Result<Vec<Host>> {
+        let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+        let mut partitions = load_partitions(&self.pool, &ids).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let own = partitions.remove(&row.id).unwrap_or_default();
+                row.into_host(own)
+            })
+            .collect())
+    }
+
+    async fn one(&self, row: HostRow) -> Result<Host> {
+        Ok(self.assemble(vec![row]).await?.remove(0))
+    }
 }
 
 #[async_trait::async_trait]
@@ -47,6 +106,7 @@ impl domain::host::HostRepository for SqliteHostRepository {
             Ok(size) => (size as i64, None),
             Err(reason) => (0, Some(reason)),
         };
+        let mut tx = self.pool.begin().await?;
         let host = sqlx::query_as!(
             HostRow,
             r#"
@@ -70,10 +130,16 @@ impl domain::host::HostRepository for SqliteHostRepository {
             disk_error,
             ip
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        if host.disk_error.is_some() {
+            sqlx::query!("DELETE FROM host_partitions WHERE host_id = ?", host.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
 
-        Ok(host.into())
+        self.one(host).await
     }
 
     async fn update_name(&self, id: i64, name: String) -> Result<Host> {
@@ -86,7 +152,7 @@ impl domain::host::HostRepository for SqliteHostRepository {
         .fetch_one(&self.pool)
         .await?;
 
-        Ok(host.into())
+        self.one(host).await
     }
 
     async fn get_all(&self, group_id: Option<i64>) -> Result<Vec<Host>> {
@@ -100,7 +166,7 @@ impl domain::host::HostRepository for SqliteHostRepository {
             None => sqlx::query_as!(HostRow, "SELECT * FROM hosts ORDER BY name").fetch_all(&self.pool)
             .await?,
         };
-        Ok(host_rows.into_iter().map(|row| row.into()).collect())
+        self.assemble(host_rows).await
     }
 
     async fn delete(&self, id: i64) -> Result {
@@ -112,7 +178,7 @@ impl domain::host::HostRepository for SqliteHostRepository {
 
     async fn get_by_mac(&self, mac: &str) -> Result<Host> {
         let mac = canonical_mac(mac)?;
-        Ok(sqlx::query_as!(
+        let host = sqlx::query_as!(
             HostRow,
             r#"
             SELECT 
@@ -128,8 +194,40 @@ impl domain::host::HostRepository for SqliteHostRepository {
             mac
         )
         .fetch_one(&self.pool)
-        .await?
-        .into())
+        .await?;
+        self.one(host).await
+    }
+
+    async fn set_partitions(&self, id: i64, partitions: &[HostPartition]) -> Result {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query!("DELETE FROM host_partitions WHERE host_id = ?", id)
+            .execute(&mut *tx)
+            .await?;
+        for partition in partitions {
+            let size_bytes = i64::try_from(partition.size_bytes).map_err(|_| {
+                AppError::InvalidArgument(format!(
+                    "partition {} size {} is out of range",
+                    partition.number, partition.size_bytes
+                ))
+            })?;
+            sqlx::query!(
+                "INSERT INTO host_partitions \
+                 (host_id, number, partuuid, partlabel, label, uuid, fstype, size_bytes) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                id,
+                partition.number,
+                partition.partuuid,
+                partition.partlabel,
+                partition.label,
+                partition.uuid,
+                partition.fstype,
+                size_bytes
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 }
 
@@ -138,6 +236,7 @@ mod tests {
     use crate::domain::task::TaskType;
     use crate::test_support::repos;
     use imaged_model::error::AppError;
+    use imaged_model::host::HostPartition;
     use imaged_model::task::TaskState;
 
     #[tokio::test]
@@ -181,6 +280,69 @@ mod tests {
 
         let all = c.host_repo.get_all(None).await.unwrap();
         assert_eq!(all.len(), 1);
+    }
+
+    fn partition(number: i64, partuuid: &str, size_bytes: u64) -> HostPartition {
+        HostPartition {
+            number,
+            partuuid: partuuid.into(),
+            partlabel: None,
+            label: Some(format!("part{number}")),
+            uuid: None,
+            fstype: Some("ext4".into()),
+            size_bytes,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_partition_inventory_is_replaced_wholesale_and_dropped_with_an_unusable_disk() {
+        let (c, _guard) = repos().await;
+        let mac = "aa:bb:cc:dd:ee:07";
+        let host = c
+            .host_repo
+            .upsert_host(mac.into(), Ok(1 << 40), None)
+            .await
+            .unwrap();
+        let other = c
+            .host_repo
+            .upsert_host("aa:bb:cc:dd:ee:08".into(), Ok(1 << 40), None)
+            .await
+            .unwrap();
+        c.host_repo
+            .set_partitions(other.id, &[partition(1, "other", 1)])
+            .await
+            .unwrap();
+
+        c.host_repo
+            .set_partitions(
+                host.id,
+                &[partition(1, "esp", 1 << 29), partition(2, "root", 1 << 39)],
+            )
+            .await
+            .unwrap();
+        c.host_repo
+            .set_partitions(host.id, &[partition(2, "root", u64::MAX >> 1)])
+            .await
+            .unwrap();
+
+        let fetched = c.host_repo.get_by_mac(mac).await.unwrap();
+        assert_eq!(fetched.partitions, [partition(2, "root", u64::MAX >> 1)]);
+        let reconnected = c
+            .host_repo
+            .upsert_host(mac.into(), Ok(1 << 40), None)
+            .await
+            .unwrap();
+        assert_eq!(reconnected.partitions, fetched.partitions);
+
+        let broken = c
+            .host_repo
+            .upsert_host(mac.into(), Err("no disk".into()), None)
+            .await
+            .unwrap();
+        assert!(broken.partitions.is_empty());
+        let all = c.host_repo.get_all(None).await.unwrap();
+        let kept = all.iter().find(|h| h.id == other.id).unwrap();
+        assert_eq!(kept.partitions, [partition(1, "other", 1)]);
     }
 
     #[tokio::test]

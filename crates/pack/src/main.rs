@@ -3,6 +3,7 @@ mod cli;
 mod extract;
 mod pack;
 mod scripts;
+mod shrink;
 
 use clap::Parser;
 use imaged_model::setup_logging;

@@ -6,17 +6,21 @@ use std::collections::{BTreeMap, HashSet};
 use dioxus::prelude::*;
 
 use crate::components::deploy_inputs::{
-    deploy_request, erase_target, form_fields, initial_inputs, multicast_request, submitted_inputs,
+    deploy_request, erase_target, form_fields, initial_inputs, multicast_request,
+    scripts_lack_root, submitted_inputs,
 };
 use crate::components::hooks::Polled;
 use crate::components::icons::Icon;
+use crate::components::partitions::{
+    MatchBy, Resolution, Unfit, capture_sources, deploy_target, multicast_targets, resolve,
+};
 use crate::components::ui::{
     Button, EmptyState, ImageStatusBadge, StatusDot, TaskStateBadge, TaskTypeBadge,
 };
 use crate::format::{format_bytes, format_relative};
 use crate::model::{
-    DeployInputs, Host, ImageStatus, InputKind, InputSource, InputSources, Script, ScriptInput,
-    TaskState, TaskType,
+    DeployInputs, Host, HostPartition, Image, ImageKind, ImagePartition, ImageStatus, InputKind,
+    InputSource, InputSources, Script, ScriptInput, TaskState, TaskType,
 };
 use crate::views::groups::{all_selected, toggle_visible};
 use crate::views::scripts::InputDraft;
@@ -249,6 +253,7 @@ fn script(id: i64, inputs: Vec<ScriptInput>) -> Script {
         body: String::new(),
         updated_at: 0,
         inputs,
+        root_partition: None,
     }
 }
 
@@ -417,30 +422,255 @@ fn filled_form() -> DeployInputs {
     }
 }
 
+fn image(id: i64, kind: ImageKind, size_bytes: u64, fs_uuid: Option<&str>) -> Image {
+    Image {
+        id,
+        name: format!("image-{id}"),
+        captured_at: None,
+        status: ImageStatus::Ready,
+        error_message: None,
+        partitions: vec![ImagePartition {
+            id: 1,
+            partition_number: 1,
+            fstype: "ext4".to_string(),
+            size_bytes,
+            fs_uuid: fs_uuid.map(str::to_string),
+            fs_label: None,
+        }],
+        root_partition: None,
+        kind,
+    }
+}
+
+fn partition(
+    number: i64,
+    partlabel: Option<&str>,
+    fstype: Option<&str>,
+    size_bytes: u64,
+    uuid: Option<&str>,
+) -> HostPartition {
+    HostPartition {
+        number,
+        partuuid: format!("pu-{number}"),
+        partlabel: partlabel.map(str::to_string),
+        label: None,
+        uuid: uuid.map(str::to_string),
+        fstype: fstype.map(str::to_string),
+        size_bytes,
+    }
+}
+
+fn host_with(id: i64, partitions: Vec<HostPartition>) -> Host {
+    Host {
+        id,
+        mac_address: format!("aa:bb:cc:dd:ee:{id:02x}"),
+        name: format!("lab-{id}"),
+        disk_size_bytes: Some(1 << 40),
+        disk_error: None,
+        ip: None,
+        partitions,
+    }
+}
+
 #[test]
 fn a_deploy_cannot_be_submitted_before_an_image_is_chosen_and_its_inputs_are_loaded() {
     let form = filled_form();
+    let disk = image(9, ImageKind::Disk, 1, None);
 
-    assert_eq!(deploy_request(4, None, Some(&form)), None);
-    assert_eq!(deploy_request(4, Some(9), None), None);
+    assert_eq!(deploy_request(4, None, None, Some(&form)), None);
+    assert_eq!(deploy_request(4, Some(&disk), None, None), None);
 
-    let request = deploy_request(4, Some(9), Some(&form)).unwrap();
+    let request = deploy_request(4, Some(&disk), Some("pu-2"), Some(&form)).unwrap();
     assert_eq!((request.id, request.image_id), (4, 9));
     assert_eq!(request.inputs, submitted_inputs(&form));
+    assert_eq!(request.partition, None);
+}
+
+#[test]
+fn a_partition_image_deploy_needs_a_target_partition_and_sends_it() {
+    let form = filled_form();
+    let single = image(9, ImageKind::Partition, 1, None);
+
+    assert_eq!(deploy_request(4, Some(&single), None, Some(&form)), None);
+
+    let request = deploy_request(4, Some(&single), Some("pu-2"), Some(&form)).unwrap();
+    assert_eq!(request.partition.as_deref(), Some("pu-2"));
 }
 
 #[test]
 fn a_multicast_targets_every_member_and_needs_members_an_image_and_loaded_inputs() {
     let form = filled_form();
+    let disk = image(9, ImageKind::Disk, 1, None);
 
-    assert_eq!(multicast_request(&[], Some(9), Some(&form)), None);
-    assert_eq!(multicast_request(&[4, 7], None, Some(&form)), None);
-    assert_eq!(multicast_request(&[4, 7], Some(9), None), None);
+    assert_eq!(multicast_request(&[], Some(&disk), None, Some(&form)), None);
+    assert_eq!(multicast_request(&[4, 7], None, None, Some(&form)), None);
+    assert_eq!(multicast_request(&[4, 7], Some(&disk), None, None), None);
 
-    let request = multicast_request(&[4, 7], Some(9), Some(&form)).unwrap();
+    let request = multicast_request(
+        &[4, 7],
+        Some(&disk),
+        Some(BTreeMap::from([(4, "pu-1".to_string())])),
+        Some(&form),
+    )
+    .unwrap();
     assert_eq!(request.host_ids, [4, 7]);
     assert_eq!(request.image_id, 9);
     assert_eq!(request.inputs.shared, values(&[("site", "hq")]));
+    assert!(request.partitions.is_empty());
+}
+
+#[test]
+fn a_partition_multicast_is_blocked_until_every_host_resolves_and_sends_the_map() {
+    let form = filled_form();
+    let single = image(9, ImageKind::Partition, 100, None);
+    let hosts = [
+        host_with(4, vec![partition(2, Some("root"), Some("ext4"), 100, None)]),
+        host_with(
+            7,
+            vec![
+                partition(1, Some("esp"), Some("vfat"), 500, None),
+                partition(3, Some("root"), Some("ext4"), 200, None),
+            ],
+        ),
+    ];
+
+    let by_label = multicast_targets(&single, &hosts, MatchBy::Label, " root ");
+    assert_eq!(
+        by_label,
+        Some(BTreeMap::from([
+            (4, "pu-2".to_string()),
+            (7, "pu-3".to_string())
+        ]))
+    );
+    assert_eq!(
+        multicast_targets(&single, &hosts, MatchBy::Number, "2"),
+        None
+    );
+    assert_eq!(multicast_targets(&single, &hosts, MatchBy::Label, ""), None);
+    assert_eq!(
+        multicast_request(&[4, 7], Some(&single), None, Some(&form)),
+        None
+    );
+    let request = multicast_request(&[4, 7], Some(&single), by_label.clone(), Some(&form)).unwrap();
+    assert_eq!(Some(request.partitions), by_label);
+}
+
+#[test]
+fn a_matched_partition_resolves_only_when_it_is_unique_large_enough_and_holds_no_twin() {
+    let single = image(9, ImageKind::Partition, 100, Some("ABCD-1234"));
+    let host = host_with(
+        4,
+        vec![
+            partition(1, Some("data"), Some("ext4"), 50, None),
+            partition(2, Some("root"), Some("ext4"), 100, Some("abcd-1234")),
+            partition(3, Some("root"), Some("ext4"), 300, None),
+            partition(4, Some("spare"), None, 300, None),
+        ],
+    );
+
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Number, "2"),
+        Resolution::Target(host.partitions[1].clone())
+    );
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Number, "1"),
+        Resolution::Unfit(host.partitions[0].clone(), Unfit::TooSmall { needed: 100 })
+    );
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Label, "spare"),
+        Resolution::Unfit(
+            host.partitions[3].clone(),
+            Unfit::HoldsFilesystem {
+                twin: "#2 (root)".to_string()
+            }
+        )
+    );
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Label, "root"),
+        Resolution::Ambiguous(2)
+    );
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Label, "ROOT"),
+        Resolution::NoMatch
+    );
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Number, "x"),
+        Resolution::NoMatch
+    );
+    assert_eq!(
+        deploy_target(&single, &host, "pu-2"),
+        Some(host.partitions[1].clone())
+    );
+    assert_eq!(deploy_target(&single, &host, "pu-1"), None);
+    assert_eq!(deploy_target(&single, &host, "pu-4"), None);
+}
+
+#[test]
+fn a_partition_beside_one_holding_the_images_filesystem_label_is_unfit() {
+    let mut single = image(9, ImageKind::Partition, 100, None);
+    single.partitions[0].fs_label = Some("root fs".to_string());
+    let labelled = |number, label: &str| {
+        let mut partition = partition(number, Some("root"), Some("ext4"), 100, None);
+        partition.label = Some(label.to_string());
+        partition
+    };
+    let twin = labelled(2, "root fs");
+    let other_case = labelled(5, "ROOT FS");
+    let target = partition(3, Some("spare"), None, 300, None);
+    let host = host_with(4, vec![twin.clone(), target.clone()]);
+
+    let unfit = Unfit::HoldsLabel {
+        twin: "#2 (root)".to_string(),
+        label: "root fs".to_string(),
+    };
+    assert_eq!(
+        resolve(&single, &host, MatchBy::Label, "spare"),
+        Resolution::Unfit(target.clone(), unfit.clone())
+    );
+    assert_eq!(
+        unfit.reason(),
+        "#2 (root) already holds a filesystem labelled `root fs`"
+    );
+    assert_eq!(deploy_target(&single, &host, "pu-2"), Some(twin));
+
+    let host = host_with(4, vec![other_case, target.clone()]);
+    assert_eq!(deploy_target(&single, &host, "pu-3"), Some(target));
+}
+
+#[test]
+fn only_ext_and_vfat_partitions_can_be_captured() {
+    let host = host_with(
+        4,
+        vec![
+            partition(1, None, Some("vfat"), 1, None),
+            partition(2, None, Some("swap"), 1, None),
+            partition(3, None, Some("ext4"), 1, None),
+            partition(4, None, Some("ntfs"), 1, None),
+            partition(5, None, None, 1, None),
+        ],
+    );
+
+    let numbers: Vec<i64> = capture_sources(&host).iter().map(|p| p.number).collect();
+
+    assert_eq!(numbers, [1, 3]);
+}
+
+#[test]
+fn scripts_resolve_their_root_from_their_own_pick_or_the_image_root() {
+    let mut disk = image(9, ImageKind::Disk, 1, None);
+    let mut rooted = script(1, Vec::new());
+    rooted.root_partition = Some(1);
+    let unrooted = script(2, Vec::new());
+
+    assert!(!scripts_lack_root(&disk, &[]));
+    assert!(!scripts_lack_root(&disk, std::slice::from_ref(&rooted)));
+    assert!(scripts_lack_root(
+        &disk,
+        &[rooted.clone(), unrooted.clone()]
+    ));
+
+    disk.root_partition = Some(1);
+    assert!(!scripts_lack_root(&disk, &[rooted, unrooted]));
 }
 
 #[test]
@@ -452,6 +682,7 @@ fn the_erase_warning_names_each_target_with_its_mac_and_disk() {
         disk_size_bytes: Some(1024u64.pow(3)),
         disk_error: None,
         ip: None,
+        partitions: Vec::new(),
     };
     assert_eq!(erase_target(&host), "lab-4 · aa:bb:cc:dd:ee:04 · 1.00 GiB");
 

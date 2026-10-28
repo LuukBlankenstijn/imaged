@@ -14,12 +14,38 @@ pub enum ImageStatus {
     Faulted,
 }
 
+pub const FSTYPES: [&str; 5] = ["ext2", "ext3", "ext4", "vfat", "swap"];
+
+#[derive(
+    Clone, Copy, Debug, Default, Display, FromStr, IsVariant, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[display(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum ImageKind {
+    #[default]
+    Disk,
+    Partition,
+}
+
+impl ImageKind {
+    pub fn fstypes(self) -> &'static [&'static str] {
+        match self {
+            Self::Disk => &FSTYPES,
+            Self::Partition => &FSTYPES[..4],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Constructor, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagePartition {
     pub id: i64,
     pub partition_number: i64,
     pub fstype: String,
     pub size_bytes: u64,
+    #[serde(default)]
+    pub fs_uuid: Option<String>,
+    #[serde(default)]
+    pub fs_label: Option<String>,
 }
 
 #[cfg(test)]

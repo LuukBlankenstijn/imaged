@@ -8,6 +8,7 @@ use imaged_archive::{
     ArchiveReader, Contents, PartitionSource, Script, archive_file_name, write_archive,
 };
 use imaged_model::error::{AppError, Result};
+use imaged_model::image::ImageKind;
 use imaged_model::script::{InputKind, ScriptInput};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -152,11 +153,13 @@ fn scripts() -> Vec<Script> {
             name: "set-hostname".into(),
             body: "#!/bin/sh\nhostname \"$IMAGED_INPUT_HOSTNAME\"\n".into(),
             inputs: vec![hostname_input()],
+            root_partition: None,
         },
         Script {
             name: "cleanup".into(),
             body: "rm -rf /var/cache/*\n".into(),
             inputs: vec![],
+            root_partition: None,
         },
     ]
 }
@@ -177,19 +180,24 @@ fn contents(sources: &Path) -> Contents {
     Contents {
         name: "golden".into(),
         captured_at: Some(captured_at()),
+        kind: ImageKind::Disk,
         sector_size: 512,
-        partition_table: table,
+        partition_table: Some(table),
         partitions: vec![
             PartitionSource {
                 number: 1,
                 fstype: "vfat".into(),
                 size_bytes: 1 << 33,
+                fs_uuid: None,
+                fs_label: Some("EFI".into()),
                 path: first,
             },
             PartitionSource {
                 number: 2,
                 fstype: "ext4".into(),
                 size_bytes: 1 << 33,
+                fs_uuid: None,
+                fs_label: None,
                 path: second,
             },
         ],
@@ -235,7 +243,7 @@ async fn written_archives_hold_the_manifest_first_followed_by_the_checksummed_fi
             "sector_size": 512,
             "partition_table": { "file": "parttable.bin", "sha256": sha256(TABLE) },
             "partitions": [
-                { "number": 1, "fstype": "vfat", "size_bytes": 1u64 << 33, "file": "p-1.pcl", "sha256": sha256(&large()) },
+                { "number": 1, "fstype": "vfat", "size_bytes": 1u64 << 33, "file": "p-1.pcl", "sha256": sha256(&large()), "fs_label": "EFI" },
                 { "number": 2, "fstype": "ext4", "size_bytes": 1u64 << 33, "file": "p-2.pcl", "sha256": sha256(SMALL) },
             ],
             "root_partition": 2,
@@ -292,6 +300,214 @@ async fn unpacking_a_written_archive_reproduces_its_files_and_scripts() {
     assert_eq!(std::fs::read(dir.join("parttable.bin")).unwrap(), TABLE);
     assert_eq!(std::fs::read(dir.join("p-1.pcl")).unwrap(), large());
     assert_eq!(std::fs::read(dir.join("p-2.pcl")).unwrap(), SMALL);
+}
+
+const FS_UUID: &str = "5b1c2f9e-7d0a-4c55-9a1e-2f3b4c5d6e7f";
+
+fn partition_contents(sources: &Path) -> Contents {
+    let root = sources.join("root");
+    std::fs::write(&root, SMALL).unwrap();
+    Contents {
+        name: "root".into(),
+        captured_at: None,
+        kind: ImageKind::Partition,
+        sector_size: 4096,
+        partition_table: None,
+        partitions: vec![PartitionSource {
+            number: 1,
+            fstype: "ext4".into(),
+            size_bytes: 1 << 30,
+            fs_uuid: Some(FS_UUID.into()),
+            fs_label: Some("root".into()),
+            path: root,
+        }],
+        root_partition: Some(1),
+        scripts: vec![Script {
+            root_partition: Some(1),
+            ..scripts().remove(1)
+        }],
+    }
+}
+
+#[tokio::test]
+async fn a_partition_image_is_written_as_format_3_without_a_partition_table() {
+    let sources = TestDir::new();
+    let mut archive = Vec::new();
+    let manifest = write_archive(partition_contents(&sources.0), &mut archive)
+        .await
+        .unwrap();
+
+    let files = untar(&archive).await;
+
+    let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["manifest.json", "p-1.pcl", "scripts/cleanup.sh"]);
+    let json: serde_json::Value = serde_json::from_slice(&files[0].1).unwrap();
+    assert_eq!(
+        json,
+        json!({
+            "format": 3,
+            "name": "root",
+            "kind": "partition",
+            "captured_at": null,
+            "sector_size": 4096,
+            "partitions": [
+                { "number": 1, "fstype": "ext4", "size_bytes": 1u64 << 30, "file": "p-1.pcl", "sha256": sha256(SMALL), "fs_uuid": FS_UUID, "fs_label": "root" },
+            ],
+            "root_partition": 1,
+            "scripts": [{
+                "name": "cleanup",
+                "file": "scripts/cleanup.sh",
+                "sha256": sha256(&files[2].1),
+                "inputs": [],
+                "root_partition": 1,
+            }],
+        })
+    );
+
+    let target = TestDir::new();
+    let dir = target.0.join("unpacked");
+    let unpacked = open(&archive).await.unwrap().unpack(&dir).await.unwrap();
+    assert_eq!(unpacked.manifest, manifest);
+    assert_eq!(unpacked.scripts[0].root_partition, Some(1));
+    let stored: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|file| file.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(stored, ["p-1.pcl"]);
+}
+
+#[tokio::test]
+async fn a_disk_image_needs_format_3_only_once_a_script_overrides_its_root() {
+    let sources = TestDir::new();
+    let mut contents = contents(&sources.0);
+    contents.scripts[1].root_partition = Some(1);
+    let mut archive = Vec::new();
+
+    let manifest = write_archive(contents, &mut archive).await.unwrap();
+
+    let files = untar(&archive).await;
+    let json: serde_json::Value = serde_json::from_slice(&files[0].1).unwrap();
+    assert_eq!(json["format"], 3);
+    assert!(json.get("kind").is_none());
+    assert_eq!(json["partition_table"]["file"], "parttable.bin");
+    assert!(json["scripts"][0].get("root_partition").is_none());
+    assert_eq!(json["scripts"][1]["root_partition"], 1);
+    let unpacked = open(&archive)
+        .await
+        .unwrap()
+        .unpack(&TestDir::new().0.join("unpacked"))
+        .await
+        .unwrap();
+    assert_eq!(unpacked.manifest, manifest);
+    assert_eq!(
+        unpacked
+            .scripts
+            .iter()
+            .map(|s| s.root_partition)
+            .collect::<Vec<_>>(),
+        [None, Some(1)]
+    );
+}
+
+#[tokio::test]
+async fn manifests_breaking_the_image_kind_rules_are_rejected_before_unpacking() {
+    type Edit = fn(&mut serde_json::Value);
+    let partition: Edit = |manifest| {
+        manifest["format"] = json!(3);
+        manifest["kind"] = json!("partition");
+        manifest.as_object_mut().unwrap().remove("partition_table");
+    };
+    let cases: [(Edit, &str); 8] = [
+        (
+            |manifest| manifest["kind"] = json!("partition"),
+            "archive format 2 cannot hold partition images or per-script root partitions",
+        ),
+        (
+            |manifest| {
+                *manifest = with_script_root(manifest, Some(1));
+            },
+            "archive format 2 cannot hold partition images or per-script root partitions",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                manifest.as_object_mut().unwrap().remove("partition_table");
+            },
+            "a disk image archive must hold a partition table",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                manifest["kind"] = json!("partition");
+            },
+            "a partition image archive cannot hold a partition table",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                manifest["kind"] = json!("partition");
+                manifest.as_object_mut().unwrap().remove("partition_table");
+                manifest["partitions"][0]["number"] = json!(2);
+                manifest["partitions"][0]["file"] = json!("p-2.pcl");
+            },
+            "a partition image archive must hold exactly partition 1",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                manifest["kind"] = json!("partition");
+                manifest.as_object_mut().unwrap().remove("partition_table");
+                let second = manifest["partitions"][0].clone();
+                manifest["partitions"].as_array_mut().unwrap().push(second);
+            },
+            "a partition image archive must hold exactly partition 1",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                manifest["kind"] = json!("partition");
+                manifest.as_object_mut().unwrap().remove("partition_table");
+                manifest["partitions"][0]["fstype"] = json!("swap");
+            },
+            "partition 1 has unsupported fstype `swap`, expected one of ext2, ext3, ext4, vfat",
+        ),
+        (
+            |manifest| {
+                manifest["format"] = json!(3);
+                *manifest = with_script_root(manifest, Some(2));
+            },
+            "script `setup` root partition 2 is not one of the archived partitions",
+        ),
+    ];
+    let mut accepted: serde_json::Value = serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+    partition(&mut accepted);
+    Manifest::parse(&serde_json::to_vec(&accepted).unwrap())
+        .unwrap()
+        .checksums()
+        .unwrap();
+    for (edit, expected) in cases {
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+        edit(&mut manifest);
+        let manifest = serde_json::to_vec(&manifest).unwrap();
+        let archive = tar(&[("manifest.json", &manifest), ("p-1.pcl", SMALL)]).await;
+
+        let message = rejected_on_open(archive).await;
+
+        assert!(message.starts_with(expected), "{message}");
+    }
+}
+
+fn with_script_root(manifest: &serde_json::Value, root: Option<i64>) -> serde_json::Value {
+    let mut manifest: serde_json::Value = serde_json::from_slice(&with_script(
+        &serde_json::to_vec(manifest).unwrap(),
+        "setup",
+        "scripts/setup.sh",
+        b"x",
+    ))
+    .unwrap();
+    manifest["scripts"][0]["root_partition"] = json!(root);
+    manifest
 }
 
 #[tokio::test]
@@ -391,7 +607,7 @@ async fn an_unsupported_format_is_rejected_before_unpacking() {
 
     let message = rejected_on_open(archive).await;
 
-    assert_eq!(message, "unsupported archive format 1, expected 2");
+    assert_eq!(message, "unsupported archive format 1, expected 2 or 3");
 }
 
 #[tokio::test]

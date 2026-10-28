@@ -14,7 +14,7 @@ pub mod task;
 mod types;
 
 pub use multicast::{MULTICAST_JOIN_WINDOW, get_multicast_port, multicast_group};
-pub use types::{AgentEvent, ServerEvent, Task, TaskType};
+pub use types::{AgentEvent, ServerEvent, Task, TaskType, Work};
 
 #[cfg(feature = "logging")]
 pub use logging::log_filter;

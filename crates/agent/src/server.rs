@@ -6,9 +6,8 @@ use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
 use futures::{SinkExt as _, Stream, StreamExt, TryStreamExt};
 use imaged_model::agent::{
-    IP_HEADER, ImageLayout, ImagePartition, MAC_HEADER, MacAddress, PartitionTableUpload,
-    PartitionUpload, PostInstall, ScriptFinished, ScriptOutputUpload, StreamQuery, TaskFailure,
-    path, route,
+    IP_HEADER, ImageLayout, ImagePartition, MAC_HEADER, MacAddress, PartitionUpload, PostInstall,
+    ScriptFinished, ScriptOutputUpload, StreamQuery, TaskFailure, TaskStarted, path, route,
 };
 use imaged_model::progress::HostProgress;
 use imaged_model::{AgentEvent, ServerEvent};
@@ -24,6 +23,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tokio_util::io::{ReaderStream, StreamReader};
+
+use crate::sys::disk::HostDisk;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -145,12 +146,12 @@ impl Server {
 
     pub async fn connect_events(
         &self,
-        disk: &std::result::Result<u64, String>,
+        disk: &std::result::Result<HostDisk, String>,
         uplink: Uplink,
         silence_limit: Duration,
     ) -> Result<impl Stream<Item = ServerEvent> + Send + use<>> {
         let query = StreamQuery {
-            disk_size_bytes: disk.as_ref().ok().copied(),
+            disk_size_bytes: disk.as_ref().ok().map(|disk| disk.size_bytes),
             disk_error: disk.as_ref().err().cloned(),
         };
         let url = self
@@ -165,7 +166,13 @@ impl Server {
         let (socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .with_context(|| format!("GET {}", route::STREAM))?;
-        let connection = Connection::new(socket, uplink, silence_limit);
+        let mut connection = Connection::new(socket, uplink, silence_limit);
+        if let Ok(disk) = disk {
+            connection
+                .send(&AgentEvent::Partitions(disk.partitions.clone()))
+                .await
+                .context("reporting the disk's partitions")?;
+        }
         Ok(futures::stream::unfold(
             connection,
             |mut connection| async move {
@@ -178,6 +185,14 @@ impl Server {
     pub async fn disconnect(&self) -> Result<()> {
         self.send(Method::POST, route::DISCONNECT, |request| request)
             .await?;
+        Ok(())
+    }
+
+    pub async fn mark_started(&self, task_id: i64, sector_size: Option<u32>) -> Result<()> {
+        self.send(Method::POST, &path::started(task_id), |request| {
+            request.query(&TaskStarted { sector_size })
+        })
+        .await?;
         Ok(())
     }
 
@@ -211,16 +226,9 @@ impl Server {
             .with_context(|| format!("reading the response of GET {path}"))
     }
 
-    pub async fn upload_partition_table(
-        &self,
-        task_id: i64,
-        sector_size: u32,
-        table: Bytes,
-    ) -> Result<()> {
+    pub async fn upload_partition_table(&self, task_id: i64, table: Bytes) -> Result<()> {
         self.send(Method::PUT, &path::partition_table(task_id), |request| {
-            request
-                .query(&PartitionTableUpload { sector_size })
-                .body(table)
+            request.body(table)
         })
         .await?;
         Ok(())
@@ -247,14 +255,13 @@ impl Server {
         &self,
         task_id: i64,
         partition_number: i64,
-        filesystem: String,
-        size: i64,
+        upload: &PartitionUpload,
         data: impl AsyncRead + Send + 'static,
     ) -> Result<ImagePartition> {
         let path = path::partition_data(task_id, partition_number);
         self.send(Method::PUT, &path, |request| {
             request
-                .query(&PartitionUpload { filesystem, size })
+                .query(upload)
                 .body(Body::wrap_stream(ReaderStream::new(data)))
         })
         .await?

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE image_scripts SET root_partition = NULL WHERE image_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "74855bd916d10f1edcf2bb58833628c09a8f265e206943b194c1b5d3561c1683"
+}

@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use derive_more::{Display, FromStr, IsVariant};
+use imaged_model::Work;
 use imaged_model::error::{AppError, Result};
+use imaged_model::image::ImageKind;
 use imaged_model::script::InputValues;
 use imaged_model::task::TaskState;
 use serde::Deserialize;
@@ -8,23 +10,16 @@ use std::collections::BTreeMap;
 use std::str::FromStr as _;
 
 #[derive(Debug, Clone, Copy, Display, FromStr, IsVariant, PartialEq)]
-#[display(rename_all = "lowercase")]
+#[display(rename_all = "snake_case")]
+#[from_str(rename_all = "snake_case")]
 pub enum TaskType {
     Capture,
+    CapturePartition,
     Deploy,
+    DeployPartition,
     Multicast,
+    MulticastPartition,
     Reboot,
-}
-
-impl From<TaskType> for imaged_model::TaskType {
-    fn from(value: TaskType) -> Self {
-        match value {
-            TaskType::Capture => imaged_model::TaskType::Capture,
-            TaskType::Deploy => imaged_model::TaskType::Deploy,
-            TaskType::Multicast => imaged_model::TaskType::Multicast,
-            TaskType::Reboot => imaged_model::TaskType::Reboot,
-        }
-    }
 }
 
 impl TaskType {
@@ -33,6 +28,49 @@ impl TaskType {
             tracing::info!(err=%e, "failed to convert string to TaskType");
             AppError::Internal("conversion error".to_string())
         })
+    }
+
+    pub fn capture(kind: ImageKind) -> Self {
+        match kind {
+            ImageKind::Disk => Self::Capture,
+            ImageKind::Partition => Self::CapturePartition,
+        }
+    }
+
+    pub fn deploy(kind: ImageKind) -> Self {
+        match kind {
+            ImageKind::Disk => Self::Deploy,
+            ImageKind::Partition => Self::DeployPartition,
+        }
+    }
+
+    pub fn multicast(kind: ImageKind) -> Self {
+        match kind {
+            ImageKind::Disk => Self::Multicast,
+            ImageKind::Partition => Self::MulticastPartition,
+        }
+    }
+
+    pub fn captures(&self) -> bool {
+        matches!(self, Self::Capture | Self::CapturePartition)
+    }
+
+    pub fn multicasts(&self) -> bool {
+        matches!(self, Self::Multicast | Self::MulticastPartition)
+    }
+
+    pub fn restores(&self) -> bool {
+        matches!(
+            self,
+            Self::Deploy | Self::DeployPartition | Self::Multicast | Self::MulticastPartition
+        )
+    }
+
+    pub fn targets_partition(&self) -> bool {
+        matches!(
+            self,
+            Self::CapturePartition | Self::DeployPartition | Self::MulticastPartition
+        )
     }
 }
 
@@ -45,6 +83,8 @@ pub struct TaskHost {
     pub error: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub partuuid: Option<String>,
 }
 
 pub const SCRIPT_OUTPUT_HEAD_BYTES: usize = 64 * 1024;
@@ -65,7 +105,7 @@ pub const MAX_TASK_PAGE_SIZE: u32 = 200;
 #[derive(Debug, Clone)]
 pub struct TaskQuery {
     pub states: Vec<TaskState>,
-    pub task_type: Option<TaskType>,
+    pub task_types: Vec<TaskType>,
     pub host_id: Option<i64>,
     pub before: Option<i64>,
     pub limit: u32,
@@ -133,7 +173,54 @@ impl Task {
     }
 
     pub fn is_dispatchable_to(&self, host_id: i64) -> bool {
-        !self.task_type.is_multicast() || self.hosts_in(TaskState::Running).any(|id| id == host_id)
+        !self.task_type.multicasts() || self.hosts_in(TaskState::Running).any(|id| id == host_id)
+    }
+
+    pub fn partuuid(&self, host_id: i64) -> Option<&str> {
+        self.hosts
+            .iter()
+            .find(|h| h.host_id == host_id)
+            .and_then(|h| h.partuuid.as_deref())
+    }
+
+    pub fn work(&self, host_id: i64) -> Result<Work> {
+        let image_id = || {
+            self.image_id.ok_or_else(|| {
+                AppError::FailedPrecondition(format!("task {} has no image", self.id))
+            })
+        };
+        let partuuid = || {
+            self.partuuid(host_id).map(str::to_owned).ok_or_else(|| {
+                AppError::FailedPrecondition(format!(
+                    "task {} has no partition for host {host_id}",
+                    self.id
+                ))
+            })
+        };
+        Ok(match self.task_type {
+            TaskType::Capture => Work::Capture {
+                image_id: image_id()?,
+            },
+            TaskType::CapturePartition => Work::CapturePartition {
+                image_id: image_id()?,
+                partuuid: partuuid()?,
+            },
+            TaskType::Deploy => Work::Deploy {
+                image_id: image_id()?,
+            },
+            TaskType::DeployPartition => Work::DeployPartition {
+                image_id: image_id()?,
+                partuuid: partuuid()?,
+            },
+            TaskType::Multicast => Work::Multicast {
+                image_id: image_id()?,
+            },
+            TaskType::MulticastPartition => Work::MulticastPartition {
+                image_id: image_id()?,
+                partuuid: partuuid()?,
+            },
+            TaskType::Reboot => Work::Reboot,
+        })
     }
 }
 
@@ -153,6 +240,7 @@ pub trait TaskRepository: Send + Sync {
         host_ids: Vec<i64>,
         image_id: Option<i64>,
         inputs: &BTreeMap<i64, InputValues>,
+        partuuids: &BTreeMap<i64, String>,
     ) -> Result<Task>;
 
     // gets the next task for a host. This takes Pending and Running host rows into account
@@ -226,6 +314,7 @@ mod tests {
             error: None,
             started_at: None,
             finished_at: None,
+            partuuid: None,
         }
     }
 
@@ -383,8 +472,11 @@ mod tests {
     fn task_type_round_trips_through_display_and_from_string() {
         for t in [
             TaskType::Capture,
+            TaskType::CapturePartition,
             TaskType::Deploy,
+            TaskType::DeployPartition,
             TaskType::Multicast,
+            TaskType::MulticastPartition,
             TaskType::Reboot,
         ] {
             assert_eq!(TaskType::from_string(t.to_string()).unwrap(), t);
@@ -392,26 +484,16 @@ mod tests {
     }
 
     #[test]
-    fn task_type_display_is_lowercase() {
+    fn task_types_are_stored_under_their_snake_case_names() {
         assert_eq!(TaskType::Capture.to_string(), "capture");
         assert_eq!(TaskType::Deploy.to_string(), "deploy");
         assert_eq!(TaskType::Multicast.to_string(), "multicast");
         assert_eq!(TaskType::Reboot.to_string(), "reboot");
-    }
-
-    #[test]
-    fn task_type_from_string_is_case_insensitive_as_derive_more_implements_it() {
+        assert_eq!(TaskType::CapturePartition.to_string(), "capture_partition");
+        assert_eq!(TaskType::DeployPartition.to_string(), "deploy_partition");
         assert_eq!(
-            TaskType::from_string("Capture".to_string()).unwrap(),
-            TaskType::Capture
-        );
-        assert_eq!(
-            TaskType::from_string("CAPTURE".to_string()).unwrap(),
-            TaskType::Capture
-        );
-        assert_eq!(
-            TaskType::from_string("dEpLoY".to_string()).unwrap(),
-            TaskType::Deploy
+            TaskType::MulticastPartition.to_string(),
+            "multicast_partition"
         );
     }
 
@@ -425,22 +507,29 @@ mod tests {
     }
 
     #[test]
-    fn task_type_converts_exhaustively_into_shared_task_type() {
+    fn partition_work_carries_the_partition_of_the_host_it_is_sent_to() {
+        let mut deploy = task(&[TaskState::Pending, TaskState::Pending]);
+        deploy.task_type = TaskType::DeployPartition;
+        deploy.image_id = Some(4);
+        deploy.hosts[0].partuuid = Some("first".into());
+        deploy.hosts[1].host_id = 2;
+        deploy.hosts[1].partuuid = Some("second".into());
+
         assert_eq!(
-            imaged_model::TaskType::from(TaskType::Capture),
-            imaged_model::TaskType::Capture
+            deploy.work(2).unwrap(),
+            Work::DeployPartition {
+                image_id: 4,
+                partuuid: "second".into()
+            }
         );
-        assert_eq!(
-            imaged_model::TaskType::from(TaskType::Deploy),
-            imaged_model::TaskType::Deploy
-        );
-        assert_eq!(
-            imaged_model::TaskType::from(TaskType::Multicast),
-            imaged_model::TaskType::Multicast
-        );
-        assert_eq!(
-            imaged_model::TaskType::from(TaskType::Reboot),
-            imaged_model::TaskType::Reboot
-        );
+        assert!(matches!(
+            deploy.work(3),
+            Err(AppError::FailedPrecondition(_))
+        ));
+        deploy.image_id = None;
+        assert!(matches!(
+            deploy.work(1),
+            Err(AppError::FailedPrecondition(_))
+        ));
     }
 }

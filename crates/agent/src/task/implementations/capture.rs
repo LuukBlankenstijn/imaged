@@ -1,79 +1,130 @@
+use std::fmt;
 use std::path::Path;
 
-use derive_more::{Constructor, Display};
-use imaged_disk::{backup_partition_table, clone_compressed, holds_system, root_partition};
+use anyhow::Result;
+use imaged_disk::{Progress, clone_compressed, holds_system, root_partition};
+use imaged_model::agent::PartitionUpload;
 use tracing::{info, warn};
 
-use super::{ClientTaskExt, PARTCLONE_LOG};
+use super::{ClientTaskExt, Fresh, PARTCLONE_LOG, Shape};
 use crate::agent::Agent;
-use crate::status::PartitionProgress;
-use crate::sys::disk::{PartitionTarget, repair_filesystem};
-use crate::task::PARTTABLE_TMP;
+use crate::status::{Phase, Step};
+use crate::sys::disk::{BlockDevice, PartitionTarget, find_target_disk, repair_filesystem};
 
-#[derive(Constructor, Clone, Display)]
-#[display("capture task {task_id}")]
-pub struct CaptureTask {
+#[derive(Clone)]
+pub struct Capture<L, St = Fresh> {
     agent: Agent,
     task_id: i64,
+    shape: L,
+    state: St,
 }
 
-impl ClientTaskExt for CaptureTask {
-    fn task_id(&self) -> i64 {
-        self.task_id
+pub struct Prepared {
+    disk: BlockDevice,
+}
+
+pub struct Planned {
+    targets: Vec<PartitionTarget>,
+}
+
+pub struct Uploaded {
+    targets: Vec<PartitionTarget>,
+}
+
+impl<L> Capture<L> {
+    pub fn new(agent: Agent, task_id: i64, shape: L) -> Self {
+        Self {
+            agent,
+            task_id,
+            shape,
+            state: Fresh,
+        }
     }
+}
 
-    fn agent(&self) -> &Agent {
-        &self.agent
+impl<L, St> Capture<L, St> {
+    fn advance<Next>(self, next: impl FnOnce(St) -> Next) -> Capture<L, Next> {
+        Capture {
+            agent: self.agent,
+            task_id: self.task_id,
+            shape: self.shape,
+            state: next(self.state),
+        }
     }
+}
 
-    async fn handle_partition_table(&self, device: &str) -> anyhow::Result<()> {
-        let table = backup_partition_table(Path::new(device), Path::new(PARTTABLE_TMP)).await?;
+impl<L: Shape, St> fmt::Display for Capture<L, St> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "capture {} task {}", L::NAME, self.task_id)
+    }
+}
 
-        let bytes = tokio::fs::read(PARTTABLE_TMP).await?;
+impl<L: Shape> Capture<L, Fresh> {
+    pub async fn prepare(self) -> Result<Capture<L, Prepared>> {
+        let disk = find_target_disk().await?;
+        let sector_size = disk.logical_sector_size()?;
         self.agent
             .server
-            .upload_partition_table(self.task_id, table.sector_size, bytes.into())
+            .mark_started(self.task_id, Some(sector_size))
             .await?;
-
-        let _ = tokio::fs::remove_file(PARTTABLE_TMP).await;
-        Ok(())
+        Ok(self.advance(|Fresh| Prepared { disk }))
     }
+}
 
-    async fn handle_partition(
-        &self,
-        partition: PartitionTarget,
-        progress: PartitionProgress,
-    ) -> anyhow::Result<()> {
-        repair_filesystem(&partition).await?;
-        let compressed = clone_compressed(
-            partition.filesystem,
-            Path::new(&partition.device),
-            Path::new(PARTCLONE_LOG),
-            move |partition| progress.report(partition),
-        )?;
-
+impl<L: Shape> Capture<L, Prepared> {
+    pub async fn plan(self) -> Result<Capture<L, Planned>> {
         self.agent
-            .server
-            .upload_partition_data(
-                self.task_id,
-                partition.number,
-                partition.filesystem.to_string(),
-                partition.size as i64,
-                compressed,
-            )
+            .status
+            .update_task(|task| task.step = Step::PartitionTable);
+        let disk = &self.state.disk;
+        self.shape
+            .capture_table(&self.agent, self.task_id, disk)
             .await?;
-        Ok(())
+        let targets = self.shape.capture_plan(disk)?;
+        Ok(self.advance(|_| Planned { targets }))
     }
+}
 
-    async fn after_partitions(&self, partitions: &[PartitionTarget]) -> anyhow::Result<()> {
+impl<L: Shape> Capture<L, Planned> {
+    pub async fn upload(self) -> Result<Capture<L, Uploaded>> {
+        let status = &self.agent.status;
+        let targets = &self.state.targets;
+        let progress = status.partitions(targets);
+        for (index, (target, progress)) in targets.iter().zip(progress).enumerate() {
+            progress.report(Progress::default());
+            repair_filesystem(target).await?;
+            let compressed = clone_compressed(
+                target.filesystem,
+                Path::new(&target.device),
+                Path::new(PARTCLONE_LOG),
+                move |partition| progress.report(partition),
+            )?;
+            let upload = PartitionUpload {
+                filesystem: target.filesystem.to_string(),
+                size: target.size as i64,
+                fs_uuid: target.fs_uuid.clone(),
+                fs_label: target.fs_label.clone(),
+            };
+            self.agent
+                .server
+                .upload_partition_data(self.task_id, target.number, &upload, compressed)
+                .await?;
+            status.update_task(|task| task.partitions[index].phase = Phase::Done);
+        }
+        status.update_task(|task| task.step = Step::Finishing);
+        Ok(self.advance(|Planned { targets }| Uploaded { targets }))
+    }
+}
+
+impl<L: Shape> Capture<L, Uploaded> {
+    pub async fn report_root(self) -> Result<()> {
         let mut systems = Vec::new();
-        for p in partitions {
-            if holds_system(p.number, p.filesystem, Path::new(&p.device)).await {
-                systems.push(p.number);
+        for target in &self.state.targets {
+            if holds_system(target.number, target.filesystem, Path::new(&target.device)).await {
+                systems.push(target.number);
             }
         }
-        let root = root_partition(&systems);
-        if let Some(root) = root {
+        if let Some(root) = root_partition(&systems) {
             match self
                 .agent
                 .server
@@ -85,5 +136,27 @@ impl ClientTaskExt for CaptureTask {
             }
         }
         Ok(())
+    }
+}
+
+impl<L: Shape> ClientTaskExt for Capture<L> {
+    fn task_id(&self) -> i64 {
+        self.task_id
+    }
+
+    fn agent(&self) -> &Agent {
+        &self.agent
+    }
+
+    async fn run(&self) -> Result<()> {
+        self.clone()
+            .prepare()
+            .await?
+            .plan()
+            .await?
+            .upload()
+            .await?
+            .report_root()
+            .await
     }
 }

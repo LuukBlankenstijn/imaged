@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT \n                i.id AS \"image_id!\",\n                i.name AS \"image_name!\",\n                i.kind AS \"image_kind!\",\n                i.status AS \"image_status!\",\n                i.error AS \"error\",\n                i.captured_at as \"captured_at: DateTime<Utc>\",\n                i.root_partition,\n                i.sector_size,\n                p.id AS \"p_id?: i64\",\n                p.partition_number AS \"p_num?: i64\",\n                p.fstype AS \"p_fstype?\",\n                p.size_bytes AS \"p_size?: i64\",\n                p.fs_uuid AS \"p_fs_uuid?\",\n                p.fs_label AS \"p_fs_label?\"\n            FROM images i\n            LEFT JOIN image_partitions p ON i.id = p.image_id\n            WHERE i.deleted_at IS NULL\n            ORDER BY i.id, p.partition_number\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "image_id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_name!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_kind!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_status!",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "error",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "captured_at: DateTime<Utc>",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "sector_size",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_id?: i64",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_num?: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_fstype?",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "p_size?: i64",
+        "ordinal": 11,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p_fs_uuid?",
+        "ordinal": 12,
+        "type_info": "Text"
+      },
+      {
+        "name": "p_fs_label?",
+        "ordinal": 13,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "1923c3f8278f3ccce054bb6bd61fa5dfe23c4f421c36c37810a21d52380ed901"
+}

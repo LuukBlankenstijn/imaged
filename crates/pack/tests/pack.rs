@@ -9,6 +9,7 @@ use futures::StreamExt;
 use imaged_archive::manifest::Manifest;
 use imaged_archive::{ArchiveReader, Unpacked};
 use imaged_disk::Filesystem;
+use imaged_model::image::ImageKind;
 use imaged_model::script::{InputKind, ScriptInput};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
@@ -94,7 +95,7 @@ fn run(command: &mut Command) -> Output {
 fn vfat_image(dir: &Path, size: u64, file: &Path) -> PathBuf {
     let image = dir.join("vfat.img");
     run(Command::new("mkfs.vfat")
-        .arg("-C")
+        .args(["-n", "ESP", "-C"])
         .arg(&image)
         .arg((size / 1024).to_string()));
     run(Command::new("mcopy")
@@ -109,7 +110,9 @@ fn vfat_image(dir: &Path, size: u64, file: &Path) -> PathBuf {
 fn ext4_image(dir: &Path, name: &str, size: u64, root: &Path) -> PathBuf {
     let image = dir.join(format!("{name}.img"));
     run(Command::new("mke2fs")
-        .args(["-q", "-t", "ext4", "-d"])
+        .args(["-q", "-t", "ext4", "-L"])
+        .arg(format!("{name} fs"))
+        .arg("-d")
         .arg(root)
         .arg(&image)
         .arg(format!("{}k", size / 1024)));
@@ -276,9 +279,11 @@ async fn a_disk_image_packs_like_a_capture() {
     let disk = Disk::new(dir);
     let greeting = dir.join("hello.txt");
     std::fs::write(&greeting, "hello from the esp\n").unwrap();
-    disk.write(1, &vfat_image(dir, disk.size(1), &greeting));
+    let esp = vfat_image(dir, disk.size(1), &greeting);
+    disk.write(1, &esp);
     let root = os_root(dir, "root", "packed by imaged-pack\n");
-    disk.write(2, &ext4_image(dir, "root", disk.size(2), &root));
+    let root = ext4_image(dir, "root", disk.size(2), &root);
+    disk.write(2, &root);
 
     let zeta = dir.join("zeta.sh");
     std::fs::write(&zeta, "#!/bin/sh\nhostnamectl hostname \"$hostname\"\n").unwrap();
@@ -320,14 +325,39 @@ async fn a_disk_image_packs_like_a_capture() {
     assert_eq!(manifest.name, "packed");
     assert!(manifest.captured_at.is_some());
     assert_eq!(manifest.sector_size, 512);
-    let partitions: Vec<(i64, &str, u64)> = manifest
+    assert_eq!(manifest.format, 2);
+    assert_eq!(manifest.kind, ImageKind::Disk);
+    let partitions: Vec<_> = manifest
         .partitions
         .iter()
-        .map(|p| (p.number, p.fstype.as_str(), p.size_bytes))
+        .map(|p| {
+            (
+                p.number,
+                p.fstype.as_str(),
+                p.size_bytes,
+                p.fs_uuid.as_deref(),
+                p.fs_label.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         partitions,
-        [(1, "vfat", disk.size(1)), (2, "ext4", disk.size(2))]
+        [
+            (
+                1,
+                "vfat",
+                disk.size(1),
+                Some(probe(&esp, "UUID").as_str()),
+                Some("ESP")
+            ),
+            (
+                2,
+                "ext4",
+                disk.size(2),
+                Some(probe(&root, "UUID").as_str()),
+                Some("root fs")
+            ),
+        ]
     );
     assert_eq!(disk.size(1), 16 * MIB);
     assert_eq!(manifest.root_partition, Some(2));
@@ -592,6 +622,202 @@ async fn invalid_scripts_fail_before_any_output_is_written() {
             ],
         ),
         "script `setup` is given more than once",
+        &archive,
+    );
+}
+
+#[tokio::test]
+async fn an_ext4_filesystem_image_packs_as_a_shrunk_partition_image() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let root = os_root(dir, "root", "single partition\n");
+    let image = ext4_image(dir, "root", 64 * MIB, &root);
+    let original = std::fs::read(&image).unwrap();
+
+    let archive = dir.join("image.imaged");
+    packed(pack(&image, &archive, [] as [&str; 0]));
+    assert_eq!(std::fs::read(&image).unwrap(), original);
+    assert_eq!(entry_names(&archive).await, ["manifest.json", "p-1.pcl"]);
+
+    let unpacked_dir = dir.join("unpacked");
+    let Unpacked { manifest, .. } = unpack(&archive, &unpacked_dir).await;
+    assert_eq!(manifest.format, 3);
+    assert_eq!(manifest.kind, ImageKind::Partition);
+    assert_eq!(manifest.partition_table, None);
+    assert_eq!(manifest.sector_size, 512);
+    assert_eq!(manifest.root_partition, Some(1));
+    let [partition] = manifest.partitions.as_slice() else {
+        panic!("expected one partition: {:?}", manifest.partitions);
+    };
+    assert_eq!((partition.number, partition.fstype.as_str()), (1, "ext4"));
+    assert_eq!(
+        partition.fs_uuid.as_deref(),
+        Some(probe(&image, "UUID").as_str())
+    );
+    assert_eq!(partition.fs_label.as_deref(), Some("root fs"));
+    assert!(
+        partition.size_bytes < 64 * MIB,
+        "{} bytes is not shrunk",
+        partition.size_bytes
+    );
+
+    let restored = restore(Filesystem::Ext4, &unpacked_dir.join("p-1.pcl"), dir).await;
+    run(Command::new("e2fsck").arg("-fn").arg(&restored));
+    let dumped = run(Command::new("dumpe2fs").arg("-h").arg(&restored));
+    let header = String::from_utf8_lossy(&dumped.stdout);
+    let field = |name: &str| -> u64 {
+        header
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap()
+            .trim_start_matches(':')
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    assert_eq!(
+        field("Block count") * field("Block size"),
+        partition.size_bytes
+    );
+    let marker = run(Command::new("debugfs")
+        .args(["-R", "cat /marker"])
+        .arg(&restored));
+    assert_eq!(
+        String::from_utf8_lossy(&marker.stdout),
+        "single partition\n"
+    );
+
+    let wrong_root = dir.join("wrong-root.imaged");
+    assert_failed_without_output(
+        pack(&image, &wrong_root, ["--root-partition", "2"]),
+        "root partition 2 is not one of the packed partitions [1]",
+        &wrong_root,
+    );
+}
+
+#[tokio::test]
+async fn a_vfat_filesystem_image_packs_as_a_partition_image_of_its_full_size() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let greeting = dir.join("hello.txt");
+    std::fs::write(&greeting, "hello\n").unwrap();
+    let image = vfat_image(dir, 16 * MIB, &greeting);
+
+    let archive = dir.join("image.imaged");
+    packed(pack(&image, &archive, [] as [&str; 0]));
+    let manifest = manifest(&archive).await;
+    assert_eq!(manifest.kind, ImageKind::Partition);
+    assert_eq!(manifest.partition_table, None);
+    assert_eq!(manifest.root_partition, None);
+    let partitions: Vec<_> = manifest
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.fstype.as_str(),
+                p.size_bytes,
+                p.fs_uuid.as_deref(),
+                p.fs_label.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        partitions,
+        [(
+            1,
+            "vfat",
+            16 * MIB,
+            Some(probe(&image, "UUID").as_str()),
+            Some("ESP")
+        )]
+    );
+}
+
+#[tokio::test]
+async fn an_unsupported_filesystem_image_fails_without_leaving_output() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let image = swap_image(dir, 16 * MIB);
+
+    let archive = dir.join("image.imaged");
+    assert_failed_without_output(
+        pack(&image, &archive, [] as [&str; 0]),
+        "found swap, expected one of ext2, ext3, ext4, vfat",
+        &archive,
+    );
+}
+
+#[tokio::test]
+async fn script_roots_must_name_a_given_script_and_a_packed_partition() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = two_systems(dir);
+    let setup = dir.join("setup.sh");
+    std::fs::write(&setup, "echo setup\n").unwrap();
+    let other = dir.join("other.sh");
+    std::fs::write(&other, "echo other\n").unwrap();
+    let scripts = [
+        OsStr::new("--script"),
+        setup.as_os_str(),
+        OsStr::new("--script"),
+        other.as_os_str(),
+    ];
+    let with = |extra: &[&str]| -> Vec<std::ffi::OsString> {
+        scripts
+            .iter()
+            .map(|arg| arg.to_os_string())
+            .chain(extra.iter().map(Into::into))
+            .collect()
+    };
+
+    let archive = dir.join("image.imaged");
+    packed(pack(
+        &disk.path,
+        &archive,
+        with(&["--root-partition", "1", "--script-root", "setup=2"]),
+    ));
+    let manifest = manifest(&archive).await;
+    assert_eq!(manifest.format, 3);
+    assert_eq!(manifest.kind, ImageKind::Disk);
+    assert_eq!(manifest.root_partition, Some(1));
+    let roots: Vec<(&str, Option<i64>)> = manifest
+        .scripts
+        .iter()
+        .map(|s| (s.name.as_str(), s.root_partition))
+        .collect();
+    assert_eq!(roots, [("setup", Some(2)), ("other", None)]);
+
+    for (extra, message) in [
+        (
+            ["--script-root", "missing=1"],
+            "--script-root names script `missing`, which is not given with --script",
+        ),
+        (
+            ["--script-root", "setup=3"],
+            "script `setup` root partition 3 is not one of the packed partitions [1, 2]",
+        ),
+        (
+            ["--script-root", "setup"],
+            "expected <name>=<N>, got `setup`",
+        ),
+        (
+            ["--script-root", "setup=x"],
+            "`x` is not a partition number",
+        ),
+    ] {
+        let archive = dir.join("invalid.imaged");
+        assert_failed_without_output(pack(&disk.path, &archive, with(&extra)), message, &archive);
+    }
+
+    let archive = dir.join("twice.imaged");
+    assert_failed_without_output(
+        pack(
+            &disk.path,
+            &archive,
+            with(&["--script-root", "setup=1", "--script-root", "setup=2"]),
+        ),
+        "--script-root for script `setup` is given more than once",
         &archive,
     );
 }

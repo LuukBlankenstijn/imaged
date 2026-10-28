@@ -220,7 +220,7 @@ impl Imaged {
             .map_err(into_io_error)?;
         Ok(scripts
             .into_iter()
-            .flat_map(|script| script.inputs)
+            .flat_map(|attached| attached.script.inputs)
             .collect())
     }
 

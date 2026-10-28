@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM host_partitions WHERE host_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e9574bb6ef41f7b959481ba46b39982d1e141666701f464e9140931b3812b880"
+}

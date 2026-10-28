@@ -115,8 +115,11 @@ pub fn format_duration(duration: Duration) -> String {
 pub fn draw_task_title(frame: &mut Frame, area: Rect, task: &TaskState, now: Instant) {
     let kind = match task.kind {
         TaskType::Capture => "CAPTURE",
+        TaskType::CapturePartition => "CAPTURE PARTITION",
         TaskType::Deploy => "DEPLOY",
+        TaskType::DeployPartition => "DEPLOY PARTITION",
         TaskType::Multicast => "MULTICAST",
+        TaskType::MulticastPartition => "MULTICAST PARTITION",
         TaskType::Reboot => "REBOOT",
     };
     let image = task

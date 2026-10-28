@@ -68,6 +68,7 @@ impl<R: AsyncRead + Unpin> ArchiveReader<'_, R> {
                         AppError::InvalidArgument(format!("archive is missing `{}`", archived.file))
                     })?,
                     inputs: archived.inputs.clone(),
+                    root_partition: archived.root_partition,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

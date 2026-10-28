@@ -52,8 +52,14 @@ impl TaskRepository for SqliteTaskRepository {
         host_ids: Vec<i64>,
         image_id: Option<i64>,
     ) -> Result<Task> {
-        self.create_with_inputs(task_type, host_ids, image_id, &BTreeMap::new())
-            .await
+        self.create_with_inputs(
+            task_type,
+            host_ids,
+            image_id,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .await
     }
 
     async fn create_with_inputs(
@@ -62,6 +68,7 @@ impl TaskRepository for SqliteTaskRepository {
         host_ids: Vec<i64>,
         image_id: Option<i64>,
         inputs: &BTreeMap<i64, InputValues>,
+        partuuids: &BTreeMap<i64, String>,
     ) -> Result<Task> {
         let type_str = task_type.to_string();
         let pending_str = TaskState::Pending.to_string();
@@ -83,11 +90,13 @@ impl TaskRepository for SqliteTaskRepository {
         .await?;
 
         for host_id in host_ids.iter() {
+            let partuuid = partuuids.get(host_id);
             sqlx::query!(
-                "INSERT INTO task_hosts (task_id, host_id, state) VALUES (?, ?, ?)",
+                "INSERT INTO task_hosts (task_id, host_id, state, partuuid) VALUES (?, ?, ?, ?)",
                 task.id,
                 host_id,
-                pending_str
+                pending_str,
+                partuuid
             )
             .execute(&mut *tx)
             .await?;
@@ -318,7 +327,8 @@ impl TaskRepository for SqliteTaskRepository {
             )));
         }
         let states = Json(&query.states);
-        let task_type = query.task_type.map(|t| t.to_string());
+        let task_types: Vec<String> = query.task_types.iter().map(|t| t.to_string()).collect();
+        let task_types = Json(&task_types);
         let fetched = i64::from(query.limit) + 1;
         let rows = sqlx::query_as!(
             TaskRow,
@@ -331,7 +341,7 @@ impl TaskRepository for SqliteTaskRepository {
             FROM tasks_with_hosts twh
             WHERE (?1 IS NULL OR twh.id < ?1)
             AND (json_array_length(?2) = 0 OR twh.state IN (SELECT value FROM json_each(?2)))
-            AND (?3 IS NULL OR twh.type = ?3)
+            AND (json_array_length(?3) = 0 OR twh.type IN (SELECT value FROM json_each(?3)))
             AND (?4 IS NULL OR EXISTS (
                 SELECT 1 FROM task_hosts th WHERE th.task_id = twh.id AND th.host_id = ?4
             ))
@@ -340,7 +350,7 @@ impl TaskRepository for SqliteTaskRepository {
             "#,
             query.before,
             states,
-            task_type,
+            task_types,
             query.host_id,
             fetched
         )
@@ -383,7 +393,8 @@ impl TaskRepository for SqliteTaskRepository {
 
     async fn get_next_multicast(&self) -> Result<Option<Task>> {
         let pending_state = TaskState::Pending.to_string();
-        let task_type = TaskType::Multicast.to_string();
+        let multicast = TaskType::Multicast.to_string();
+        let multicast_partition = TaskType::MulticastPartition.to_string();
         let row = sqlx::query_as!(
             TaskRow,
             r#"
@@ -393,7 +404,7 @@ impl TaskRepository for SqliteTaskRepository {
                 twh.created_at as "created_at: DateTime<Utc>",
                 twh.hosts as "hosts!: sqlx::types::Json<Vec<TaskHost>>"
             FROM tasks_with_hosts twh
-            WHERE twh.type = ?
+            WHERE (twh.type = ? OR twh.type = ?)
             AND EXISTS (
                 SELECT 1 FROM task_hosts th
                 WHERE th.task_id = twh.id AND th.state = ?
@@ -401,7 +412,8 @@ impl TaskRepository for SqliteTaskRepository {
             ORDER BY twh.id ASC
             LIMIT 1
             "#,
-            task_type,
+            multicast,
+            multicast_partition,
             pending_state
         )
         .fetch_optional(&self.pool)
@@ -631,6 +643,7 @@ mod tests {
     use super::*;
     use crate::test_support::{Repos, repos};
     use imaged_model::error::AppError;
+    use imaged_model::image::ImageKind;
     use std::time::Duration;
 
     async fn host(c: &Repos, mac: &str) -> i64 {
@@ -642,7 +655,11 @@ mod tests {
     }
 
     async fn image(c: &Repos, name: &str) -> i64 {
-        c.image_repo.create_image(name.into()).await.unwrap().id
+        c.image_repo
+            .create_image(name.into(), ImageKind::Disk)
+            .await
+            .unwrap()
+            .id
     }
 
     fn host_row(task: &Task, host_id: i64) -> &TaskHost {
@@ -655,7 +672,7 @@ mod tests {
     fn query(limit: u32) -> TaskQuery {
         TaskQuery {
             states: Vec::new(),
-            task_type: None,
+            task_types: Vec::new(),
             host_id: None,
             before: None,
             limit,
@@ -958,7 +975,7 @@ mod tests {
             .unwrap();
 
         let reboots = TaskQuery {
-            task_type: Some(TaskType::Reboot),
+            task_types: vec![TaskType::Reboot],
             ..query(10)
         };
         assert_eq!(
@@ -1370,6 +1387,46 @@ mod tests {
         assert!(reset.started_at.is_none());
         assert!(reset.finished_at.is_none());
         assert_eq!(got.aggregate_state(), TaskState::Running);
+    }
+
+    #[tokio::test]
+    async fn each_host_keeps_its_target_partition_through_a_retry() {
+        let (c, _g) = repos().await;
+        let img = image(&c, "root").await;
+        let h1 = host(&c, "aa:bb:cc:dd:ee:01").await;
+        let h2 = host(&c, "aa:bb:cc:dd:ee:02").await;
+        let t = c
+            .task_repo
+            .create_with_inputs(
+                TaskType::MulticastPartition,
+                vec![h1, h2],
+                Some(img),
+                &BTreeMap::new(),
+                &BTreeMap::from([(h1, "part-a".to_string()), (h2, "part-b".to_string())]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            c.task_repo
+                .get_next_multicast()
+                .await
+                .unwrap()
+                .map(|t| t.id),
+            Some(t.id)
+        );
+        c.task_repo.start(t.id, h1).await.unwrap();
+        c.task_repo.mark_failed(t.id, h1, "boom").await.unwrap();
+        c.task_repo.retry(t.id).await.unwrap();
+
+        let got = c.task_repo.get(t.id).await.unwrap();
+        assert_eq!(got.task_type, TaskType::MulticastPartition);
+        assert_eq!(got.partuuid(h1), Some("part-a"));
+        assert_eq!(got.partuuid(h2), Some("part-b"));
+        let multicasts = TaskQuery {
+            task_types: vec![TaskType::Multicast, TaskType::MulticastPartition],
+            ..query(10)
+        };
+        assert_eq!(listed(&c, multicasts).await, [t.id]);
     }
 
     #[tokio::test]

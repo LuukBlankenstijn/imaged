@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n                     SELECT 1 FROM image_partitions WHERE image_id = ? AND partition_number = ?\n                   ) as \"exists!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "exists!: bool",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3abc4c661f7711cc987eb3c6ccd7ccd524e92bbbecd4a9c9e5fdd2df74a5bea2"
+}

@@ -6,13 +6,14 @@ use serde_json::json;
 use imaged_core::domain::task::TaskType;
 use imaged_e2e::harness::{self, seed};
 use imaged_model::agent::path;
+use imaged_model::image::ImageKind;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
 
 async fn empty_image(s: &harness::TestServer) -> i64 {
     s.container
         .image_repo
-        .create_image(harness::unique_name("mc-img"))
+        .create_image(harness::unique_name("mc-img"), ImageKind::Disk)
         .await
         .expect("create image")
         .id
@@ -57,8 +58,7 @@ async fn reboot_streams_a_reboot_event_and_completes() {
         .next_event(Duration::from_secs(5))
         .await
         .expect("reboot event");
-    assert_eq!(event["Current"]["task_type"], "Reboot");
-    assert!(event["Current"]["image_id"].is_null());
+    assert_eq!(event["Current"]["work"], "Reboot");
     let task_id = event["Current"]["id"].as_i64().expect("task id");
 
     let resp = s.agent_post_empty(&path::finished(task_id), &mac).await;
@@ -147,8 +147,7 @@ async fn multicast_creates_one_task_and_hands_it_to_every_connected_agent() {
         .await
         .expect("h1 event");
     assert_eq!(e1["Current"]["id"], task_id);
-    assert_eq!(e1["Current"]["task_type"], "Multicast");
-    assert_eq!(e1["Current"]["image_id"], image_id);
+    assert_eq!(e1["Current"]["work"]["Multicast"]["image_id"], image_id);
     let e2 = s2
         .next_event(Duration::from_secs(5))
         .await

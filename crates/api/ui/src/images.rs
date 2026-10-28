@@ -20,6 +20,10 @@ use imaged_core::domain::task::TaskType;
 use imaged_model::error::AppError;
 use imaged_model::error::Result;
 #[cfg(feature = "server")]
+use imaged_model::image::ImageKind;
+#[cfg(feature = "server")]
+use std::collections::BTreeMap;
+#[cfg(feature = "server")]
 use tokio_util::io::StreamReader;
 
 #[get("/api/ui/images")]
@@ -39,10 +43,40 @@ pub async fn update_image_name(req: UpdateName) -> Result<Image> {
 #[post("/api/ui/images/create")]
 #[inject(image_repo: ImageRepo, task_repo: TaskRepo, registry: Registry)]
 pub async fn create_image(req: CreateImageRequest) -> Result<ImageCapture> {
-    crate::hosts::imaging_targets(&[req.host_id]).await?;
-    let image = image_repo.create_image(req.name).await?;
+    let host = crate::hosts::imaging_targets(&[req.host_id])
+        .await?
+        .remove(0);
+    let (kind, partuuids) = match req.partition {
+        None => (ImageKind::Disk, BTreeMap::new()),
+        Some(partuuid) => {
+            let source = host.partition(&partuuid)?;
+            let fstypes = ImageKind::Partition.fstypes();
+            if !source
+                .fstype
+                .as_deref()
+                .is_some_and(|fstype| fstypes.contains(&fstype))
+            {
+                return Err(AppError::FailedPrecondition(format!(
+                    "partition {} of host {} holds {}, a partition image needs one of {}",
+                    source.partuuid,
+                    host.name,
+                    source.fstype.as_deref().unwrap_or("no filesystem"),
+                    fstypes.join(", ")
+                )));
+            }
+            let partuuids = BTreeMap::from([(host.id, source.partuuid.clone())]);
+            (ImageKind::Partition, partuuids)
+        }
+    };
+    let image = image_repo.create_image(req.name, kind).await?;
     let task = task_repo
-        .create(TaskType::Capture, vec![req.host_id], Some(image.id))
+        .create_with_inputs(
+            TaskType::capture(kind),
+            vec![host.id],
+            Some(image.id),
+            &BTreeMap::new(),
+            &partuuids,
+        )
         .await?;
     registry.dispatch(req.host_id);
     Ok(ImageCapture {
@@ -57,7 +91,7 @@ pub async fn delete_image(id: i64) -> Result<()> {
     let active = task_repo.get_active_by_image(id).await?;
     let restores: Vec<String> = active
         .iter()
-        .filter(|task| task.task_type != TaskType::Capture)
+        .filter(|task| !task.task_type.captures())
         .map(|task| format!("#{}", task.id))
         .collect();
     if !restores.is_empty() {

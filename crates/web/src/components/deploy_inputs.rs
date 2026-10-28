@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use dioxus::prelude::*;
 
 use crate::api::scripts::{get_image_scripts, get_script_variable_names};
@@ -5,7 +7,7 @@ use crate::components::icons::Icon;
 use crate::components::ui::{FIELD_CLASSES, Spinner};
 use crate::format::format_bytes;
 use crate::model::{
-    DeployInputs, DeployRequest, Host, Image, InputKind, InputSource, InputSources,
+    DeployInputs, DeployRequest, Host, Image, ImageKind, InputKind, InputSource, InputSources,
     MulticastRequest, Script, ScriptInput,
 };
 
@@ -55,29 +57,47 @@ pub(crate) fn submitted_inputs(form: &DeployInputs) -> DeployInputs {
 
 pub(crate) fn deploy_request(
     host_id: i64,
-    image_id: Option<i64>,
+    image: Option<&Image>,
+    partition: Option<&str>,
     form: Option<&DeployInputs>,
 ) -> Option<DeployRequest> {
+    let image = image?;
+    let partition = match image.kind {
+        ImageKind::Disk => None,
+        ImageKind::Partition => Some(partition?.to_string()),
+    };
     Some(DeployRequest {
         id: host_id,
-        image_id: image_id?,
+        image_id: image.id,
         inputs: submitted_inputs(form?),
+        partition,
     })
 }
 
 pub(crate) fn multicast_request(
     host_ids: &[i64],
-    image_id: Option<i64>,
+    image: Option<&Image>,
+    partitions: Option<BTreeMap<i64, String>>,
     form: Option<&DeployInputs>,
 ) -> Option<MulticastRequest> {
     if host_ids.is_empty() {
         return None;
     }
+    let image = image?;
+    let partitions = match image.kind {
+        ImageKind::Disk => BTreeMap::new(),
+        ImageKind::Partition => partitions?,
+    };
     Some(MulticastRequest {
         host_ids: host_ids.to_vec(),
-        image_id: image_id?,
+        image_id: image.id,
         inputs: submitted_inputs(form?),
+        partitions,
     })
+}
+
+pub(crate) fn scripts_lack_root(image: &Image, scripts: &[Script]) -> bool {
+    image.root_partition.is_none() && scripts.iter().any(|s| s.root_partition.is_none())
 }
 
 pub(crate) fn erase_target(host: &Host) -> String {
@@ -192,10 +212,10 @@ pub fn DeployInputsForm(
                         span { "Post-install scripts:" }
                         span { class: "font-mono text-fog-300", {names.join(" → ")} }
                     }
-                    if image.read().root_partition.is_none() {
+                    if scripts_lack_root(&image.read(), list) {
                         div { class: "flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-warn",
                             Icon { name: "alert", class: "mt-0.5 w-3.5 h-3.5 shrink-0" }
-                            span { "This image has no root partition set, so the deploy will be refused. Pick one on the Images page." }
+                            span { "This image has no root partition set and not every script picks its own, so the deploy will be refused. Pick one on the Images page." }
                         }
                     }
                     if !shared.is_empty() {

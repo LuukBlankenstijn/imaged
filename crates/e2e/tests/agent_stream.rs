@@ -2,7 +2,9 @@ use std::time::{Duration, Instant};
 
 use imaged_core::domain::task::TaskType;
 use imaged_e2e::harness::{self, seed};
+use imaged_model::AgentEvent;
 use imaged_model::agent::{MAC_HEADER, route};
+use imaged_model::host::HostPartition;
 use reqwest::StatusCode;
 use serde_json::json;
 
@@ -89,8 +91,7 @@ async fn a_pending_task_is_delivered_as_the_first_event() {
         .await
         .expect("first event is the pending task");
     assert_eq!(event["Current"]["id"], task_id);
-    assert_eq!(event["Current"]["task_type"], "Deploy");
-    assert_eq!(event["Current"]["image_id"], image_id);
+    assert_eq!(event["Current"]["work"]["Deploy"]["image_id"], image_id);
 }
 
 #[tokio::test]
@@ -135,8 +136,7 @@ async fn a_dispatch_sends_the_new_current_task_only_when_it_changed() {
         .await
         .expect("the queued task arrives on the open stream");
     assert_eq!(event["Current"]["id"], task_id);
-    assert_eq!(event["Current"]["task_type"], "Deploy");
-    assert_eq!(event["Current"]["image_id"], image_id);
+    assert_eq!(event["Current"]["work"]["Deploy"]["image_id"], image_id);
 
     s.container.host_registry.dispatch(host.id);
     let event = stream.next_event(Duration::from_millis(500)).await;
@@ -473,4 +473,48 @@ async fn a_reconnect_never_reports_the_host_as_disconnected_on_the_dashboard_fee
         "tearing down the displaced connection must not disconnect the host"
     );
     assert!(connected(s, host.id));
+}
+
+#[tokio::test]
+async fn a_reported_partition_inventory_replaces_the_hosts_previous_one() {
+    let s = harness::server().await;
+    let mac = harness::unique_mac();
+    let partition = |number: i64, partuuid: &str| HostPartition {
+        number,
+        partuuid: partuuid.to_string(),
+        partlabel: Some(format!("part{number}")),
+        label: None,
+        uuid: Some(format!("uuid-{number}")),
+        fstype: Some("ext4".to_string()),
+        size_bytes: 1 << 30,
+    };
+
+    let mut agent = harness::connect_silent_agent(s, &mac, DISK)
+        .await
+        .expect("connect");
+    agent
+        .send(&AgentEvent::Partitions(vec![
+            partition(1, "esp"),
+            partition(2, "root"),
+        ]))
+        .await
+        .expect("send the first inventory");
+    agent
+        .send(&AgentEvent::Partitions(vec![partition(2, "root")]))
+        .await
+        .expect("send the second inventory");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let host = s.container.host_repo.get_by_mac(&mac).await.unwrap();
+        if host.partitions == [partition(2, "root")] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the inventory was not replaced: {:?}",
+            host.partitions
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

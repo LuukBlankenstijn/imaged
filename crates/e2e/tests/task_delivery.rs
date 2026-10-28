@@ -8,6 +8,7 @@ use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use imaged_agent::server::{Server, Uplink};
+use imaged_agent::sys::disk::HostDisk;
 use imaged_core::domain::host::Host;
 use imaged_core::domain::task::TaskType;
 use imaged_e2e::harness::{self, seed};
@@ -30,7 +31,18 @@ fn agent(s: &harness::TestServer) -> (Server, String) {
     (server, mac.to_string())
 }
 
-async fn connect(agent: &Server, disk: &Result<u64, String>, idle: watch::Receiver<()>) -> Events {
+fn usable() -> Result<HostDisk, String> {
+    Ok(HostDisk {
+        size_bytes: DISK,
+        partitions: Vec::new(),
+    })
+}
+
+async fn connect(
+    agent: &Server,
+    disk: &Result<HostDisk, String>,
+    idle: watch::Receiver<()>,
+) -> Events {
     let uplink = Uplink {
         progress: watch::channel(None).1,
         idle,
@@ -56,11 +68,7 @@ async fn assert_quiet(events: &mut Events) {
 }
 
 fn current(task_id: i64) -> ServerEvent {
-    ServerEvent::Current(Some(Task::new(
-        task_id,
-        imaged_model::TaskType::Reboot,
-        None,
-    )))
+    ServerEvent::Current(Some(Task::new(task_id, imaged_model::Work::Reboot)))
 }
 
 async fn reboot(s: &'static harness::TestServer, host_id: i64) -> i64 {
@@ -90,7 +98,7 @@ async fn a_task_queued_while_the_agent_is_busy_is_handed_over_once_it_is_idle() 
     let first = reboot(s, host.id).await;
     let (idle, idle_receiver) = watch::channel(());
 
-    let mut events = connect(&agent, &Ok(DISK), idle_receiver).await;
+    let mut events = connect(&agent, &usable(), idle_receiver).await;
     assert_eq!(next(&mut events).await, current(first));
 
     let queued = reboot(s, host.id).await;
@@ -115,7 +123,7 @@ async fn an_idle_agent_that_asks_again_is_told_the_same_current_task() {
     let task = reboot(s, host.id).await;
     let (idle, idle_receiver) = watch::channel(());
 
-    let mut events = connect(&agent, &Ok(DISK), idle_receiver).await;
+    let mut events = connect(&agent, &usable(), idle_receiver).await;
     assert_eq!(next(&mut events).await, current(task));
 
     idle.send_replace(());
@@ -129,7 +137,7 @@ async fn a_task_cancelled_while_the_agent_was_away_is_withdrawn_when_it_reconnec
     let host = seed::host(s, &mac, DISK).await;
     let task = reboot(s, host.id).await;
 
-    let mut events = connect(&agent, &Ok(DISK), watch::channel(()).1).await;
+    let mut events = connect(&agent, &usable(), watch::channel(()).1).await;
     assert_eq!(next(&mut events).await, current(task));
     drop(events);
 
@@ -138,7 +146,7 @@ async fn a_task_cancelled_while_the_agent_was_away_is_withdrawn_when_it_reconnec
         .expect("cancel");
     s.container.host_registry.dispatch(host.id);
 
-    let mut events = connect(&agent, &Ok(DISK), watch::channel(()).1).await;
+    let mut events = connect(&agent, &usable(), watch::channel(()).1).await;
     assert_eq!(next(&mut events).await, ServerEvent::Current(None));
 }
 
@@ -168,7 +176,7 @@ async fn a_machine_without_a_usable_disk_registers_with_the_reason_and_cannot_be
     }
 
     drop(events);
-    let _reconnected = connect(&agent, &Ok(DISK), watch::channel(()).1).await;
+    let _reconnected = connect(&agent, &usable(), watch::channel(()).1).await;
     assert_eq!(registered_host(s, &mac).await.disk, Ok(DISK));
 }
 

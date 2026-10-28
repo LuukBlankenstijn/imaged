@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use imaged_model::group::Group;
-pub use imaged_model::host::{ConnectionChange, HostConnectionEvent};
-pub use imaged_model::image::{ImagePartition, ImageStatus};
+pub use imaged_model::host::{ConnectionChange, HostConnectionEvent, HostPartition};
+pub use imaged_model::image::{ImageKind, ImagePartition, ImageStatus};
 pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
 pub use imaged_model::progress::{HostProgress, Stage};
 pub use imaged_model::script::{DeployInputs, InputKind, InputSource, InputSources, ScriptInput};
@@ -18,6 +18,8 @@ pub struct Host {
     pub disk_size_bytes: Option<u64>,
     pub disk_error: Option<String>,
     pub ip: Option<String>,
+    #[serde(default)]
+    pub partitions: Vec<HostPartition>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +54,8 @@ pub struct Image {
     pub error_message: Option<String>,
     pub partitions: Vec<ImagePartition>,
     pub root_partition: Option<i64>,
+    #[serde(default)]
+    pub kind: ImageKind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +76,8 @@ pub struct TaskHost {
     pub error: Option<String>,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    #[serde(default)]
+    pub partuuid: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +135,8 @@ pub struct DeployRequest {
     pub image_id: i64,
     #[serde(default)]
     pub inputs: DeployInputs,
+    #[serde(default)]
+    pub partition: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,12 +146,16 @@ pub struct MulticastRequest {
     pub image_id: i64,
     #[serde(default)]
     pub inputs: DeployInputs,
+    #[serde(default)]
+    pub partitions: BTreeMap<i64, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreateImageRequest {
     pub name: String,
     pub host_id: i64,
+    #[serde(default)]
+    pub partition: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +183,8 @@ pub struct Script {
     pub body: String,
     pub updated_at: i64,
     pub inputs: Vec<ScriptInput>,
+    #[serde(default)]
+    pub root_partition: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +209,13 @@ pub struct ImageScriptsRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RootPartitionRequest {
     pub image_id: i64,
+    pub partition_number: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScriptRootRequest {
+    pub image_id: i64,
+    pub position: i64,
     pub partition_number: Option<i64>,
 }
 

@@ -1,7 +1,7 @@
 use imaged_core::domain::{
     host::Host as DHost,
     image::Image as DImage,
-    script::{NewScript as DNewScript, Script as DScript},
+    script::{ImageScript as DImageScript, NewScript as DNewScript, Script as DScript},
     task::{
         ScriptRun as DScriptRun, Task as DTask, TaskHost as DTaskHost, TaskPage as DTaskPage,
         TaskType as DType,
@@ -25,6 +25,7 @@ impl From<DHost> for model::Host {
             disk_size_bytes,
             disk_error,
             ip: h.ip,
+            partitions: h.partitions,
         }
     }
 }
@@ -62,6 +63,7 @@ impl From<DImage> for model::Image {
             error_message: i.error,
             partitions: i.partitions,
             root_partition: i.root_partition,
+            kind: i.kind,
         }
     }
 }
@@ -69,21 +71,21 @@ impl From<DImage> for model::Image {
 impl From<DType> for model::TaskType {
     fn from(t: DType) -> Self {
         match t {
-            DType::Capture => Self::Capture,
-            DType::Deploy => Self::Deploy,
-            DType::Multicast => Self::Multicast,
+            DType::Capture | DType::CapturePartition => Self::Capture,
+            DType::Deploy | DType::DeployPartition => Self::Deploy,
+            DType::Multicast | DType::MulticastPartition => Self::Multicast,
             DType::Reboot => Self::Reboot,
         }
     }
 }
 
-impl From<model::TaskType> for DType {
-    fn from(t: model::TaskType) -> Self {
-        match t {
-            model::TaskType::Capture => Self::Capture,
-            model::TaskType::Deploy => Self::Deploy,
-            model::TaskType::Multicast => Self::Multicast,
-            model::TaskType::Reboot => Self::Reboot,
+impl model::TaskType {
+    pub(crate) fn stored_types(self) -> Vec<DType> {
+        match self {
+            Self::Capture => vec![DType::Capture, DType::CapturePartition],
+            Self::Deploy => vec![DType::Deploy, DType::DeployPartition],
+            Self::Multicast => vec![DType::Multicast, DType::MulticastPartition],
+            Self::Reboot => vec![DType::Reboot],
         }
     }
 }
@@ -98,6 +100,7 @@ impl From<DTaskHost> for model::TaskHost {
             error: h.error,
             started_at: h.started_at.map(|t| t.timestamp_millis()),
             finished_at: h.finished_at.map(|t| t.timestamp_millis()),
+            partuuid: h.partuuid,
         }
     }
 }
@@ -126,6 +129,16 @@ impl From<DScript> for model::Script {
             body: s.body,
             updated_at: s.updated_at.timestamp_millis(),
             inputs: s.inputs,
+            root_partition: None,
+        }
+    }
+}
+
+impl From<DImageScript> for model::Script {
+    fn from(s: DImageScript) -> Self {
+        Self {
+            root_partition: s.root_partition,
+            ..s.script.into()
         }
     }
 }

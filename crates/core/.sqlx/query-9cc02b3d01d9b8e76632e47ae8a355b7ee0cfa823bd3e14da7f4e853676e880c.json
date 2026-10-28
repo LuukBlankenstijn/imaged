@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            WHERE (?1 IS NULL OR twh.id < ?1)\n            AND (json_array_length(?2) = 0 OR twh.state IN (SELECT value FROM json_each(?2)))\n            AND (?3 IS NULL OR twh.type = ?3)\n            AND (?4 IS NULL OR EXISTS (\n                SELECT 1 FROM task_hosts th WHERE th.task_id = twh.id AND th.host_id = ?4\n            ))\n            ORDER BY twh.id DESC\n            LIMIT ?5\n            ",
+  "query": "\n            SELECT\n                twh.id as \"id!\", twh.type as task_type, twh.image_id, twh.image_name,\n                twh.image_deleted as \"image_deleted!: i64\",\n                twh.created_at as \"created_at: DateTime<Utc>\",\n                twh.hosts as \"hosts!: sqlx::types::Json<Vec<TaskHost>>\"\n            FROM tasks_with_hosts twh\n            WHERE (twh.type = ? OR twh.type = ?)\n            AND EXISTS (\n                SELECT 1 FROM task_hosts th\n                WHERE th.task_id = twh.id AND th.state = ?\n            )\n            ORDER BY twh.id ASC\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       }
     ],
     "parameters": {
-      "Right": 5
+      "Right": 3
     },
     "nullable": [
       false,
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "1165960590c88dbf35041e3b894966e40d5cd42e25ba3515dadd76a655df3887"
+  "hash": "9cc02b3d01d9b8e76632e47ae8a355b7ee0cfa823bd3e14da7f4e853676e880c"
 }

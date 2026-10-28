@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO image_partitions (image_id, partition_number, fstype, size_bytes, fs_uuid, fs_label) VALUES (?,?,?,?,?,?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "5c757bff68182045f6e68fde22b805f79aad798a32a569f5cc9456c194182c6a"
+}

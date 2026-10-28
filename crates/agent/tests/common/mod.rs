@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+
+use parking_lot::Mutex;
 
 use axum::body::Body;
 use axum::body::Bytes;
@@ -31,6 +33,7 @@ const CHUNK: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
+    Started,
     Parttable,
     Partitions,
     PartitionData,
@@ -125,6 +128,7 @@ impl StubConfig {
 pub struct RecordedRequest {
     pub method: String,
     pub path: String,
+    pub query: Option<String>,
     pub mac: Option<String>,
 }
 
@@ -154,15 +158,15 @@ pub struct StubServer {
 
 impl StubServer {
     pub fn requests(&self) -> Vec<RecordedRequest> {
-        self.requests.lock().unwrap().clone()
+        self.requests.lock().clone()
     }
 
     pub fn finished(&self) -> Vec<i64> {
-        self.finished.lock().unwrap().clone()
+        self.finished.lock().clone()
     }
 
     pub fn failed(&self) -> Vec<(i64, String)> {
-        self.failed.lock().unwrap().clone()
+        self.failed.lock().clone()
     }
 
     /// Number of websocket upgrades the stub has accepted (incremented once per connection,
@@ -194,7 +198,7 @@ impl StubServer {
 
     /// Every event the agent sent up its websocket, across all connections.
     pub fn agent_events(&self) -> Vec<AgentEvent> {
-        self.agent_events.lock().unwrap().clone()
+        self.agent_events.lock().clone()
     }
 }
 
@@ -226,6 +230,7 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
     });
 
     let app = Router::new()
+        .route(route::STARTED, post(started))
         .route(route::PARTITION_TABLE, get(parttable))
         .route(route::PARTITIONS, get(partitions))
         .route(route::PARTITION_DATA, get(partition_data))
@@ -261,16 +266,18 @@ pub async fn stub_server(cfg: StubConfig) -> StubServer {
 async fn record_mw(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
+    let query = req.uri().query().map(str::to_string);
     let mac = req
         .headers()
         .get(MAC_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    state
-        .requests
-        .lock()
-        .unwrap()
-        .push(RecordedRequest { method, path, mac });
+    state.requests.lock().push(RecordedRequest {
+        method,
+        path,
+        query,
+        mac,
+    });
     next.run(req).await
 }
 
@@ -278,7 +285,6 @@ fn forced(s: &AppState, route: Route) -> Option<Response> {
     let transient = s
         .transient_failures
         .lock()
-        .unwrap()
         .get_mut(&route)
         .filter(|left| **left > 0)
         .map(|left| {
@@ -292,6 +298,13 @@ fn forced(s: &AppState, route: Route) -> Option<Response> {
             let body = serde_json::json!({ "error": format!("forced status {code}") }).to_string();
             (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
         })
+}
+
+async fn started(State(s): State<Arc<AppState>>, Path(_task_id): Path<i64>) -> Response {
+    if let Some(r) = forced(&s, Route::Started) {
+        return r;
+    }
+    StatusCode::OK.into_response()
 }
 
 async fn parttable(State(s): State<Arc<AppState>>, Path(_task_id): Path<i64>) -> Response {
@@ -354,7 +367,6 @@ async fn post_install(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>) 
         .get(&task_id)
         .cloned()
         .unwrap_or(PostInstall {
-            root_partition: None,
             proxy: None,
             variables: Default::default(),
             scripts: Vec::new(),
@@ -366,7 +378,7 @@ async fn finished_route(State(s): State<Arc<AppState>>, Path(task_id): Path<i64>
     if let Some(r) = forced(&s, Route::Finished) {
         return r;
     }
-    s.finished.lock().unwrap().push(task_id);
+    s.finished.lock().push(task_id);
     StatusCode::OK.into_response()
 }
 
@@ -379,7 +391,7 @@ async fn failed_route(
         return r;
     }
     let reason = body.map(|Json(b)| b.error).unwrap_or_default();
-    s.failed.lock().unwrap().push((task_id, reason));
+    s.failed.lock().push((task_id, reason));
     StatusCode::OK.into_response()
 }
 
@@ -448,7 +460,7 @@ async fn handle_socket(s: Arc<AppState>, mut socket: WebSocket) {
                     }
                     Some(Ok(Message::Text(text))) => {
                         let event = serde_json::from_str(text.as_str()).expect("agent event");
-                        s.agent_events.lock().unwrap().push(event);
+                        s.agent_events.lock().push(event);
                     }
                     Some(Ok(_)) => {}
                 },
@@ -477,17 +489,20 @@ pub fn offline_agent() -> Agent {
     agent_server(&format!("http://{addr}"), "aa:bb:cc:dd:ee:00")
 }
 
+static PATH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct FakeBins {
     dir: PathBuf,
     old_path: Option<OsString>,
+    _path: tokio::sync::MutexGuard<'static, ()>,
 }
 
-pub fn fake_bins() -> FakeBins {
-    FakeBins::new()
+pub async fn fake_bins() -> FakeBins {
+    FakeBins::new(PATH_LOCK.lock().await)
 }
 
 impl FakeBins {
-    pub fn new() -> Self {
+    fn new(path: tokio::sync::MutexGuard<'static, ()>) -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -506,7 +521,16 @@ impl FakeBins {
 
         for name in ["partclone.extfs", "partclone.vfat"] {
             let script = format!(
-                "#!/bin/sh\ncat > '{dir_str}/{name}.stdin'\nif [ -f '{dir_str}/{name}.fail' ]; then exit 1; fi\nexit 0\n"
+                "#!/bin/sh\n\
+                 out=\n\
+                 while [ $# -gt 0 ]; do\n\
+                 \x20 if [ \"$1\" = --output ]; then out=$2; fi\n\
+                 \x20 shift\n\
+                 done\n\
+                 cat > '{dir_str}/{name}.stdin'\n\
+                 if [ -f '{dir_str}/{name}.fail' ]; then exit 1; fi\n\
+                 if [ -f \"$out\" ]; then dd if='{dir_str}/{name}.stdin' of=\"$out\" conv=notrunc 2>/dev/null; fi\n\
+                 exit 0\n"
             );
             Self::write_script(&dir.join(name), &script);
         }
@@ -517,13 +541,25 @@ impl FakeBins {
             paths.extend(std::env::split_paths(existing));
         }
         let joined = std::env::join_paths(paths).expect("join PATH");
-        // SAFETY: agent tests run on a current_thread runtime and must run sequentially
-        // within a binary, so no other thread reads PATH concurrently.
+        // SAFETY: PATH_LOCK serialises every test in this binary that rewrites PATH.
         unsafe {
             std::env::set_var("PATH", &joined);
         }
 
-        FakeBins { dir, old_path }
+        FakeBins {
+            dir,
+            old_path,
+            _path: path,
+        }
+    }
+
+    pub fn lsblk(&self, json: &str) {
+        let output = self.dir.join("lsblk.json");
+        std::fs::write(&output, json).expect("write fake lsblk output");
+        Self::write_script(
+            &self.dir.join("lsblk"),
+            &format!("#!/bin/sh\ncat '{}'\n", output.display()),
+        );
     }
 
     fn write_script(path: &std::path::Path, contents: &str) {
@@ -559,7 +595,7 @@ impl FakeBins {
 
 impl Drop for FakeBins {
     fn drop(&mut self) {
-        // SAFETY: see set_var in FakeBins::new; tests are sequential and single-threaded.
+        // SAFETY: see set_var in FakeBins::new; PATH_LOCK is still held here.
         unsafe {
             match &self.old_path {
                 Some(p) => std::env::set_var("PATH", p),

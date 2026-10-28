@@ -1,5 +1,6 @@
 mod filesystem;
 mod gpt;
+mod grow;
 mod imaging;
 mod partclone;
 mod partition_table;
@@ -8,6 +9,7 @@ mod root;
 mod swap;
 
 pub use filesystem::Filesystem;
+pub use grow::grow;
 pub use imaging::{clone_compressed, restore_compressed};
 pub use partition_table::{
     Partition, PartitionTable, backup_partition_table, restore_partition_table,

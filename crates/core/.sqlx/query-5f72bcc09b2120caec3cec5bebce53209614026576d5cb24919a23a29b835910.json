@@ -1,62 +1,62 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO images (name, status) VALUES (?,?) RETURNING *",
+  "query": "SELECT host_id, number, partuuid, partlabel, label, uuid, fstype, size_bytes\n           FROM host_partitions\n           WHERE host_id IN (SELECT value FROM json_each(?))\n           ORDER BY host_id, number",
   "describe": {
     "columns": [
       {
-        "name": "id",
+        "name": "host_id",
         "ordinal": 0,
         "type_info": "Integer"
       },
       {
-        "name": "name",
+        "name": "number",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Integer"
       },
       {
-        "name": "captured_at",
+        "name": "partuuid",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "partlabel",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "error",
+        "name": "label",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "deleted_at",
+        "name": "uuid",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "root_partition",
+        "name": "fstype",
         "ordinal": 6,
-        "type_info": "Integer"
+        "type_info": "Text"
       },
       {
-        "name": "sector_size",
+        "name": "size_bytes",
         "ordinal": 7,
         "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 1
     },
     "nullable": [
       false,
       false,
-      true,
       false,
+      true,
       true,
       true,
       true,
       false
     ]
   },
-  "hash": "cf366d8e54a026658bff7a1053b51feb7119e3e3689582e44e9b56bacef910f8"
+  "hash": "5f72bcc09b2120caec3cec5bebce53209614026576d5cb24919a23a29b835910"
 }

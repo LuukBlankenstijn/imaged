@@ -24,6 +24,7 @@ pub fn router() -> Router {
     Router::new()
         .route(route::STREAM, get(event::start_stream))
         .route(route::DISCONNECT, post(event::disconnect))
+        .route(route::STARTED, post(task::started))
         .route(route::FINISHED, post(task::mark_finished))
         .route(route::FAILED, post(task::mark_failed))
         .route(

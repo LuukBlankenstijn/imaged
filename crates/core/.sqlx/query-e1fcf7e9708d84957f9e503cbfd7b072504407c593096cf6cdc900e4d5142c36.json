@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE images SET name = ? WHERE id = ?\n               RETURNING\n                 id as \"id!: i64\",\n                 name,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition,\n                 sector_size\n            ",
+  "query": "SELECT\n                 id as \"id!: i64\",\n                 name,\n                 kind,\n                 captured_at as \"captured_at: DateTime<Utc>\",\n                 status,\n                 error,\n                 root_partition,\n                 sector_size\n               FROM images WHERE id = ? AND deleted_at IS NULL",
   "describe": {
     "columns": [
       {
@@ -14,35 +14,41 @@
         "type_info": "Text"
       },
       {
-        "name": "captured_at: DateTime<Utc>",
+        "name": "kind",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "captured_at: DateTime<Utc>",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "error",
+        "name": "status",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "root_partition",
+        "name": "error",
         "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 6,
         "type_info": "Integer"
       },
       {
         "name": "sector_size",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 1
     },
     "nullable": [
+      false,
       false,
       false,
       true,
@@ -52,5 +58,5 @@
       false
     ]
   },
-  "hash": "c248a38c006acf61d315d29c526c9c2f115edfd150de11990efd10247228f496"
+  "hash": "e1fcf7e9708d84957f9e503cbfd7b072504407c593096cf6cdc900e4d5142c36"
 }

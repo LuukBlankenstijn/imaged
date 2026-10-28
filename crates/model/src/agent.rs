@@ -51,6 +51,7 @@ impl fmt::Display for MacAddress {
 pub mod route {
     pub const STREAM: &str = "/api/client/stream";
     pub const DISCONNECT: &str = "/api/client/stream/disconnect";
+    pub const STARTED: &str = "/api/client/tasks/{task_id}/started";
     pub const FINISHED: &str = "/api/client/tasks/{task_id}/finished";
     pub const FAILED: &str = "/api/client/tasks/{task_id}/failed";
     pub const PARTITION_TABLE: &str = "/api/client/tasks/{task_id}/parttable";
@@ -77,6 +78,10 @@ pub mod path {
 
     fn script(route: &str, task_id: i64, position: i64) -> String {
         task(route, task_id).replace("{position}", &position.to_string())
+    }
+
+    pub fn started(task_id: i64) -> String {
+        task(route::STARTED, task_id)
     }
 
     pub fn finished(task_id: i64) -> String {
@@ -118,7 +123,6 @@ pub mod path {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostInstall {
-    pub root_partition: Option<i64>,
     pub proxy: Option<String>,
     #[serde(default)]
     pub variables: BTreeMap<String, String>,
@@ -131,6 +135,7 @@ pub struct PostInstallScript {
     pub name: String,
     pub body: String,
     pub inputs: BTreeMap<String, String>,
+    pub root_partition: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,9 +144,10 @@ pub struct StreamQuery {
     pub disk_error: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PartitionTableUpload {
-    pub sector_size: u32,
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStarted {
+    #[serde(default)]
+    pub sector_size: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +160,10 @@ pub struct ImageLayout {
 pub struct PartitionUpload {
     pub filesystem: String,
     pub size: i64,
+    #[serde(default)]
+    pub fs_uuid: Option<String>,
+    #[serde(default)]
+    pub fs_label: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

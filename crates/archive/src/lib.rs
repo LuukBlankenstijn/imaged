@@ -15,4 +15,5 @@ pub struct Script {
     pub name: String,
     pub body: String,
     pub inputs: Vec<ScriptInput>,
+    pub root_partition: Option<i64>,
 }

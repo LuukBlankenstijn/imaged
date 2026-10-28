@@ -8,7 +8,11 @@ use axum::{
 use futures::TryStreamExt;
 use imaged_core::{
     di::{HostRepo, ImageRepo, ScriptProxy, ScriptRepo, ScriptVariables, TaskRepo},
-    domain::{image::Image, script::Script},
+    domain::{
+        image::Image,
+        script::{Script, script_roots},
+        task::TaskType,
+    },
     service::script_output::{ScriptRunKey, record_output},
 };
 use imaged_model::{
@@ -25,7 +29,6 @@ pub async fn post_install(agent: AgentInfo, Path(task_id): Path<i64>) -> Result<
     let run = running_restore_task(&agent.mac, task_id).await?;
     let image = image_repo.get(run.image_id).await?;
     Ok(Json(PostInstall {
-        root_partition: image.root_partition,
         proxy: script_proxy.as_deref().map(str::to_owned),
         variables: BTreeMap::clone(&script_variables),
         scripts: planned_scripts(task_id, run.host_id, &image).await?,
@@ -39,22 +42,20 @@ pub(crate) async fn planned_scripts(
     image: &Image,
 ) -> Result<Vec<PostInstallScript>> {
     let scripts = script_repo.get_for_image(image.id).await?;
-    if !scripts.is_empty() && image.root_partition.is_none() {
-        return Err(AppError::FailedPrecondition(format!(
-            "image {} has scripts but no root partition",
-            image.id
-        )));
-    }
+    let roots = script_roots(image, &scripts)?;
     let values = task_repo.get_inputs(task_id, host_id).await?;
     scripts
         .into_iter()
+        .zip(roots)
         .zip(0..)
-        .map(|(script, position)| {
+        .map(|((attached, root_partition), position)| {
+            let script = attached.script;
             Ok(PostInstallScript {
                 position,
                 inputs: script_inputs(&script, &values)?,
                 name: script.name,
                 body: script.body,
+                root_partition,
             })
         })
         .collect()
@@ -134,7 +135,7 @@ struct RestoreRun {
 
 #[injectable::inject(host_repo: HostRepo)]
 async fn running_restore_task(mac: &str, task_id: i64) -> Result<RestoreRun> {
-    let (task, image_id) = get_restore_task_and_verify(mac, task_id).await?;
+    let (task, image_id) = get_restore_task_and_verify(mac, task_id, TaskType::restores).await?;
     let host_id = host_repo.get_by_mac(mac).await?.id;
     if !task.hosts_in(TaskState::Running).any(|id| id == host_id) {
         return Err(AppError::InvalidArgument(format!(

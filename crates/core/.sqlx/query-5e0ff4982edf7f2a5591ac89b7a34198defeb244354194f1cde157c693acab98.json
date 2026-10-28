@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT s.id as \"id!\", s.name, s.body, s.updated_at as \"updated_at: DateTime<Utc>\"\n               FROM image_scripts i JOIN scripts s ON s.id = i.script_id\n               WHERE i.image_id = ?\n               ORDER BY i.position",
+  "query": "SELECT s.id as \"id!\", s.name, s.body, s.updated_at as \"updated_at: DateTime<Utc>\",\n                      i.root_partition\n               FROM image_scripts i JOIN scripts s ON s.id = i.script_id\n               WHERE i.image_id = ?\n               ORDER BY i.position",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,11 @@
         "name": "updated_at: DateTime<Utc>",
         "ordinal": 3,
         "type_info": "Text"
+      },
+      {
+        "name": "root_partition",
+        "ordinal": 4,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
@@ -31,8 +36,9 @@
       true,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "f0d2ccf652c83065a5659a15f653a4d58d3477cc8a8519a41cb8fef8041444ae"
+  "hash": "5e0ff4982edf7f2a5591ac89b7a34198defeb244354194f1cde157c693acab98"
 }

@@ -51,7 +51,9 @@ impl Worker {
             self.registry.dispatch(host);
         }
 
-        let files = self.files(image_id).await?;
+        let files = self
+            .files(image_id, task.task_type.targets_partition())
+            .await?;
         let targets = Targets::new(self.hosts.get_all(None).await?, &participants);
         let local_ip = interface_address(&self.interface)?;
         let group = multicast_group(task.id);
@@ -155,16 +157,17 @@ impl Worker {
         }
     }
 
-    async fn files(&self, image_id: i64) -> Result<Vec<File>> {
+    async fn files(&self, image_id: i64, single_partition: bool) -> Result<Vec<File>> {
         let partitions = self.images.get_partitions(image_id).await?;
-        let slots = std::iter::once((self.image_service.get_partition_table_path(image_id), 0))
-            .chain(partitions.into_iter().map(|p| {
-                (
-                    self.image_service
-                        .get_partition_path(image_id, p.partition_number),
-                    p.partition_number,
-                )
-            }));
+        let table =
+            (!single_partition).then(|| (self.image_service.get_partition_table_path(image_id), 0));
+        let slots = table.into_iter().chain(partitions.into_iter().map(|p| {
+            (
+                self.image_service
+                    .get_partition_path(image_id, p.partition_number),
+                p.partition_number,
+            )
+        }));
         let mut files = Vec::new();
         for (path, slot) in slots {
             let size = tokio::fs::metadata(&path)
@@ -416,6 +419,7 @@ mod tests {
             format!("mac-{id}"),
             Ok(0),
             Some(ip.into()),
+            Vec::new(),
         )
     }
 

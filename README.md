@@ -25,18 +25,36 @@ the binaries share.
 ### `crates/archive` — `imaged-archive`
 
 The `.imaged` archive format: an uncompressed tar holding `manifest.json` first
-(format version, name, capture date, sector size, partitions, the optional root
-partition and post-install scripts with their inputs, and a sha256 per file),
-then `parttable.bin` (an `sgdisk --backup` of the GPT), one `p-<n>.pcl` per
-partition in manifest order and one `scripts/<name>.sh` per script. A `p-<n>.pcl`
-is zstd-compressed partclone output, except for swap, where it is the
-zstd-compressed swap header page. The manifest, the partition table and every
-script are limited to 1 MiB.
+(format version, name, image kind, capture date, sector size, partitions, the
+optional root partition and post-install scripts with their inputs, and a
+sha256 per file), then, for a disk image, `parttable.bin` (an `sgdisk --backup`
+of the GPT), one `p-<n>.pcl` per partition in manifest order and one
+`scripts/<name>.sh` per script. A `p-<n>.pcl` is zstd-compressed partclone
+output, except for swap, where it is the zstd-compressed swap header page. The
+manifest, the partition table and every script are limited to 1 MiB.
 
-The current format is 2; any other `format` is refused (`unsupported archive
-format 1, expected 2`). `sector_size` is the logical sector size the LBAs in
-`parttable.bin` refer to, a power of two from 512 to 65536. `partitions` must
-not be empty and each `fstype` is one of `ext2`, `ext3`, `ext4`, `vfat` and
+An image is a disk image (`disk`: the partition table and every formatted
+partition of a whole disk) or a partition image (`partition`: one filesystem,
+stored as partition 1 without a partition table, that a deploy writes into an
+existing partition of the target).
+
+Formats 2 and 3 are read; any other `format` is refused (`unsupported archive
+format 1, expected 2 or 3`). The writer uses format 2 for a disk image whose
+scripts all run in the image's root partition, so such an archive still
+imports into a server that only reads format 2, and format 3 for a partition
+image or when a script has a root partition of its own; a format 2 manifest
+that needs format 3 is refused. Format 3 adds `kind` (`"disk"`, the default and
+omitted when written, or `"partition"`) and makes `partition_table` optional:
+it is required for a disk image and refused for a partition image, which must
+hold exactly partition 1. Each script may have its own `root_partition`, one of
+the archived partitions; the top-level `root_partition` stays the image's.
+Each partition may carry `fs_uuid`, the UUID of its filesystem, and
+`fs_label`, its filesystem label, in either format; neither raises the format.
+`sector_size` is the logical sector size the LBAs in `parttable.bin`
+refer to (for a partition image, that of the disk it was captured from, or 512
+when packed from a file; a deploy needs a target disk with the same sector
+size), a power of two from 512 to 65536. `partitions` must not be empty and each
+`fstype` is one of `ext2`, `ext3`, `ext4`, `vfat` and, in a disk image,
 `swap`. Unknown manifest fields are ignored; a new payload encoding or a field
 a reader must honour needs a format bump.
 
@@ -53,9 +71,11 @@ identically: partition table backup and restore with `sgdisk`, partition
 clones piped through zstd and restores piped back through it, and the root
 partition probe.
 
-Only GPT disks are imaged: a backup of anything else fails with `only GPT disks
-are supported, found <dos|no partition table|a protective MBR without a GPT
-header>` before `sgdisk` runs. The backup reports the disk's logical sector size
+Only GPT disks are imaged whole: a partition table backup of anything else
+fails with `only GPT disks are supported, found <dos|no partition table|a
+protective MBR without a GPT header>` before `sgdisk` runs. Partition images
+never back up or restore a partition table, so they also work on MBR disks.
+The backup reports the disk's logical sector size
 and its partitions in bytes. Before a restore wipes the target it checks that
 the target has the image's sector size (`the image's partition table is for
 N-byte sectors, /dev/x has M-byte sectors`), that it is large enough for the
@@ -63,6 +83,12 @@ image's partitions (`/dev/x holds N bytes, the image's partitions need at least
 M`; a larger disk is fine) and that the backup is intact; a refused target is
 left untouched. After loading the table it runs `partprobe <disk>`, and a
 failed re-read (a busy disk, for example) fails the restore.
+
+After a restore writes an ext2/3/4 partition, `grow` reads the filesystem's
+block count and block size with `debugfs -R stats`. When the partition is
+larger than the filesystem it runs `e2fsck -f -p` (exit codes below 4 are
+accepted) and then `resize2fs`, so the filesystem fills the partition. vfat
+and swap are left as restored. Disk and partition restores both do this.
 
 ext2/3/4 and vfat partitions are cloned with `partclone`;
 swap partitions are stored as their header page only (the `SWAPSPACE2`
@@ -95,6 +121,14 @@ mode). Captured and imported files are fsynced before an image turns `ready`.
 Hosts are keyed by their MAC address in lowercase colon form; each image records
 the sector size of its partition table.
 
+Every image has a kind, `disk` or `partition`. A partition image holds exactly
+partition 1 and no partition table file: an ext2/3/4 or vfat filesystem, its
+UUID and label, and as its size the smallest partition it fits in (the
+filesystem's size when packed, the source partition's size when captured).
+Image partitions keep their filesystem UUID and label whenever they are known.
+The partitions each agent reports are stored per host and replaced by every
+report.
+
 Images can be exported and imported as `imaged-archive` archives
 (`GET /api/ui/images/{id}/export`, only for a `ready` image, and
 `POST /api/ui/images/import`, which takes the raw archive and returns the image
@@ -108,6 +142,8 @@ image uses is replaced, and otherwise the import adds it as `<name>-2`, `-3`, �
 (reusing an identical copy under such a name), so it never changes the scripts
 of another image. Scripts are attached to the new image in their archived
 order; archives without scripts or a root partition still import.
+A partition image exports as format 3 without `parttable.bin`; any other image
+exports as format 2 unless one of its scripts has a root partition of its own.
 
 ### `crates/boot` — `imaged-boot`
 
@@ -128,18 +164,26 @@ crates build and test without them.
 
 Dioxus fullstack library that renders the dashboard (hydrated wasm client) and
 mounts the server-side routes. The Scripts page edits the script library
-(choices one per line); each image lists its scripts and root partition; the
-deploy and multicast dialogs need an explicit image, list every machine whose
-disk will be erased and ask for the inputs of the image's scripts (shared
-values once, per-machine values per host). Hosts without a usable disk show
-why. The Tasks page filters by status, type and host and pages through the
-history 50 tasks at a time; it shows each host's name, MAC and script output,
-and a retry of a deploy or multicast asks for confirmation first. Active tasks
-get a progress bar averaging their hosts, each running host its own bar with the
-partition being imaged, its rate and eta, and a multicast also the sender stats
-and per-host receiver stats used to decide whom to kick. Progress is streamed
-from `/api/ui/task-progress` at most once a second. A failed refresh keeps the
-last loaded list on screen with an error banner.
+(choices one per line); each image shows its kind, its scripts and root
+partition, and each script can pick a root partition of its own; the deploy
+and multicast dialogs need an explicit image, list every machine whose disk
+will be erased and ask for the inputs of the image's scripts (shared values
+once, per-machine values per host). Hosts without a usable disk show why;
+every host lists the partitions its agent reported. A capture takes the whole
+disk or one ext2/3/4 or vfat partition of the source host. For a partition
+image the deploy dialog asks for the partition to overwrite and only offers
+partitions that are large enough and would not hold a second copy of the
+image's filesystem UUID or label, the multicast dialog picks each host's
+partition by PARTLABEL or number, and both name the partitions they overwrite
+instead of the disks they erase. The Tasks page filters by status, type and
+host and pages through the history 50 tasks at a time; it shows each host's
+name, MAC, target partition and script output, and a retry of a deploy or
+multicast asks for confirmation first. Active tasks get a progress bar
+averaging their hosts, each running host its own bar with the partition being
+imaged, its rate and eta, and a multicast also the sender stats and per-host
+receiver stats used to decide whom to kick. Progress is streamed from
+`/api/ui/task-progress` at most once a second. A failed refresh keeps the last
+loaded list on screen with an error banner.
 
 ### `crates/api/ui` — `imaged-api-ui`
 
@@ -157,16 +201,41 @@ OPTIONS passes a cross-site check (see [Security](#security)).
   the next page. Unknown query keys are refused. Every task host carries
   `host_name` and `mac_address`.
 - `POST /api/ui/images/create` (`{"req": {"name", "host_id"}}`) starts a
-  capture and returns `{"image": ..., "task": ...}`; `POST /api/ui/hosts/deploy`,
-  `POST /api/ui/groups/multicast` and `POST /api/ui/hosts/reboot` return the
-  created task.
+  capture and returns `{"image": ..., "task": ...}`; with
+  `"partition": "<partuuid>"` it captures that partition of the host into a
+  partition image instead, refused (412) when the host has not reported the
+  partition or it holds no ext2/3/4 or vfat filesystem.
+  `POST /api/ui/hosts/deploy`, `POST /api/ui/groups/multicast` and
+  `POST /api/ui/hosts/reboot` return the created task.
 - Capture, deploy and multicast refuse an unknown host (404) and a host
   without a usable disk (412) before creating anything; deploy and multicast
   also refuse an image that is not `ready` (412).
+- A partition image is deployed into one existing partition per host, named by
+  its PARTUUID: `"partition": "<partuuid>"` in a deploy and
+  `"partitions": {"<host_id>": "<partuuid>"}` with every host of a multicast.
+  A partition image without its partition is refused (400), and so is a
+  partition given for a disk image. The partition must be one the host
+  reported, at least as large as the image, and no other partition of the host
+  may hold the image's filesystem UUID or, with exactly the same spelling, its
+  filesystem label, since a second copy would make it ambiguous (each 412).
+  The target itself may hold them, so a partition can be deployed again.
+  Partition captures, deploys and multicasts are `capture`, `deploy` and
+  `multicast` in task JSON and the `type` filter; each of their task hosts
+  carries the partition as `partuuid`.
 - `POST /api/ui/images/delete` is refused (412) while a pending or running
   deploy or multicast uses the image; a running capture of it is cancelled.
 - Host JSON has `disk_size_bytes` or, for a host without a usable disk,
-  `disk_error`.
+  `disk_error`, and `partitions`, the partitions its agent last reported, each
+  with `number`, `partuuid`, `partlabel`, `label`, `uuid` (the filesystem's),
+  `fstype` and `size_bytes`. Image JSON has `kind` (`disk` or `partition`),
+  `fs_uuid` for each partition whose filesystem UUID is known and `fs_label`
+  for each partition whose filesystem label is known.
+- `POST /api/ui/images/scripts/root`
+  (`{"req": {"image_id", "position", "partition_number"}}`) makes the image's
+  script at `position` (counted from 0) run in another partition of the image;
+  `null` returns it to the image's root partition. The image's scripts carry
+  it as `root_partition`, and reordering them with `/api/ui/images/scripts`
+  keeps it.
 
 ### `crates/api/agent` — `imaged-api-agent`
 
@@ -181,6 +250,12 @@ colon form, anything else is a 400. The stream query carries exactly one of
 (a cancel or kick shows up as another task or `null`) and in reply to the
 agent's `"Idle"`. Reporting a task finished or failed again with the same
 outcome succeeds, so the agent can retry its report.
+
+Right after connecting, an agent with a usable disk sends
+`{"Partitions": [...]}`, the disk's partitions. Every capture, deploy and
+multicast starts with `POST /api/client/tasks/{id}/started` (a capture with
+`?sector_size=`, the disk's logical sector size); the partition table routes
+only serve disk tasks.
 
 ### `crates/server` — `imaged-server`
 
@@ -288,16 +363,38 @@ multicast to it are refused. Over the websocket the server names the host's
 current task: an idle agent starts it, a running task that is no longer
 current is cancelled, and an agent that becomes idle says so and gets the next
 task, so a task queued while the agent was busy is delivered when it is done.
-The agent reconnects after 15 seconds without hearing from the server. It
-uploads and downloads partition tables (with their sector size), partitions
-and script output over HTTP, and retries its final report with backoff while
-the server is unreachable or answers 5xx. Task progress goes up the same
-websocket: the agent weighs each partition by its size (swap counts as nothing,
-only its header is imaged) and sends its latest progress at most every 5
-seconds, only when it changed, and again after a reconnect. Uses `imaged-disk`
-(`partclone` for filesystem-aware imaging, `sgdisk` for the partition table,
-`debugfs` for the root partition). A capture runs `e2fsck -p` or `fsck.fat -a`
-on each partition right before cloning it. Reboot tasks touch no disk.
+The agent reconnects after 15 seconds without hearing from the server. Right
+after every connect it reports the target disk's partitions (number, PARTUUID,
+PARTLABEL, filesystem label, UUID and type, and size; only partitions that have
+a PARTUUID, and nothing when the disk is unusable). Every capture, deploy and
+multicast first posts `/api/client/tasks/{id}/started`; a capture includes the
+disk's logical sector size. The agent uploads and downloads partition tables,
+partitions (with their filesystem UUID and label) and script output over HTTP,
+and retries its final report with backoff while the server is unreachable or
+answers 5xx. Task progress goes up the same websocket: the agent weighs each
+partition by its size (swap counts as nothing, only its header is imaged) and
+sends its latest progress at most every 5 seconds, only when it changed, and
+again after a reconnect. Uses `imaged-disk` (`partclone` for filesystem-aware
+imaging, `sgdisk` for the partition table, `debugfs` for the root partition,
+`resize2fs` to grow ext filesystems). A capture runs `e2fsck -p` or
+`fsck.fat -a` on each partition right before cloning it. Reboot tasks touch no
+disk.
+
+A partition task works on one existing partition of the target disk, named by
+its PARTUUID, and never touches the partition table. A partition capture clones
+that ext2/3/4 or vfat partition as partition 1 of the image. A partition deploy
+or multicast refuses before writing anything when the partition is missing
+(`partition <partuuid> is not on disk <disk>`), smaller than the image
+(`partition <partuuid> holds N bytes, the image needs at least M`), on a disk
+with another logical sector size (`the image is for N-byte sectors, <disk> has
+M-byte sectors`), when another partition of the disk already holds the
+image's filesystem UUID (`<device> already holds a filesystem with UUID <uuid>,
+restoring the image into partition <partuuid> would duplicate it`), or when
+another partition already holds the image's filesystem label, spelled exactly
+the same (``<device> already holds a filesystem labelled `<label>`, restoring
+the image into partition <partuuid> would duplicate the label``). After
+writing, every restore, disk or partition, grows ext filesystems to fill their
+partitions.
 
 On the machine's screen the agent draws a dashboard on tty1 (the initramfs
 starts it there with `openvt` and quiets kernel messages to errors). F1 shows
@@ -322,28 +419,43 @@ cargo run -p imaged-agent -- --no-tui http://<server>:8080   # plain logs, Ctrl-
 
 ### `crates/pack` — `imaged-pack`
 
-Rust binary that turns a raw GPT disk image file into a `.imaged` archive
-without root, KVM or a PXE boot. The archive matches what a capture produces,
-so it imports through `POST /api/ui/images/import` and deploys like a captured
-image.
+Rust binary that turns a raw GPT disk image file, or a raw ext2/3/4 or vfat
+filesystem image, into a `.imaged` archive without root, KVM or a PXE boot.
+The archive matches what a capture produces, so it imports through
+`POST /api/ui/images/import` and deploys like a captured image.
 
 ```
-imaged-pack <DISK> --name <NAME> [--root-partition <N>] [--script <PATH>]... (-o|--output) <OUT>
+imaged-pack <IMAGE> --name <NAME> [--root-partition <N>] [--script <PATH>]... [--script-root <NAME>=<N>]... (-o|--output) <OUT>
 ```
 
-It backs up the partition table with `sgdisk` into `parttable.bin` and takes
-the partitions and sector size from that GPT backup, by the same rule as a
-capture (only GPT disks; anything else fails with `only GPT disks are
-supported, found <label>`); an image file counts as a disk with 512-byte
-sectors. Each partition is copied into a sparse temp file, its filesystem read
-with `blkid -p`, and cloned with `imaged-disk` into `p-<n>.pcl`. Unformatted
+`blkid -p` decides what the input is: a file holding a filesystem and no GPT
+is packed as a partition image, anything else as a disk image.
+
+For a disk image it backs up the partition table with `sgdisk` into
+`parttable.bin` and takes the partitions and sector size from that GPT backup,
+by the same rule as a capture (only GPT disks; anything else, an MBR disk or a
+blank file included, fails with `only GPT disks are supported, found
+<label>`); an image file counts as a disk with 512-byte sectors. Each partition
+is copied into a sparse temp file, its filesystem, UUID and label read with
+`blkid -p -d`, and cloned with `imaged-disk` into `p-<n>.pcl`. Unformatted
 partitions are skipped like a capture skips them; ext2/3/4, vfat and swap are
 packed; any other filesystem fails the run, and so does a disk without any
 packable partition (`the manifest lists no partitions`).
+
+A filesystem image becomes partition 1 of a partition image with 512-byte
+sectors, no partition table and the filesystem's UUID and label. An ext
+filesystem is copied to a temp file, checked with `e2fsck -f -p` and shrunk
+with `resize2fs -M` there, so the input is never changed, and the image's size
+is the shrunk filesystem's: the smallest partition it can be deployed into,
+where the deploy grows it again. A vfat filesystem is packed as it is, with the
+file's size. Any other filesystem fails (`<IMAGE> holds neither a GPT
+partition table nor a supported filesystem: found swap, expected one of ext2,
+ext3, ext4, vfat`).
+
 `--root-partition <N>` sets the root partition (it must be one of the packed
-partitions); without it the root partition is found by the same rule as a
-capture and left unset when no single partition qualifies. The capture date is
-the time of packing.
+partitions, so 1 for a filesystem image); without it the root partition is
+found by the same rule as a capture and left unset when no single partition
+qualifies. The capture date is the time of packing.
 
 `--script <PATH>` attaches a post-install script and can be repeated. The file
 is `<name>.sh`, the script name its stem; its inputs come from a sibling
@@ -363,16 +475,18 @@ is `<name>.sh`, the script name its stem; its inputs come from a sibling
 ```
 
 Scripts follow the server's library rules and names must be unique; they are
-archived and attached in command-line order. The archive is written to
-`<OUT>.partial` and renamed to `<OUT>` once complete; on failure nothing is
-left behind. Temp files go to `TMPDIR`.
+archived and attached in command-line order. `--script-root <NAME>=<N>` runs
+the script `<NAME>` given with `--script` in packed partition `<N>` instead of
+the root partition; it can be given once per script and makes the archive
+format 3. The archive is written to `<OUT>.partial` and renamed to `<OUT>`
+once complete; on failure nothing is left behind. Temp files go to `TMPDIR`.
 
 ```sh
 nix run github:LuukBlankenstijn/imaged#imaged-pack -- disk.img --name my-image --script setup.sh -o my-image.imaged
 ```
 
 The nix package brings its runtime tools (`sgdisk`, `blkid`, `debugfs`,
-`partclone`).
+`e2fsck`, `resize2fs`, `partclone`).
 
 ### `crates/e2e` — `imaged-e2e`
 
@@ -494,9 +608,10 @@ client's `timeout` option.
 
 A multicast sends each file to its own UDP port pair from 50000 up (the
 partition table on 50000/50001, partition `n` on `50000 + 2n` and the next) in
-an organisation-local group in 239.192.0.0/14, on `multicast_interface`.
-Machines have 5 minutes to join. Open that port range on the netboot interface
-and turn off IGMP snooping on bridges in between.
+an organisation-local group in 239.192.0.0/14, on `multicast_interface`; a
+partition image sends only its partition 1, on 50002/50003. Machines have 5
+minutes to join. Open that port range on the netboot interface and turn off
+IGMP snooping on bridges in between.
 
 ## Post-install scripts
 
@@ -518,11 +633,14 @@ image keeps an
 ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
 current version; a script that an image still uses cannot be deleted. Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the
-partition the scripts run in. A capture finds it after cloning every partition
-by reading each ext partition with `debugfs`, without mounting it: when exactly
+partition the scripts run in, and each script of an image can run in another
+of the image's partitions instead (`POST /api/ui/images/scripts/root`). A
+capture finds the image's root partition after cloning every partition by
+reading each ext partition with `debugfs`, without mounting it: when exactly
 one holds `/etc/os-release` (a symlink counts) it becomes the image's root
 partition, otherwise it is left unset for the dashboard to choose.
-`imaged-pack` applies the same rule.
+`imaged-pack` applies the same rule. A partition image's root partition is 1
+or unset.
 
 Partitions without a filesystem, such as a BIOS boot partition, are not
 imaged: a deploy recreates them in the partition table but writes nothing into
@@ -545,22 +663,33 @@ Unknown fields in the request or in `inputs` are refused (currently with a 500
 naming the field). Before any task is created the sources are resolved and
 checked (unknown variables, unknown or misplaced names, required values,
 numbers, choices; errors name the host) and an empty value falls back to the
-input's default; a rejected request is a 400, and an image with scripts but no
-root partition is refused with a 412. The resolved values, secrets included,
-are stored with each task host and kept indefinitely, so a retried or
-reconnecting host gets the same ones, even if the variable changes later. If a
+input's default; a rejected request is a 400, and an image with a script that
+has neither a root partition of its own nor the image's is refused with a 412.
+The resolved values, secrets included, are stored with each task host and kept
+indefinitely, so a retried or reconnecting host gets the same ones, even if
+the variable changes later. If a
 script has since changed so that the stored values no longer fit its inputs,
 the restore stops with a 412 before anything is written; start a new
 deployment.
 
 After a deploy or multicast has restored every partition, the agent fetches
-the image's scripts (`GET /api/client/tasks/{id}/scripts`) and, if there are
-any, mounts the root partition under `/tmp/imaged-root`, then every entry of
-the image's `/etc/fstab` that names a partition of the restored disk (by
-`UUID=`, `LABEL=`, `PARTUUID=`, `PARTLABEL=` or device path), then `/proc`,
-`/sys` and `/dev`. Symlinks on the way to `/etc/fstab` resolve inside the
-image, so an absolute link such as NixOS's `/etc/fstab -> /etc/static/fstab`
-finds the image's file. On UEFI machines the initramfs mounts `efivarfs`, and
+the image's scripts (`GET /api/client/tasks/{id}/scripts`, each with the
+partition it runs in) and runs them in order. Each run of consecutive scripts
+that share a root partition gets it mounted once under `/tmp/imaged-root`,
+then every entry of the image's `/etc/fstab` that names a partition of the
+target disk (by `UUID=`, `LABEL=`, `PARTUUID=`, `PARTLABEL=` or device path),
+then `/proc`, `/sys` and `/dev`, all unmounted again before the next run, so
+an image whose scripts all run in its root partition is mounted once. A
+script's root partition must have been restored (`root partition N was not
+restored`), so every script of a partition deploy runs in the restored
+partition. The root partition is only ever mounted as `/`. In a partition
+deploy the fstab entries can name the host's other partitions, such as its
+ESP, and an entry that matches more than one partition of the disk fails the
+task (`the image's /etc/fstab names LABEL=ESP, which matches more than one
+partition on vda`) instead of using the first, as a disk deploy does. Symlinks
+on the way to `/etc/fstab` resolve inside the image, so an absolute link such
+as NixOS's `/etc/fstab -> /etc/static/fstab` finds the image's file. On UEFI
+machines the initramfs mounts `efivarfs`, and
 the `/sys` bind mount carries it into the chroot, so a script can write boot
 entries to NVRAM (`bootctl install`, `grub-install`, `efibootmgr`). Each
 script is written to `/tmp` inside that root and run with `chroot`, through
@@ -633,17 +762,34 @@ with a real x86_64 initramfs built from this tree (`build-initramfs x86_64
 arm64`; the server does not build without the arm64 one). The script:
 
 1. builds the binaries it runs,
-2. creates the test disks,
-3. packs one with `imaged-pack` and a script that has a per-machine input,
-4. imports the archive and checks that it is `ready` with root partition 2 and
-   the script attached,
+2. creates the test disks: a source disk, two blank disks and two partition
+   targets, each with an ESP, an ext4 root holding a stale file and an ext4
+   data partition,
+3. packs the source disk with `imaged-pack` and a script that has a
+   per-machine input, and packs the source's root filesystem, copied out to a
+   file, into a partition archive: format 3, shrunk, with the filesystem's
+   UUID, and the input file unchanged,
+4. imports both archives and checks that the disk image is `ready` with root
+   partition 2 and the script attached, and that the partition image is a
+   `partition` image with root partition 1 that reuses the library script,
 5. captures the same disk in a VM and checks that the agent found root
-   partition 2,
-6. exports the captured image and compares its structure with the packed
-   archive,
-7. deploys both images with a hostname input and checks each deployed disk:
-   the same GPT, a clean fsck, the same files, the restored swap header, and
-   `/etc/hostname` set by the script.
+   partition 2, then, in the same VM, captures its root partition by the
+   PARTUUID the agent reported into a partition image of that partition's size
+   and filesystem UUID,
+6. exports the captured images, checks that the disk images are format 2 and
+   the partition image format 3 without a partition table, and compares the
+   structure of each export with the packed archive of the same kind,
+7. deploys both disk images with a hostname input and checks each deployed
+   disk: the same GPT, a clean fsck, the same files, the restored swap header,
+   and `/etc/hostname` set by the script,
+8. deploys the packed partition image into the root partition of one partition
+   target and multicasts the captured one into the other's, after checking
+   that the server refuses the request without its partition, with a disk
+   image, and with a partition smaller than the image; each target keeps its
+   partition table and its ESP and data partitions byte for byte, and its root
+   partition gets a clean fsck, the image's filesystem UUID and files without
+   the stale one, `/etc/hostname` set by the script and a filesystem grown to
+   fill the partition.
 
 `E2E_FIRMWARE` picks `bios` or `uefi`, `E2E_OUT` the directory for logs, disks
 and archives (default `e2e/out`); `CARGO_TARGET_DIR` and `IMAGED_BOOT_ASSETS`
@@ -661,9 +807,15 @@ the `imaged` image of each case, imports it into a server whose
 typed per-machine secrets and the shared one taken from the variable, boots the
 disk and checks what the system reports: every secret with its owner, mode and
 content and readable by its owner, the root filesystem grown to the disk, the
-firmware, and for disko an active swap partition. `E2E_NIXOS_CASES` picks the
+firmware, and for disko an active swap partition. The `partition` cases
+(`imaged.image.kind = "partition"`: systemd-boot with `/boot` on the ESP, and
+BIOS GRUB) deploy instead into the empty root partition of a disk that already
+holds a BIOS boot partition and a vfat ESP labelled `ESP`, and also check that
+the partition table is unchanged after the boot. `E2E_NIXOS_CASES` picks the
 cases (default `sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi
-disko:uefi disko-grub:bios`), `E2E_OUT` defaults to `e2e/out/nixos`.
+disko:uefi disko-grub:bios partition:uefi partition-grub-bios:bios`), `E2E_OUT`
+defaults to `e2e/out/nixos`. The images are built from the checkout through
+`git+file://`, so files git does not track are left out of them.
 
 ## NixOS images
 
@@ -711,6 +863,18 @@ system profile on the disk is the system the post-install script installs.
 `imaged.image.name` (default `system.name`) is the image name; the archive file
 is named after it, with characters not allowed in store paths replaced by `-`.
 
+`imaged.image.kind = "partition"` (default `"disk"`) builds a partition image
+instead: only the ext4 root filesystem, labelled `nixos`, built by
+`make-disk-image` without a partition table and packed as partition 1 with
+`--root-partition 1`; `partitionTableType` is ignored. Deploying it overwrites
+one existing partition of the target and leaves the partition table and every
+other partition alone, so `/boot` and any other filesystems come from the
+configuration's own `fileSystems`: the module still forces `fileSystems."/"`
+to `/dev/disk/by-label/nixos`, but not `/boot`, and `boot.growPartition`
+defaults to off. The same post-install script installs the bootloader, so an
+EFI loader with `/boot` on the target's ESP works, and so does GRUB for BIOS,
+which on a GPT disk needs the target to have a BIOS boot partition.
+
 The archive carries one post-install script, `imaged-nixos-<hash>`, where
 `<hash>` is the first 12 characters of the system's store hash, so every build
 has its own script and an import of another build never collides with one an
@@ -734,8 +898,11 @@ Evaluation fails when imaged cannot deploy the configuration:
 - disko with more than one disk, LVM, mdadm, ZFS or bcachefs devices, a table
   other than GPT, a filesystem other than ext2/3/4, vfat or swap, or a root
   partition that is not the last one (`size = "100%"`) or no partitions;
-- without disko, block-device `fileSystems` other than `/` and, with an ESP,
-  `/boot`, or block-device `swapDevices` (a swap file is fine);
+- for a disk image without disko, block-device `fileSystems` other than `/`
+  and, with an ESP, `/boot`, or block-device `swapDevices` (a swap file is
+  fine);
+- for a partition image, disko, `boot.growPartition` (the partition table
+  never changes) or block-device `swapDevices` (a swap file is fine);
 - `system.etc.overlay` (also set by the perlless profile): the deploy reads
   `/etc/fstab` and writes secrets on the root filesystem, which the overlay
   hides at boot;
@@ -757,11 +924,14 @@ Evaluation fails when imaged cannot deploy the configuration:
   `listen.dashboard = "machine"` for the old layout. In the NixOS module
   `publicUrl` and `multicastInterface` have no default, `webBindAddress`
   defaults to `127.0.0.1:8081` and the cachix cache needs `useBinaryCache`.
-- Archives are format 2. Format 1 archives are refused; re-pack them with the
-  new `imaged-pack`. Images already on the server are recorded with 512-byte
-  sectors and export as format 2; they keep working unless they were captured
-  from a disk with 4096-byte sectors, which must be captured again.
-- Captures and `imaged-pack` refuse non-GPT disks.
+- Archives are format 2, or format 3 for partition images and images with
+  per-script root partitions (see
+  [`crates/archive`](#cratesarchive--imaged-archive)). Format 1 archives are
+  refused; re-pack them with the new `imaged-pack`. Images already on the
+  server are recorded with 512-byte sectors and export as format 2; they keep
+  working unless they were captured from a disk with 4096-byte sectors, which
+  must be captured again.
+- Disk captures and `imaged-pack` of a disk refuse non-GPT disks.
 - `/api/ui`: `GET /api/ui/tasks` returns `{"tasks", "next_cursor"}` pages
   instead of an array; `POST /api/ui/images/create` returns
   `{"image", "task"}`; multicast and reboot return the created task; deploy

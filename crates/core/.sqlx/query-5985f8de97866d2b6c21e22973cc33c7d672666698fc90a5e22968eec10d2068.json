@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO host_partitions (host_id, number, partuuid, partlabel, label, uuid, fstype, size_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "5985f8de97866d2b6c21e22973cc33c7d672666698fc90a5e22968eec10d2068"
+}

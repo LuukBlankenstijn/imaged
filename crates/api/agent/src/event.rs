@@ -43,6 +43,7 @@ pub async fn start_stream(
         registration: registry.register(host.id),
         current: current_task(&**task_repo, host.id).await?,
         tasks: task_repo,
+        hosts: host_repo,
         liveness: *liveness,
     };
     let progress = progress.clone();
@@ -55,11 +56,20 @@ pub async fn start_stream(
 }
 
 async fn current_task(tasks: &dyn TaskRepository, host_id: i64) -> Result<Option<Task>> {
-    Ok(tasks
+    while let Some(task) = tasks
         .get_next(host_id)
         .await?
         .filter(|task| task.is_dispatchable_to(host_id))
-        .map(|task| Task::new(task.id, task.task_type.into(), task.image_id)))
+    {
+        match task.work(host_id) {
+            Ok(work) => return Ok(Some(Task::new(task.id, work))),
+            Err(e) => {
+                tracing::warn!(host_id, task_id = task.id, err = %e, "failing a task the host cannot run");
+                tasks.mark_failed(task.id, host_id, &e.to_string()).await?;
+            }
+        }
+    }
+    Ok(None)
 }
 
 struct HostStream {
@@ -67,12 +77,13 @@ struct HostStream {
     registration: Registration,
     current: Option<Task>,
     tasks: TaskRepo,
+    hosts: HostRepo,
     liveness: AgentLiveness,
 }
 
 impl HostStream {
     async fn serve(mut self, mut socket: WebSocket, progress: &ProgressBoard) {
-        if send(&mut socket, self.current).await.is_err() {
+        if send(&mut socket, &self.current).await.is_err() {
             return;
         }
 
@@ -93,6 +104,12 @@ impl HostStream {
                             Ok(AgentEvent::Idle) => true,
                             Ok(AgentEvent::Progress(report)) => {
                                 progress.report(host_id, report);
+                                continue;
+                            }
+                            Ok(AgentEvent::Partitions(partitions)) => {
+                                if let Err(e) = self.hosts.set_partitions(host_id, &partitions).await {
+                                    tracing::warn!(host_id, err = %e, "could not store the host's partitions");
+                                }
                                 continue;
                             }
                             Err(e) => {
@@ -124,7 +141,7 @@ impl HostStream {
                     break;
                 }
             };
-            if (asked || current != self.current) && send(&mut socket, current).await.is_err() {
+            if (asked || current != self.current) && send(&mut socket, &current).await.is_err() {
                 break;
             }
             self.current = current;
@@ -134,9 +151,10 @@ impl HostStream {
 
 async fn send(
     socket: &mut WebSocket,
-    current: Option<Task>,
+    current: &Option<Task>,
 ) -> std::result::Result<(), axum::Error> {
-    let json = serde_json::to_string(&ServerEvent::Current(current)).map_err(axum::Error::new)?;
+    let json =
+        serde_json::to_string(&ServerEvent::Current(current.clone())).map_err(axum::Error::new)?;
     socket.send(Message::text(json)).await
 }
 

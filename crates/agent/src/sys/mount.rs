@@ -8,7 +8,7 @@ use rustix::fs::{Mode, OFlags, ResolveFlags};
 use rustix::mount::{MountFlags, UnmountFlags};
 
 use crate::sys::disk::{BlockDevice, PartitionTarget};
-use crate::sys::fstab::{plan_mounts, unescape};
+use crate::sys::fstab::{Matching, plan_mounts, unescape};
 
 const ROOT_DIR: &str = "/tmp/imaged-root";
 const STOP_ATTEMPTS: usize = 50;
@@ -20,7 +20,7 @@ pub struct MountedSystem {
 }
 
 impl MountedSystem {
-    pub fn mount(root: &PartitionTarget, disk: &BlockDevice) -> Result<Self> {
+    pub fn mount(root: &PartitionTarget, disk: &BlockDevice, matching: Matching) -> Result<Self> {
         let mut system = MountedSystem {
             root: PathBuf::from(ROOT_DIR),
             mounted: Vec::new(),
@@ -40,7 +40,7 @@ impl MountedSystem {
             Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e).context("reading the image's /etc/fstab"),
         };
-        for planned in plan_mounts(&fstab, disk) {
+        for planned in plan_mounts(&fstab, disk, matching)? {
             if planned.device == root.device {
                 continue;
             }

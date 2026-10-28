@@ -29,13 +29,6 @@ async fn main() -> anyhow::Result<()> {
 
     let mac = sys::get_mac()?;
     let ip = sys::get_ip();
-    let disk = sys::disk::find_target_disk()
-        .await
-        .map(|disk| disk.size)
-        .map_err(|e| format!("{e:#}"));
-    if let Err(reason) = &disk {
-        tracing::warn!(%reason, "no disk to image; the server refuses captures and deploys for this machine");
-    }
 
     let server = Arc::new(Server::new(args.server.clone(), mac, ip)?);
     let status = Status::new(Identity {
@@ -64,5 +57,11 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(shell::watch_for_shell_hotkey());
     }
 
-    connection::run(agent, client, disk, connection::Timing::PRODUCTION).await
+    connection::run(
+        agent,
+        client,
+        sys::disk::probe,
+        connection::Timing::PRODUCTION,
+    )
+    .await
 }

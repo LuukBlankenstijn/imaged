@@ -178,6 +178,28 @@ in
     }
   ];
 
+  partition = host "partition" [
+    {
+      boot.loader.systemd-boot.enable = true;
+      fileSystems."/boot" = {
+        device = "/dev/disk/by-label/ESP";
+        fsType = "vfat";
+        options = [ "umask=0077" ];
+      };
+      imaged.image.kind = "partition";
+    }
+  ];
+
+  partition-grub-bios = host "partition-grub-bios" [
+    {
+      boot.loader.grub = {
+        enable = true;
+        device = "/dev/disk/by-id/imaged-e2e-disk";
+      };
+      imaged.image.kind = "partition";
+    }
+  ];
+
   hardware = host "hardware" [
     hardwareTest
     {
@@ -313,6 +335,30 @@ in
             };
           };
         };
+      }
+    ];
+    "packs only the root filesystem, but disko describes a whole disk" = host "partition-disko" [
+      (diskoRoot { root = rootPartition; })
+      { imaged.image.kind = "partition"; }
+    ];
+    "but boot.growPartition would grow the root partition" = host "partition-grow" [
+      {
+        boot.loader.grub = {
+          enable = true;
+          device = "/dev/disk/by-id/imaged-e2e-disk";
+        };
+        boot.growPartition = true;
+        imaged.image.kind = "partition";
+      }
+    ];
+    "partition image holds only the root filesystem" = host "partition-swap" [
+      {
+        boot.loader.grub = {
+          enable = true;
+          device = "/dev/disk/by-id/imaged-e2e-disk";
+        };
+        swapDevices = [ { device = "/dev/disk/by-label/swap"; } ];
+        imaged.image.kind = "partition";
       }
     ];
   };

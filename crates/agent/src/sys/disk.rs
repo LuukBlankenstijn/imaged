@@ -1,5 +1,7 @@
 use anyhow::{Context as _, Result, bail};
 use imaged_disk::Filesystem;
+use imaged_model::agent::ImagePartition;
+use imaged_model::host::HostPartition;
 use serde::Deserialize;
 use tokio::process::Command;
 
@@ -35,6 +37,8 @@ pub struct BlockDevice {
     pub partuuid: Option<String>,
     #[serde(default)]
     pub partlabel: Option<String>,
+    #[serde(default, rename = "log-sec")]
+    pub sector_size: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +47,14 @@ pub struct PartitionTarget {
     pub number: i64,
     pub filesystem: Filesystem,
     pub size: u64,
+    pub fs_uuid: Option<String>,
+    pub fs_label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostDisk {
+    pub size_bytes: u64,
+    pub partitions: Vec<HostPartition>,
 }
 
 impl BlockDevice {
@@ -69,12 +81,15 @@ impl BlockDevice {
                 number: child.find_partition_number()?,
                 filesystem,
                 size: child.size,
+                fs_uuid: child.uuid.clone(),
+                fs_label: child.label.clone(),
             });
         }
         Ok(targets)
     }
 
-    pub fn partition_target(&self, number: i64, fstype: String) -> Result<PartitionTarget> {
+    pub fn partition_target(&self, image: &ImagePartition) -> Result<PartitionTarget> {
+        let number = image.partition_number;
         let child = self
             .children
             .iter()
@@ -83,10 +98,54 @@ impl BlockDevice {
         Ok(PartitionTarget {
             device: child.get_device(),
             number,
-            filesystem: fstype.parse()?,
+            filesystem: image.fstype.parse()?,
             size: child.size,
+            fs_uuid: image.fs_uuid.clone(),
+            fs_label: image.fs_label.clone(),
         })
     }
+
+    pub fn partition(&self, partuuid: &str) -> Result<&BlockDevice> {
+        self.children
+            .iter()
+            .find(|child| {
+                child
+                    .partuuid
+                    .as_deref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(partuuid))
+            })
+            .with_context(|| format!("partition {partuuid} is not on disk {}", self.name))
+    }
+
+    pub fn logical_sector_size(&self) -> Result<u32> {
+        self.sector_size
+            .with_context(|| format!("lsblk reported no logical sector size for {}", self.name))
+    }
+
+    pub fn host_partitions(&self) -> Vec<HostPartition> {
+        self.children
+            .iter()
+            .filter_map(|child| {
+                Some(HostPartition {
+                    number: child.find_partition_number().ok()?,
+                    partuuid: child.partuuid.clone()?,
+                    partlabel: child.partlabel.clone(),
+                    label: child.label.clone(),
+                    uuid: child.uuid.clone(),
+                    fstype: child.fstype.clone(),
+                    size_bytes: child.size,
+                })
+            })
+            .collect()
+    }
+}
+
+pub async fn probe() -> std::result::Result<HostDisk, String> {
+    let disk = find_target_disk().await.map_err(|e| format!("{e:#}"))?;
+    Ok(HostDisk {
+        size_bytes: disk.size,
+        partitions: disk.host_partitions(),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,7 +192,7 @@ async fn lsblk(device: Option<&str>) -> Result<Vec<BlockDevice>> {
         "-J",
         "-b",
         "-o",
-        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE,UUID,LABEL,PARTUUID,PARTLABEL",
+        "NAME,SIZE,FSTYPE,MOUNTPOINT,RM,TRAN,RO,HOTPLUG,TYPE,UUID,LABEL,PARTUUID,PARTLABEL,LOG-SEC",
     ]);
     if let Some(d) = device {
         cmd.arg(d);
@@ -207,12 +266,23 @@ mod tests {
         .expect("valid lsblk fixture")
     }
 
+    fn image(number: i64, fstype: &str) -> ImagePartition {
+        ImagePartition {
+            id: number,
+            partition_number: number,
+            fstype: fstype.to_string(),
+            size_bytes: 1,
+            fs_uuid: Some(format!("uuid-{number}")),
+            fs_label: Some(format!("label-{number}")),
+        }
+    }
+
     #[test]
     fn restore_targets_do_not_depend_on_detected_fstype() {
         let disk = freshly_partitioned_disk();
 
         let target = disk
-            .partition_target(2, "ext4".to_string())
+            .partition_target(&image(2, "ext4"))
             .expect("partition 2 exists");
 
         assert_eq!(target.device, "/dev/nvme0n1p2");
@@ -224,7 +294,7 @@ mod tests {
     fn restore_target_missing_from_disk_is_an_error() {
         let disk = freshly_partitioned_disk();
 
-        assert!(disk.partition_target(3, "ext4".to_string()).is_err());
+        assert!(disk.partition_target(&image(3, "ext4")).is_err());
     }
 
     #[test]
@@ -232,6 +302,76 @@ mod tests {
         let disk = freshly_partitioned_disk();
 
         assert!(disk.formatted_partitions().unwrap().is_empty());
+    }
+
+    #[test]
+    fn capture_targets_carry_the_filesystem_identity_and_restore_targets_the_images() {
+        let disk = dev(r#"{ "name": "sda", "size": 100, "children": [
+                { "name": "sda1", "size": 10, "fstype": "vfat", "uuid": "ABCD-1234", "label": "ESP" },
+                { "name": "sda2", "size": 90, "fstype": "ext4" }
+            ] }"#);
+
+        let captured: Vec<_> = disk
+            .formatted_partitions()
+            .unwrap()
+            .into_iter()
+            .map(|target| (target.fs_uuid, target.fs_label))
+            .collect();
+        assert_eq!(
+            captured,
+            [
+                (Some("ABCD-1234".to_string()), Some("ESP".to_string())),
+                (None, None)
+            ]
+        );
+        let restored = disk.partition_target(&image(2, "ext4")).unwrap();
+        assert_eq!(
+            (restored.fs_uuid, restored.fs_label),
+            (Some("uuid-2".to_string()), Some("label-2".to_string()))
+        );
+    }
+
+    #[test]
+    fn the_inventory_lists_numbered_partitions_that_have_a_partuuid() {
+        let disk = dev(
+            r#"{ "name": "nvme0n1", "size": 100, "log-sec": 4096, "children": [
+                { "name": "nvme0n1p1", "size": 10, "fstype": "vfat", "uuid": "ABCD-1234",
+                  "label": "ESP", "partuuid": "aaaa-01", "partlabel": "EFI system" },
+                { "name": "nvme0n1p2", "size": 80 },
+                { "name": "nvme0n1p3", "size": 9, "partuuid": "aaaa-03" },
+                { "name": "crypted", "size": 1, "partuuid": "aaaa-00" }
+            ] }"#,
+        );
+
+        assert_eq!(
+            disk.host_partitions(),
+            [
+                HostPartition {
+                    number: 1,
+                    partuuid: "aaaa-01".to_string(),
+                    partlabel: Some("EFI system".to_string()),
+                    label: Some("ESP".to_string()),
+                    uuid: Some("ABCD-1234".to_string()),
+                    fstype: Some("vfat".to_string()),
+                    size_bytes: 10,
+                },
+                HostPartition {
+                    number: 3,
+                    partuuid: "aaaa-03".to_string(),
+                    partlabel: None,
+                    label: None,
+                    uuid: None,
+                    fstype: None,
+                    size_bytes: 9,
+                },
+            ]
+        );
+        assert_eq!(disk.logical_sector_size().unwrap(), 4096);
+        assert_eq!(disk.partition("AAAA-03").unwrap().name, "nvme0n1p3");
+        assert_eq!(
+            disk.partition("bbbb-01").unwrap_err().to_string(),
+            "partition bbbb-01 is not on disk nvme0n1"
+        );
     }
 
     fn dev(json: &str) -> BlockDevice {
@@ -512,7 +652,7 @@ mod tests {
     fn partition_target_rejects_an_unsupported_filesystem() {
         let disk = freshly_partitioned_disk();
 
-        let e = disk.partition_target(2, "ntfs".to_string()).unwrap_err();
+        let e = disk.partition_target(&image(2, "ntfs")).unwrap_err();
         assert_eq!(e.to_string(), "filesystem not supported: ntfs");
     }
 
@@ -521,7 +661,7 @@ mod tests {
         let disk = dev(r#"{ "name": "sda", "size": 100, "children": [
                 { "name": "sda1", "size": 123456789, "fstype": "ext4" }
             ] }"#);
-        let target = disk.partition_target(1, "ext4".to_string()).unwrap();
+        let target = disk.partition_target(&image(1, "ext4")).unwrap();
         assert_eq!(target.device, "/dev/sda1");
         assert_eq!(target.number, 1);
         assert_eq!(target.filesystem, Filesystem::Ext4);
@@ -534,7 +674,7 @@ mod tests {
                 { "name": "nvme0n1p1", "size": 111 },
                 { "name": "nvme0n1p1", "size": 222 }
             ] }"#);
-        let target = disk.partition_target(1, "ext4".to_string()).unwrap();
+        let target = disk.partition_target(&image(1, "ext4")).unwrap();
         assert_eq!(target.device, "/dev/nvme0n1p1");
         assert_eq!(target.size, 111);
     }
@@ -545,13 +685,7 @@ mod tests {
                 { "name": "nvme0n1p1", "size": 111 },
                 { "name": "nvme0n1p10", "size": 222 }
             ] }"#);
-        assert_eq!(
-            disk.partition_target(1, "ext4".to_string()).unwrap().size,
-            111
-        );
-        assert_eq!(
-            disk.partition_target(10, "ext4".to_string()).unwrap().size,
-            222
-        );
+        assert_eq!(disk.partition_target(&image(1, "ext4")).unwrap().size, 111);
+        assert_eq!(disk.partition_target(&image(10, "ext4")).unwrap().size, 222);
     }
 }

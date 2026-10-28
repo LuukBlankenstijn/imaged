@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use imaged_model::error::{AppError, Result};
+use imaged_model::image::ImageKind;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio_tar::{Builder, EntryType, Header};
 
 use crate::manifest::{
-    ArchivedFile, ArchivedPartition, ArchivedScript, FORMAT, MANIFEST_FILE, Manifest,
-    PARTITION_TABLE_FILE, partition_file, script_file,
+    ArchivedFile, ArchivedPartition, ArchivedScript, MANIFEST_FILE, Manifest, PARTITION_TABLE_FILE,
+    partition_file, script_file,
 };
 use crate::{CHUNK_BYTES, Script};
 
@@ -18,14 +19,17 @@ pub struct PartitionSource {
     pub number: i64,
     pub fstype: String,
     pub size_bytes: u64,
+    pub fs_uuid: Option<String>,
+    pub fs_label: Option<String>,
     pub path: PathBuf,
 }
 
 pub struct Contents {
     pub name: String,
     pub captured_at: Option<DateTime<Utc>>,
+    pub kind: ImageKind,
     pub sector_size: u32,
-    pub partition_table: PathBuf,
+    pub partition_table: Option<PathBuf>,
     pub partitions: Vec<PartitionSource>,
     pub root_partition: Option<i64>,
     pub scripts: Vec<Script>,
@@ -64,21 +68,25 @@ pub async fn write_archive<W>(contents: Contents, writer: W) -> Result<Manifest>
 where
     W: AsyncWrite + Unpin + Send,
 {
-    let partition_table = HashedFile::open(contents.partition_table).await?;
+    let partition_table = match contents.partition_table {
+        Some(path) => Some(HashedFile::open(path).await?),
+        None => None,
+    };
     let mut partition_files = Vec::with_capacity(contents.partitions.len());
     for partition in &contents.partitions {
         partition_files.push(HashedFile::open(partition.path.clone()).await?);
     }
 
-    let manifest = Manifest {
-        format: FORMAT,
+    let mut manifest = Manifest {
+        format: 0,
         name: contents.name,
+        kind: contents.kind,
         captured_at: contents.captured_at,
         sector_size: contents.sector_size,
-        partition_table: ArchivedFile {
+        partition_table: partition_table.as_ref().map(|table| ArchivedFile {
             file: PARTITION_TABLE_FILE.to_string(),
-            sha256: partition_table.sha256.clone(),
-        },
+            sha256: table.sha256.clone(),
+        }),
         partitions: contents
             .partitions
             .iter()
@@ -89,6 +97,8 @@ where
                 size_bytes: partition.size_bytes,
                 file: partition_file(partition.number),
                 sha256: hashed.sha256.clone(),
+                fs_uuid: partition.fs_uuid.clone(),
+                fs_label: partition.fs_label.clone(),
             })
             .collect(),
         root_partition: contents.root_partition,
@@ -100,9 +110,11 @@ where
                 sha256: format!("{:x}", Sha256::digest(&script.body)),
                 name: script.name.clone(),
                 inputs: script.inputs.clone(),
+                root_partition: script.root_partition,
             })
             .collect(),
     };
+    manifest.format = manifest.required_format();
     manifest.checksums()?;
     let manifest_json =
         serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::Internal(e.to_string()))?;
@@ -115,13 +127,9 @@ where
         manifest_json.as_slice(),
     )
     .await?;
-    append(
-        &mut builder,
-        &manifest.partition_table.file,
-        partition_table.len,
-        partition_table.file,
-    )
-    .await?;
+    if let (Some(archived), Some(table)) = (&manifest.partition_table, partition_table) {
+        append(&mut builder, &archived.file, table.len, table.file).await?;
+    }
     for (archived, hashed) in manifest.partitions.iter().zip(partition_files) {
         append(&mut builder, &archived.file, hashed.len, hashed.file).await?;
     }

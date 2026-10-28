@@ -5,7 +5,7 @@ use derive_more::Constructor;
 use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
 use sqlx::{Executor, Sqlite, SqliteConnection, SqlitePool, types::Json};
 
-use crate::domain::script::{NewScript, Script, ScriptRepository};
+use crate::domain::script::{ImageScript, NewImageScript, NewScript, Script, ScriptRepository};
 use imaged_model::error::{AppError, Result};
 
 #[derive(Debug, Constructor)]
@@ -187,37 +187,113 @@ impl ScriptRepository for SqliteScriptRepository {
         Ok(())
     }
 
-    async fn import_for_image(&self, image_id: i64, scripts: &[NewScript]) -> Result {
-        for script in scripts {
-            script.validate()?;
+    async fn import_for_image(&self, image_id: i64, scripts: &[NewImageScript]) -> Result {
+        for imported in scripts {
+            imported.script.validate()?;
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let mut ids = Vec::with_capacity(scripts.len());
-        for script in scripts {
-            ids.push(import_script(&mut tx, image_id, script).await?);
+        let mut linked = Vec::with_capacity(scripts.len());
+        for imported in scripts {
+            let id = import_script(&mut tx, image_id, &imported.script).await?;
+            linked.push((id, imported.root_partition));
         }
-        link_scripts(&mut tx, image_id, &ids).await?;
+        link_scripts(&mut tx, image_id, &linked).await?;
         tx.commit().await?;
         Ok(())
     }
 
-    async fn get_for_image(&self, image_id: i64) -> Result<Vec<Script>> {
-        let rows = sqlx::query_as!(
-            ScriptRow,
-            r#"SELECT s.id as "id!", s.name, s.body, s.updated_at as "updated_at: DateTime<Utc>"
+    async fn get_for_image(&self, image_id: i64) -> Result<Vec<ImageScript>> {
+        let (rows, roots): (Vec<ScriptRow>, Vec<Option<i64>>) = sqlx::query!(
+            r#"SELECT s.id as "id!", s.name, s.body, s.updated_at as "updated_at: DateTime<Utc>",
+                      i.root_partition
                FROM image_scripts i JOIN scripts s ON s.id = i.script_id
                WHERE i.image_id = ?
                ORDER BY i.position"#,
             image_id
         )
         .fetch_all(&self.pool)
-        .await?;
-        self.assemble(rows).await
+        .await?
+        .into_iter()
+        .map(|row| {
+            (
+                ScriptRow {
+                    id: row.id,
+                    name: row.name,
+                    body: row.body,
+                    updated_at: row.updated_at,
+                },
+                row.root_partition,
+            )
+        })
+        .unzip();
+        Ok(self
+            .assemble(rows)
+            .await?
+            .into_iter()
+            .zip(roots)
+            .map(|(script, root_partition)| ImageScript {
+                script,
+                root_partition,
+            })
+            .collect())
     }
 
     async fn set_for_image(&self, image_id: i64, script_ids: &[i64]) -> Result {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        link_scripts(&mut tx, image_id, script_ids).await?;
+        let roots: HashMap<i64, Option<i64>> = sqlx::query!(
+            "SELECT script_id, root_partition FROM image_scripts WHERE image_id = ?",
+            image_id
+        )
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|row| (row.script_id, row.root_partition))
+        .collect();
+        let linked: Vec<(i64, Option<i64>)> = script_ids
+            .iter()
+            .map(|id| (*id, roots.get(id).copied().flatten()))
+            .collect();
+        link_scripts(&mut tx, image_id, &linked).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_root_for_image(
+        &self,
+        image_id: i64,
+        position: i64,
+        partition_number: Option<i64>,
+    ) -> Result {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(number) = partition_number {
+            let archived = sqlx::query_scalar!(
+                r#"SELECT EXISTS (
+                     SELECT 1 FROM image_partitions WHERE image_id = ? AND partition_number = ?
+                   ) as "exists!: bool""#,
+                image_id,
+                number
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+            if !archived {
+                return Err(AppError::InvalidArgument(format!(
+                    "image {image_id} has no partition {number}"
+                )));
+            }
+        }
+        let updated = sqlx::query!(
+            "UPDATE image_scripts SET root_partition = ? WHERE image_id = ? AND position = ?",
+            partition_number,
+            image_id,
+            position
+        )
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(AppError::NotFound(format!(
+                "image {image_id} has no script at position {position}"
+            )));
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -320,7 +396,11 @@ async fn write_script(
     Ok(id)
 }
 
-async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[i64]) -> Result {
+async fn link_scripts(
+    conn: &mut SqliteConnection,
+    image_id: i64,
+    scripts: &[(i64, Option<i64>)],
+) -> Result {
     sqlx::query_scalar!(
         "SELECT id FROM images WHERE id = ? AND deleted_at IS NULL",
         image_id
@@ -331,8 +411,8 @@ async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[
     sqlx::query!("DELETE FROM image_scripts WHERE image_id = ?", image_id)
         .execute(&mut *conn)
         .await?;
-    for (position, script_id) in script_ids.iter().enumerate() {
-        if script_ids[..position].contains(script_id) {
+    for (position, (script_id, root_partition)) in scripts.iter().enumerate() {
+        if scripts[..position].iter().any(|(id, _)| id == script_id) {
             return Err(AppError::InvalidArgument(format!(
                 "script {script_id} is listed twice"
             )));
@@ -343,10 +423,11 @@ async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[
             .ok_or_else(|| AppError::NotFound(format!("script {script_id}")))?;
         let position = position as i64;
         sqlx::query!(
-            "INSERT INTO image_scripts (image_id, position, script_id) VALUES (?, ?, ?)",
+            "INSERT INTO image_scripts (image_id, position, script_id, root_partition) VALUES (?, ?, ?, ?)",
             image_id,
             position,
-            script_id
+            script_id,
+            root_partition
         )
         .execute(&mut *conn)
         .await?;
@@ -356,9 +437,10 @@ async fn link_scripts(conn: &mut SqliteConnection, image_id: i64, script_ids: &[
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::script::NewScript;
+    use crate::domain::script::{NewImageScript, NewScript};
     use crate::test_support::repos;
     use imaged_model::error::AppError;
+    use imaged_model::image::ImageKind;
     use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
 
     fn input(name: &str, kind: InputKind, choices: &[&str]) -> ScriptInput {
@@ -380,6 +462,16 @@ mod tests {
             body: body.to_string(),
             inputs,
         }
+    }
+
+    fn attachable<const N: usize>(scripts: [NewScript; N]) -> Vec<NewImageScript> {
+        scripts
+            .into_iter()
+            .map(|script| NewImageScript {
+                script,
+                root_partition: None,
+            })
+            .collect()
     }
 
     #[tokio::test]
@@ -518,7 +610,11 @@ mod tests {
     #[tokio::test]
     async fn an_image_runs_its_scripts_in_the_order_they_were_set() {
         let (c, _g) = repos().await;
-        let image = c.image_repo.create_image("img".into()).await.unwrap();
+        let image = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let first = c
             .script_repo
             .create(&new_script("z", "1", vec![]))
@@ -545,7 +641,7 @@ mod tests {
             .await
             .unwrap()
             .into_iter()
-            .map(|s| s.name)
+            .map(|s| s.script.name)
             .collect();
         assert_eq!(names, vec!["a", "z"]);
     }
@@ -553,7 +649,11 @@ mod tests {
     #[tokio::test]
     async fn a_rejected_script_list_leaves_the_previous_one_in_place() {
         let (c, _g) = repos().await;
-        let image = c.image_repo.create_image("img".into()).await.unwrap();
+        let image = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let script = c
             .script_repo
             .create(&new_script("s", "1", vec![]))
@@ -590,9 +690,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_script_root_override_names_an_image_partition_and_stays_with_its_script() {
+        let (c, _g) = repos().await;
+        let image = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        c.image_repo
+            .save_partition(image.id, 2, "ext4", 1, None, None)
+            .await
+            .unwrap();
+        let first = c
+            .script_repo
+            .create(&new_script("a", "1", vec![]))
+            .await
+            .unwrap();
+        let second = c
+            .script_repo
+            .create(&new_script("b", "2", vec![]))
+            .await
+            .unwrap();
+        let roots = || async {
+            c.script_repo
+                .get_for_image(image.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|s| (s.script.name, s.root_partition))
+                .collect::<Vec<_>>()
+        };
+        c.script_repo
+            .set_for_image(image.id, &[first.id, second.id])
+            .await
+            .unwrap();
+
+        c.script_repo
+            .set_root_for_image(image.id, 1, Some(2))
+            .await
+            .unwrap();
+        let unknown_partition = c
+            .script_repo
+            .set_root_for_image(image.id, 0, Some(3))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(unknown_partition, AppError::InvalidArgument(_)),
+            "{unknown_partition:?}"
+        );
+        let unknown_position = c
+            .script_repo
+            .set_root_for_image(image.id, 2, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(unknown_position, AppError::NotFound(_)),
+            "{unknown_position:?}"
+        );
+        assert_eq!(roots().await, [("a".into(), None), ("b".into(), Some(2))]);
+
+        c.script_repo
+            .set_for_image(image.id, &[second.id, first.id])
+            .await
+            .unwrap();
+        assert_eq!(roots().await, [("b".into(), Some(2)), ("a".into(), None)]);
+
+        c.script_repo
+            .set_for_image(image.id, &[first.id])
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(image.id, &[first.id, second.id])
+            .await
+            .unwrap();
+        assert_eq!(roots().await, [("a".into(), None), ("b".into(), None)]);
+
+        c.script_repo
+            .set_root_for_image(image.id, 0, Some(2))
+            .await
+            .unwrap();
+        c.image_repo.start_capture(image.id, 512).await.unwrap();
+        assert_eq!(roots().await, [("a".into(), None), ("b".into(), None)]);
+    }
+
+    #[tokio::test]
     async fn a_script_used_by_an_image_cannot_be_deleted_until_the_image_is_gone() {
         let (c, _g) = repos().await;
-        let image = c.image_repo.create_image("golden".into()).await.unwrap();
+        let image = c
+            .image_repo
+            .create_image("golden".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let script = c
             .script_repo
             .create(&new_script("s", "1", vec![]))
@@ -616,8 +804,16 @@ mod tests {
     #[tokio::test]
     async fn importing_a_changed_script_another_image_uses_attaches_a_renamed_copy() {
         let (c, _g) = repos().await;
-        let other = c.image_repo.create_image("other".into()).await.unwrap();
-        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
+        let other = c
+            .image_repo
+            .create_image("other".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let imported = c
+            .image_repo
+            .create_image("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let original = c
             .script_repo
             .create(&new_script(
@@ -635,10 +831,10 @@ mod tests {
         c.script_repo
             .import_for_image(
                 imported.id,
-                &[
+                &attachable([
                     new_script("added", "x", vec![]),
                     new_script("setup", "new", vec![]),
-                ],
+                ]),
             )
             .await
             .unwrap();
@@ -646,22 +842,23 @@ mod tests {
         let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
         let listed: Vec<(&str, &str)> = attached
             .iter()
-            .map(|s| (s.name.as_str(), s.body.as_str()))
+            .map(|s| (s.script.name.as_str(), s.script.body.as_str()))
             .collect();
         assert_eq!(listed, [("added", "x"), ("setup-2", "new")]);
-        let used = c.script_repo.get_for_image(other.id).await.unwrap();
-        assert_eq!(used[0].id, original.id);
-        assert_eq!(
-            (used[0].name.as_str(), used[0].body.as_str()),
-            ("setup", "old")
-        );
-        assert_eq!(used[0].inputs, original.inputs);
+        let used = &c.script_repo.get_for_image(other.id).await.unwrap()[0].script;
+        assert_eq!(used.id, original.id);
+        assert_eq!((used.name.as_str(), used.body.as_str()), ("setup", "old"));
+        assert_eq!(used.inputs, original.inputs);
     }
 
     #[tokio::test]
     async fn importing_the_same_colliding_script_again_reuses_its_renamed_copy() {
         let (c, _g) = repos().await;
-        let other = c.image_repo.create_image("other".into()).await.unwrap();
+        let other = c
+            .image_repo
+            .create_image("other".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let original = c
             .script_repo
             .create(&new_script("setup", "old", vec![]))
@@ -671,16 +868,24 @@ mod tests {
             .set_for_image(other.id, &[original.id])
             .await
             .unwrap();
-        let archived = [new_script("setup", "new", vec![])];
+        let archived = attachable([new_script("setup", "new", vec![])]);
 
         let mut attached = Vec::new();
         for name in ["first", "second"] {
-            let image = c.image_repo.create_image(name.into()).await.unwrap();
+            let image = c
+                .image_repo
+                .create_image(name.into(), ImageKind::Disk)
+                .await
+                .unwrap();
             c.script_repo
                 .import_for_image(image.id, &archived)
                 .await
                 .unwrap();
-            attached.push(c.script_repo.get_for_image(image.id).await.unwrap()[0].id);
+            attached.push(
+                c.script_repo.get_for_image(image.id).await.unwrap()[0]
+                    .script
+                    .id,
+            );
         }
 
         assert_eq!(attached[0], attached[1]);
@@ -698,8 +903,16 @@ mod tests {
     #[tokio::test]
     async fn a_renamed_import_skips_an_unrelated_library_script_that_holds_the_suffixed_name() {
         let (c, _g) = repos().await;
-        let other = c.image_repo.create_image("other".into()).await.unwrap();
-        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
+        let other = c
+            .image_repo
+            .create_image("other".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let imported = c
+            .image_repo
+            .create_image("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let original = c
             .script_repo
             .create(&new_script("setup", "old", vec![]))
@@ -716,13 +929,19 @@ mod tests {
             .unwrap();
 
         c.script_repo
-            .import_for_image(imported.id, &[new_script("setup", "new", vec![])])
+            .import_for_image(
+                imported.id,
+                &attachable([new_script("setup", "new", vec![])]),
+            )
             .await
             .unwrap();
 
         let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
         assert_eq!(
-            (attached[0].name.as_str(), attached[0].body.as_str()),
+            (
+                attached[0].script.name.as_str(),
+                attached[0].script.body.as_str()
+            ),
             ("setup-3", "new")
         );
         assert_eq!(c.script_repo.get(unrelated.id).await.unwrap().body, "mine");
@@ -731,8 +950,16 @@ mod tests {
     #[tokio::test]
     async fn importing_reuses_an_identical_script_and_replaces_one_no_other_image_uses() {
         let (c, _g) = repos().await;
-        let other = c.image_repo.create_image("other".into()).await.unwrap();
-        let imported = c.image_repo.create_image("imported".into()).await.unwrap();
+        let other = c
+            .image_repo
+            .create_image("other".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let imported = c
+            .image_repo
+            .create_image("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         let inputs = vec![input("mode", InputKind::Choice, &["fast", "safe"])];
         let shared = c
             .script_repo
@@ -752,10 +979,10 @@ mod tests {
         c.script_repo
             .import_for_image(
                 imported.id,
-                &[
+                &attachable([
                     new_script("setup", "same", inputs),
                     new_script("cleanup", "new", vec![]),
-                ],
+                ]),
             )
             .await
             .unwrap();
@@ -763,7 +990,7 @@ mod tests {
         let attached = c.script_repo.get_for_image(imported.id).await.unwrap();
         let listed: Vec<(i64, &str, &str)> = attached
             .iter()
-            .map(|s| (s.id, s.name.as_str(), s.body.as_str()))
+            .map(|s| (s.script.id, s.script.name.as_str(), s.script.body.as_str()))
             .collect();
         assert_eq!(
             listed,
@@ -784,7 +1011,11 @@ mod tests {
     #[tokio::test]
     async fn an_import_with_one_invalid_script_changes_nothing() {
         let (c, _g) = repos().await;
-        let image = c.image_repo.create_image("imported".into()).await.unwrap();
+        let image = c
+            .image_repo
+            .create_image("imported".into(), ImageKind::Disk)
+            .await
+            .unwrap();
         c.script_repo
             .create(&new_script("setup", "old", vec![]))
             .await
@@ -798,10 +1029,10 @@ mod tests {
             .script_repo
             .import_for_image(
                 image.id,
-                &[
+                &attachable([
                     new_script("setup", "new", vec![]),
                     new_script("bad", "y", twice),
-                ],
+                ]),
             )
             .await
             .unwrap_err();

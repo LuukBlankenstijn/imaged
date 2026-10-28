@@ -14,7 +14,7 @@ use core::domain::script::NewScript;
 use core::domain::task::TaskType;
 use core::test_support::container;
 use imaged_model::agent::{ImageLayout, ImagePartition, MAC_HEADER, PostInstall, path, route};
-use imaged_model::image::ImageStatus;
+use imaged_model::image::{ImageKind, ImageStatus};
 use imaged_model::script::{InputKind, ScriptInput};
 use imaged_model::task::TaskState;
 
@@ -46,8 +46,13 @@ fn stream_uri(disk_size_bytes: u64) -> String {
     format!("{}?disk_size_bytes={disk_size_bytes}", route::STREAM)
 }
 
-fn table_uri(task_id: i64) -> String {
-    format!("{}?sector_size=512", path::partition_table(task_id))
+fn started_uri(task_id: i64, sector_size: u32) -> String {
+    format!("{}?sector_size={sector_size}", path::started(task_id))
+}
+
+async fn start_capture(c: &DIContainer, task_id: i64, mac: &str) {
+    let response = post(c, &started_uri(task_id, 512), mac).await;
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 fn output_uri(task_id: i64, position: i64, name: &str) -> String {
@@ -123,13 +128,17 @@ async fn error_message(response: Response) -> String {
 }
 
 async fn ready_image(c: &DIContainer, name: &str) -> i64 {
-    let image = c.image_repo.create_image(name.into()).await.unwrap();
-    c.image_repo
-        .save_partition(image.id, 1, "vfat", 1_000)
+    let image = c
+        .image_repo
+        .create_image(name.into(), ImageKind::Disk)
         .await
         .unwrap();
     c.image_repo
-        .save_partition(image.id, 2, "ext4", 2_000)
+        .save_partition(image.id, 1, "vfat", 1_000, None, None)
+        .await
+        .unwrap();
+    c.image_repo
+        .save_partition(image.id, 2, "ext4", 2_000, None, None)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -202,12 +211,13 @@ async fn agent_identity_is_required_on_every_route() {
     let routes = [
         (Method::GET, stream_uri(1024)),
         (Method::POST, route::DISCONNECT.to_string()),
+        (Method::POST, started_uri(1, 512)),
         (Method::POST, path::finished(1)),
         (Method::POST, path::failed(1)),
         (Method::GET, path::partitions(1)),
         (Method::GET, path::partition_table(1)),
         (Method::GET, path::partition_data(1, 1)),
-        (Method::PUT, table_uri(1)),
+        (Method::PUT, path::partition_table(1)),
         (Method::PUT, path::root_partition(1, 1)),
         (Method::GET, path::scripts(1)),
         (Method::PUT, output_uri(1, 0, "script")),
@@ -266,7 +276,11 @@ async fn another_agents_task_is_rejected() {
 async fn an_unready_image_is_a_precondition_failure() {
     let (c, _guard) = container().await;
     let c = &c;
-    let image = c.image_repo.create_image("unready".into()).await.unwrap();
+    let image = c
+        .image_repo
+        .create_image("unready".into(), ImageKind::Disk)
+        .await
+        .unwrap();
     let task_id = deploy_task(c, MAC, image.id).await;
 
     for uri in [
@@ -336,13 +350,38 @@ async fn a_host_without_an_active_task_is_a_bad_request_not_a_not_found() {
 }
 
 #[tokio::test]
+async fn a_disk_capture_without_a_partition_table_faults_its_image() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let image = c
+        .image_repo
+        .create_image(next_name("no-table"), ImageKind::Disk)
+        .await
+        .unwrap();
+    let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
+    c.image_repo
+        .save_partition(image.id, 1, "ext4", 4_096, None, None)
+        .await
+        .unwrap();
+
+    let response = post(c, &path::finished(task), &mac).await;
+
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        c.image_repo.get_status(image.id).await.unwrap(),
+        ImageStatus::Faulted
+    );
+}
+
+#[tokio::test]
 async fn marking_a_task_finished_updates_rows_and_image() {
     let (c, _guard) = container().await;
     let c = &c;
     let cap_mac = next_mac();
     let cap_image = c
         .image_repo
-        .create_image(next_name("finish-cap"))
+        .create_image(next_name("finish-cap"), ImageKind::Disk)
         .await
         .unwrap();
     let (_ch, cap_task) = host_task(c, &cap_mac, TaskType::Capture, Some(cap_image.id)).await;
@@ -351,7 +390,11 @@ async fn marking_a_task_finished_updates_rows_and_image() {
         ImageStatus::Empty
     );
     c.image_repo
-        .save_partition(cap_image.id, 1, "ext4", 4_096)
+        .save_partition(cap_image.id, 1, "ext4", 4_096, None, None)
+        .await
+        .unwrap();
+    c.image_service
+        .save_partition_table(cap_image.id, b"table")
         .await
         .unwrap();
     let resp = post(c, &path::finished(cap_task), &cap_mac).await;
@@ -376,7 +419,7 @@ async fn marking_a_task_finished_updates_rows_and_image() {
     let mc_mac = next_mac();
     let mc_image = c
         .image_repo
-        .create_image(next_name("finish-mc"))
+        .create_image(next_name("finish-mc"), ImageKind::Disk)
         .await
         .unwrap();
     let (_mh, mc_task) = host_task(c, &mc_mac, TaskType::Multicast, Some(mc_image.id)).await;
@@ -423,7 +466,7 @@ async fn marking_a_task_finished_updates_rows_and_image() {
         .unwrap();
     let multi_img = c
         .image_repo
-        .create_image(next_name("finish-multi"))
+        .create_image(next_name("finish-multi"), ImageKind::Disk)
         .await
         .unwrap();
     let multi = c
@@ -453,7 +496,7 @@ async fn a_capture_finished_without_partitions_faults_the_image() {
     let cap_mac = next_mac();
     let cap_image = c
         .image_repo
-        .create_image(next_name("finish-empty-cap"))
+        .create_image(next_name("finish-empty-cap"), ImageKind::Disk)
         .await
         .unwrap();
     let (_ch, cap_task) = host_task(c, &cap_mac, TaskType::Capture, Some(cap_image.id)).await;
@@ -480,7 +523,7 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
     let cap_mac = next_mac();
     let cap_image = c
         .image_repo
-        .create_image(next_name("fail-cap"))
+        .create_image(next_name("fail-cap"), ImageKind::Disk)
         .await
         .unwrap();
     let (_ch, cap_task) = host_task(c, &cap_mac, TaskType::Capture, Some(cap_image.id)).await;
@@ -504,7 +547,7 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
     let mc_mac = next_mac();
     let mc_image = c
         .image_repo
-        .create_image(next_name("fail-mc"))
+        .create_image(next_name("fail-mc"), ImageKind::Disk)
         .await
         .unwrap();
     let (_mh, mc_task) = host_task(c, &mc_mac, TaskType::Multicast, Some(mc_image.id)).await;
@@ -556,7 +599,7 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
         .unwrap();
     let img = c
         .image_repo
-        .create_image(next_name("fail-partial"))
+        .create_image(next_name("fail-partial"), ImageKind::Disk)
         .await
         .unwrap();
     let task = c
@@ -590,7 +633,7 @@ async fn marking_a_task_failed_stores_the_error_and_faults_a_capture_image() {
 }
 
 #[tokio::test]
-async fn downloading_the_partition_table_starts_the_host_row_and_is_idempotent() {
+async fn starting_a_restore_marks_the_host_running_and_is_idempotent() {
     let (c, _guard) = container().await;
     let c = &c;
     let mac = next_mac();
@@ -600,27 +643,42 @@ async fn downloading_the_partition_table_starts_the_host_row_and_is_idempotent()
         .save_partition_table(image_id, &table)
         .await
         .unwrap();
-    let (_h, task) = host_task(c, &mac, TaskType::Multicast, Some(image_id)).await;
-
-    assert_eq!(
-        c.task_repo.get(task).await.unwrap().hosts[0].state,
-        TaskState::Pending
-    );
+    let (_h, task) = host_task(c, &mac, TaskType::Deploy, Some(image_id)).await;
+    let state = || async { c.task_repo.get(task).await.unwrap().hosts[0].state };
 
     let resp = get(c, &path::partition_table(task), &mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body(resp).await.as_ref(), table.as_slice());
-    assert_eq!(
-        c.task_repo.get(task).await.unwrap().hosts[0].state,
-        TaskState::Running
-    );
+    assert_eq!(state().await, TaskState::Pending);
 
-    let resp = get(c, &path::partition_table(task), &mac).await;
+    for _ in 0..2 {
+        let resp = post(c, &path::started(task), &mac).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(state().await, TaskState::Running);
+    }
+
+    let mc_mac = next_mac();
+    let (mc_host, mc_task) = host_task(c, &mc_mac, TaskType::Multicast, Some(image_id)).await;
+    let resp = post(c, &path::started(mc_task), &mc_mac).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    c.task_repo.start(mc_task, mc_host).await.unwrap();
+    let resp = post(c, &path::started(mc_task), &mc_mac).await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        c.task_repo.get(task).await.unwrap().hosts[0].state,
-        TaskState::Running
-    );
+
+    let rb_mac = next_mac();
+    let (_rh, rb_task) = host_task(c, &rb_mac, TaskType::Reboot, None).await;
+    let resp = post(c, &path::started(rb_task), &rb_mac).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let unready_mac = next_mac();
+    let unready = c
+        .image_repo
+        .create_image(next_name("start-unready"), ImageKind::Disk)
+        .await
+        .unwrap();
+    let (_uh, unready_task) = host_task(c, &unready_mac, TaskType::Deploy, Some(unready.id)).await;
+    let resp = post(c, &path::started(unready_task), &unready_mac).await;
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
 }
 
 #[tokio::test]
@@ -630,7 +688,7 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
     let unready_mac = next_mac();
     let unready_img = c
         .image_repo
-        .create_image(next_name("dl-unready"))
+        .create_image(next_name("dl-unready"), ImageKind::Disk)
         .await
         .unwrap();
     let (_uh, unready_task) =
@@ -647,6 +705,11 @@ async fn downloading_the_partition_table_rejects_non_restore_tasks_and_unready_i
     let noimg_mac = next_mac();
     let (_nh, noimg_task) = host_task(c, &noimg_mac, TaskType::Deploy, None).await;
     let resp = get(c, &path::partition_table(noimg_task), &noimg_mac).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let part_mac = next_mac();
+    let (_ph, part_task) = host_task(c, &part_mac, TaskType::DeployPartition, Some(cap_img)).await;
+    let resp = get(c, &path::partition_table(part_task), &part_mac).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -672,7 +735,7 @@ async fn downloading_partition_data_streams_the_exact_bytes_on_disk() {
     let unready_mac = next_mac();
     let unready_img = c
         .image_repo
-        .create_image(next_name("dl-data-unready"))
+        .create_image(next_name("dl-data-unready"), ImageKind::Disk)
         .await
         .unwrap();
     let (_uh, unready_task) =
@@ -688,19 +751,19 @@ async fn downloading_partitions_matches_the_repository_in_order() {
     let mac = next_mac();
     let image = c
         .image_repo
-        .create_image(next_name("dl-parts"))
+        .create_image(next_name("dl-parts"), ImageKind::Disk)
         .await
         .unwrap();
     c.image_repo
-        .save_partition(image.id, 2, "ext4", 2_048)
+        .save_partition(image.id, 2, "ext4", 2_048, None, None)
         .await
         .unwrap();
     c.image_repo
-        .save_partition(image.id, 1, "vfat", 512)
+        .save_partition(image.id, 1, "vfat", 512, None, None)
         .await
         .unwrap();
     c.image_repo
-        .save_partition(image.id, 3, "ntfs", 4_096)
+        .save_partition(image.id, 3, "ntfs", 4_096, None, None)
         .await
         .unwrap();
     c.image_repo.mark_finished(image.id).await.unwrap();
@@ -722,19 +785,22 @@ async fn downloading_partitions_matches_the_repository_in_order() {
 }
 
 #[tokio::test]
-async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_host() {
+async fn starting_a_capture_clears_prior_capture_data_and_marks_the_host_running() {
     let (c, _guard) = container().await;
     let c = &c;
     let mac = next_mac();
     let image = c
         .image_repo
-        .create_image(next_name("cap-tbl"))
+        .create_image(next_name("cap-tbl"), ImageKind::Disk)
         .await
         .unwrap();
     let (host_id, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
 
     let first_table = b"FIRST-TABLE".to_vec();
-    let resp = put_bytes(c, &table_uri(task), &mac, first_table.clone()).await;
+    let resp = put_bytes(c, &path::partition_table(task), &mac, first_table.clone()).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    start_capture(c, task, &mac).await;
+    let resp = put_bytes(c, &path::partition_table(task), &mac, first_table.clone()).await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
         c.image_repo.get_status(image.id).await.unwrap(),
@@ -747,7 +813,7 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     assert_eq!(t.aggregate_state(), TaskState::Running);
 
     c.image_repo
-        .save_partition(image.id, 1, "ext4", 42)
+        .save_partition(image.id, 1, "ext4", 42, None, None)
         .await
         .unwrap();
     let part_path = c.image_service.get_partition_path(image.id, 1);
@@ -765,11 +831,13 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
         TaskState::Pending
     );
 
+    start_capture(c, task, &mac).await;
+    assert!(!Path::new(&part_path).exists());
+    assert!(!Path::new(&table_path).exists());
     let second_table = b"SECOND-TABLE".to_vec();
-    let resp = put_bytes(c, &table_uri(task), &mac, second_table.clone()).await;
+    let resp = put_bytes(c, &path::partition_table(task), &mac, second_table.clone()).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    assert!(!Path::new(&part_path).exists());
     assert!(
         c.image_repo
             .get_partitions(image.id)
@@ -782,22 +850,27 @@ async fn capturing_the_partition_table_clears_prior_capture_data_and_starts_the_
     let running_mac = next_mac();
     let running_img = c
         .image_repo
-        .create_image(next_name("cap-running"))
+        .create_image(next_name("cap-running"), ImageKind::Disk)
         .await
         .unwrap();
     let (_rh, running_task) =
         host_task(c, &running_mac, TaskType::Capture, Some(running_img.id)).await;
+    start_capture(c, running_task, &running_mac).await;
     assert_eq!(
-        put_bytes(c, &table_uri(running_task), &running_mac, b"a".to_vec())
-            .await
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        put_bytes(c, &table_uri(running_task), &running_mac, b"b".to_vec())
+        post(c, &started_uri(running_task, 512), &running_mac)
             .await
             .status(),
         StatusCode::BAD_REQUEST
+    );
+
+    let silent_mac = next_mac();
+    let (_sh, silent_task) =
+        host_task(c, &silent_mac, TaskType::Capture, Some(running_img.id)).await;
+    let missing_sector_size = post(c, &path::started(silent_task), &silent_mac).await;
+    assert_eq!(missing_sector_size.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        error_message(missing_sector_size).await,
+        "a capture must report its logical sector size"
     );
 }
 
@@ -808,7 +881,7 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row() {
     let mac = next_mac();
     let image = c
         .image_repo
-        .create_image(next_name("cap-upload"))
+        .create_image(next_name("cap-upload"), ImageKind::Disk)
         .await
         .unwrap();
     let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
@@ -822,8 +895,7 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row() {
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-    let resp = put_bytes(c, &table_uri(task), &mac, b"tbl".to_vec()).await;
-    assert_eq!(resp.status(), StatusCode::OK);
+    start_capture(c, task, &mac).await;
 
     let chunk_a = vec![0xABu8; 4096];
     let chunk_b = vec![0xCDu8; 3072];
@@ -855,7 +927,7 @@ async fn uploading_partition_data_streams_to_disk_and_records_the_row() {
     let restore_mac = next_mac();
     let restore_img = c
         .image_repo
-        .create_image(next_name("upload-restore"))
+        .create_image(next_name("upload-restore"), ImageKind::Disk)
         .await
         .unwrap();
     let (_rh, restore_task) =
@@ -877,7 +949,7 @@ async fn a_capture_reports_the_root_partition_among_its_partitions() {
     let mac = next_mac();
     let image = c
         .image_repo
-        .create_image(next_name("cap-root"))
+        .create_image(next_name("cap-root"), ImageKind::Disk)
         .await
         .unwrap();
     let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
@@ -888,7 +960,7 @@ async fn a_capture_reports_the_root_partition_among_its_partitions() {
         StatusCode::BAD_REQUEST
     );
 
-    put_bytes(c, &table_uri(task), &mac, b"t".to_vec()).await;
+    start_capture(c, task, &mac).await;
     put_stream(
         c,
         &upload_uri(task, 2, "ext4", 1),
@@ -996,7 +1068,13 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
     )]);
     let task = c
         .task_repo
-        .create_with_inputs(TaskType::Deploy, vec![host], Some(image_id), &stored)
+        .create_with_inputs(
+            TaskType::Deploy,
+            vec![host],
+            Some(image_id),
+            &stored,
+            &std::collections::BTreeMap::new(),
+        )
         .await
         .unwrap()
         .id;
@@ -1005,8 +1083,8 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
     let response = get(c, &path::scripts(task), &mac).await;
     assert_eq!(response.status(), StatusCode::OK);
     let plan: PostInstall = serde_json::from_slice(&body(response).await).unwrap();
-    assert_eq!(plan.root_partition, Some(2));
     assert_eq!(plan.proxy, None);
+    assert!(plan.scripts.iter().all(|s| s.root_partition == 2));
     type Listed<'a> = (i64, bool, Vec<(&'a str, &'a str)>);
     let scripts: Vec<Listed> = plan
         .scripts
@@ -1046,7 +1124,7 @@ async fn a_restoring_agent_fetches_its_scripts_and_reports_their_output() {
 
     let attached = c.script_repo.get_for_image(image_id).await.unwrap();
     c.script_repo
-        .set_for_image(image_id, &[attached[0].id])
+        .set_for_image(image_id, &[attached[0].script.id])
         .await
         .unwrap();
 
@@ -1214,9 +1292,13 @@ async fn no_agent_can_act_on_another_agents_task_on_any_endpoint() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        put_bytes(c, &table_uri(b_task), &a_mac, b"x".to_vec())
+        put_bytes(c, &path::partition_table(b_task), &a_mac, b"x".to_vec())
             .await
             .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post(c, &path::started(b_task), &a_mac).await.status(),
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
@@ -1278,12 +1360,12 @@ async fn save_partition_returns_the_partition_number_it_was_given() {
     let (c, _guard) = container().await;
     let image = c
         .image_repo
-        .create_image("save-partition-bug".into())
+        .create_image("save-partition-bug".into(), ImageKind::Disk)
         .await
         .unwrap();
     let returned = c
         .image_repo
-        .save_partition(image.id, 3, "ext4", 100)
+        .save_partition(image.id, 3, "ext4", 100, None, None)
         .await
         .unwrap();
     assert_eq!(returned.partition_number, 3);
@@ -1351,21 +1433,25 @@ async fn the_captured_sector_size_is_recorded_and_handed_to_restores() {
     let mac = next_mac();
     let image = c
         .image_repo
-        .create_image(next_name("sector-size"))
+        .create_image(next_name("sector-size"), ImageKind::Disk)
         .await
         .unwrap();
     let (_host, task) = host_task(c, &mac, TaskType::Capture, Some(image.id)).await;
     let upload = |sector_size: u32| {
-        let uri = format!("{}?sector_size={sector_size}", path::partition_table(task));
+        let uri = started_uri(task, sector_size);
         let mac = mac.clone();
-        async move { put_bytes(c, &uri, &mac, b"table".to_vec()).await }
+        async move { post(c, &uri, &mac).await }
     };
 
     assert_eq!(upload(1000).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(upload(256).await.status(), StatusCode::BAD_REQUEST);
     assert_eq!(upload(4096).await.status(), StatusCode::OK);
     c.image_repo
-        .save_partition(image.id, 1, "ext4", 4_096)
+        .save_partition(image.id, 1, "ext4", 4_096, None, None)
+        .await
+        .unwrap();
+    c.image_service
+        .save_partition_table(image.id, b"table")
         .await
         .unwrap();
     assert_eq!(
@@ -1413,7 +1499,13 @@ async fn stored_inputs_that_no_longer_fit_the_scripts_stop_the_restore_before_th
     )]);
     let task = c
         .task_repo
-        .create_with_inputs(TaskType::Deploy, vec![host], Some(image_id), &stored)
+        .create_with_inputs(
+            TaskType::Deploy,
+            vec![host],
+            Some(image_id),
+            &stored,
+            &std::collections::BTreeMap::new(),
+        )
         .await
         .unwrap()
         .id;
@@ -1422,7 +1514,8 @@ async fn stored_inputs_that_no_longer_fit_the_scripts_stop_the_restore_before_th
         .get_for_image(image_id)
         .await
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .script;
     let change_inputs = |inputs: Vec<ScriptInput>| {
         let id = script.id;
         let changed = NewScript {
@@ -1476,4 +1569,164 @@ async fn stored_inputs_that_no_longer_fit_the_scripts_stop_the_restore_before_th
         "the layout and the scripts give the same reason"
     );
     assert!(script_runs(c, task, host).await.is_empty());
+}
+
+async fn partition_task(
+    c: &DIContainer,
+    mac: &str,
+    task_type: TaskType,
+    image_id: i64,
+) -> (i64, i64) {
+    let host = c
+        .host_repo
+        .upsert_host(mac.into(), Ok(1_000_000), None)
+        .await
+        .unwrap();
+    let task = c
+        .task_repo
+        .create_with_inputs(
+            task_type,
+            vec![host.id],
+            Some(image_id),
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::from([(host.id, "root-partuuid".to_string())]),
+        )
+        .await
+        .unwrap();
+    (host.id, task.id)
+}
+
+#[tokio::test]
+async fn a_partition_capture_stores_exactly_partition_one_without_a_partition_table() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let image = c
+        .image_repo
+        .create_image(next_name("cap-partition"), ImageKind::Partition)
+        .await
+        .unwrap();
+    let (_host, task) = partition_task(c, &mac, TaskType::CapturePartition, image.id).await;
+    start_capture(c, task, &mac).await;
+
+    let upload = |number: i64, filesystem: &'static str, query: &'static str| {
+        let uri = format!("{}{query}", upload_uri(task, number, filesystem, 5));
+        let mac = mac.clone();
+        async move { put_stream(c, &uri, &mac, vec![b"bytes".to_vec()]).await }
+    };
+    assert_eq!(
+        upload(2, "ext4", "").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        upload(1, "swap", "").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        put_bytes(c, &path::partition_table(task), &mac, b"t".to_vec())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let resp = upload(
+        1,
+        "ext4",
+        "&fs_uuid=6f1c0e1a-2b3c-4d5e-8f90-a1b2c3d4e5f6&fs_label=root",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let uploaded: ImagePartition = serde_json::from_slice(&body(resp).await).unwrap();
+    assert_eq!(
+        uploaded.fs_uuid.as_deref(),
+        Some("6f1c0e1a-2b3c-4d5e-8f90-a1b2c3d4e5f6")
+    );
+    assert_eq!(uploaded.fs_label.as_deref(), Some("root"));
+    assert_eq!(
+        send(c, Method::PUT, &path::root_partition(task, 1), Some(&mac))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    assert_eq!(
+        post(c, &path::finished(task), &mac).await.status(),
+        StatusCode::OK
+    );
+    let captured = c.image_repo.get(image.id).await.unwrap();
+    assert_eq!(captured.status, ImageStatus::Ready);
+    assert_eq!(captured.kind, ImageKind::Partition);
+    assert_eq!(captured.root_partition, Some(1));
+    assert!(!Path::new(&c.image_service.get_partition_table_path(image.id)).exists());
+
+    let stray_mac = next_mac();
+    let stray = c
+        .image_repo
+        .create_image(next_name("cap-stray"), ImageKind::Partition)
+        .await
+        .unwrap();
+    let (_sh, stray_task) =
+        partition_task(c, &stray_mac, TaskType::CapturePartition, stray.id).await;
+    start_capture(c, stray_task, &stray_mac).await;
+    c.image_repo
+        .save_partition(stray.id, 2, "ext4", 5, None, None)
+        .await
+        .unwrap();
+    let resp = post(c, &path::finished(stray_task), &stray_mac).await;
+    assert_eq!(resp.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        error_message(resp).await,
+        "A partition capture must store exactly partition 1"
+    );
+    assert_eq!(
+        c.image_repo.get_status(stray.id).await.unwrap(),
+        ImageStatus::Faulted
+    );
+}
+
+#[tokio::test]
+async fn each_post_install_script_runs_against_its_own_or_the_image_root() {
+    let (c, _guard) = container().await;
+    let c = &c;
+    let mac = next_mac();
+    let image_id = scripted_image(c, &[("first", vec![]), ("second", vec![])]).await;
+    c.script_repo
+        .set_root_for_image(image_id, 1, Some(1))
+        .await
+        .unwrap();
+    let (host, task) = partition_task(c, &mac, TaskType::DeployPartition, image_id).await;
+    c.task_repo.start(task, host).await.unwrap();
+
+    assert_eq!(
+        get(c, &path::scripts(task), &mac).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+    assert_eq!(
+        get(c, &path::partitions(task), &mac).await.status(),
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    c.image_repo
+        .set_root_partition(image_id, Some(2))
+        .await
+        .unwrap();
+    let response = get(c, &path::scripts(task), &mac).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let plan: PostInstall = serde_json::from_slice(&body(response).await).unwrap();
+    let roots: Vec<(i64, i64)> = plan
+        .scripts
+        .iter()
+        .map(|s| (s.position, s.root_partition))
+        .collect();
+    assert_eq!(roots, [(0, 2), (1, 1)]);
+
+    let partition_path = c.image_service.get_partition_path(image_id, 1);
+    std::fs::create_dir_all(Path::new(&partition_path).parent().unwrap()).unwrap();
+    std::fs::write(&partition_path, b"root").unwrap();
+    let resp = get(c, &path::partition_data(task, 1), &mac).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body(resp).await.as_ref(), b"root");
+    assert_eq!(
+        get(c, &path::partition_table(task), &mac).await.status(),
+        StatusCode::BAD_REQUEST
+    );
 }

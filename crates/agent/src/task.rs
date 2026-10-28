@@ -1,5 +1,5 @@
 pub mod implementations;
-mod post_install;
+pub mod post_install;
 pub mod types;
 
 use std::sync::Arc;
@@ -10,12 +10,11 @@ pub use types::ClientState;
 use types::RunningTask;
 
 pub use implementations::{
-    CaptureTask, ClientTaskExt, DeployTask, MulticastTask, RebootTask, Task,
+    Capture, ClientTaskExt, Http, Multicast, RebootTask, Restore, Shape, SinglePartition, Source,
+    Task, WholeDisk,
 };
 
 use tokio_util::sync::CancellationToken;
-
-const PARTTABLE_TMP: &str = "/parttable.bin";
 
 pub async fn handle_message(
     agent: &Agent,
@@ -45,7 +44,7 @@ fn start_task(agent: &Agent, state: Arc<ClientState>, task: imaged_model::Task) 
     agent.status.task_started(&task);
 
     let handle = tokio::spawn(async move {
-        tracing::info!(task_id=%task.id, task_type=%task.task_type, "starting task");
+        tracing::info!(task_id=%task.id, task_type=%task.work.task_type(), "starting task");
         run_task(runnable, cancel_for_task).await;
         *state.current_task.lock().await = None;
         state.became_idle();
