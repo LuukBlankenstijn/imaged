@@ -14,7 +14,7 @@ pub enum ImageStatus {
     Faulted,
 }
 
-pub const FSTYPES: [&str; 5] = ["ext2", "ext3", "ext4", "vfat", "swap"];
+pub const FSTYPES: [&str; 6] = ["ext2", "ext3", "ext4", "vfat", "btrfs", "swap"];
 
 #[derive(
     Clone, Copy, Debug, Default, Display, FromStr, IsVariant, PartialEq, Eq, Serialize, Deserialize,
@@ -31,7 +31,7 @@ impl ImageKind {
     pub fn fstypes(self) -> &'static [&'static str] {
         match self {
             Self::Disk => &FSTYPES,
-            Self::Partition => &FSTYPES[..4],
+            Self::Partition => &FSTYPES[..5],
         }
     }
 }
@@ -81,5 +81,14 @@ mod tests {
         for s in ALL {
             assert_eq!(serde_json::to_string(&s).unwrap(), format!("\"{s}\""));
         }
+    }
+
+    #[test]
+    fn btrfs_is_imaged_in_both_kinds_and_swap_only_in_a_disk_image() {
+        for kind in [ImageKind::Disk, ImageKind::Partition] {
+            assert!(kind.fstypes().contains(&"btrfs"), "{kind}");
+        }
+        assert!(ImageKind::Disk.fstypes().contains(&"swap"));
+        assert!(!ImageKind::Partition.fstypes().contains(&"swap"));
     }
 }

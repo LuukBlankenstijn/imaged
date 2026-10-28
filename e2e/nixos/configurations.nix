@@ -255,13 +255,13 @@ in
         };
       }
     ];
-    "not: data (btrfs)" = host "btrfs" [
+    "not: data (xfs)" = host "xfs" [
       (diskoRoot {
         data = {
           size = "1G";
           content = {
             type = "filesystem";
-            format = "btrfs";
+            format = "xfs";
             mountpoint = "/srv";
           };
         };

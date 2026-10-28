@@ -135,13 +135,15 @@ async fn an_ext_partition_without_os_release_holds_no_system() {
 }
 
 #[tokio::test]
-async fn vfat_partitions_are_never_probed() {
+async fn vfat_and_btrfs_partitions_are_never_probed() {
     let scratch = Scratch::new();
     let also_a_system = scratch.ext4_image("also-a-system", OsRelease::Regular);
 
     let missing = Path::new("/nonexistent/imaged-disk-efi");
-    assert!(!holds_system(1, Filesystem::Vfat, missing).await);
-    assert!(!holds_system(2, Filesystem::Vfat, &also_a_system).await);
+    for filesystem in [Filesystem::Vfat, Filesystem::Btrfs] {
+        assert!(!holds_system(1, filesystem, missing).await);
+        assert!(!holds_system(2, filesystem, &also_a_system).await);
+    }
 }
 
 #[tokio::test]

@@ -147,6 +147,7 @@
             pkgs.gptfdisk
             pkgs.util-linux
             pkgs.e2fsprogs
+            pkgs.btrfs-progs
           ];
           pathsToLink = [ "/bin" ];
         };

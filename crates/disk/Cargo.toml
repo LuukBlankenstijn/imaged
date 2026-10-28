@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-compression.workspace = true
+tempfile = "3"
 tokio = { workspace = true, features = ["process", "io-util", "fs"] }
 tracing.workspace = true
 

@@ -3,6 +3,11 @@ PARTITION_DISK_SIZE=192M
 SWAP_UUID=5d1f7a3e-2b4c-4e8f-9a61-0c3b7d2e9f14
 DISK_CONTENT=$OUT_DIR/disk-content
 PARTITION_SNAPSHOTS=$OUT_DIR/before
+BTRFS_CONTENT=$OUT_DIR/btrfs-content
+BTRFS_FILES=(
+    e2e/marker.txt
+    e2e/random.bin
+)
 KNOWN_FILES=(
     esp/MARKER.TXT
     esp/EFI/BOOT/NOTE.TXT
@@ -100,16 +105,16 @@ build_blank_disk() {
 }
 
 build_partition_target_disk() {
-    local disk=$1 name
+    local disk=$1 root_size=${2:-96MiB} disk_size=${3:-$PARTITION_DISK_SIZE} name
     name=$(basename "$disk" .raw)
     local work=$OUT_DIR/disk-build
     rm -rf "$work" "$disk"
     mkdir -p "$work/esp/EFI/BOOT" "$work/root/e2e" "$work/data/e2e" "$PARTITION_SNAPSHOTS"
 
-    truncate -s "$PARTITION_DISK_SIZE" "$disk"
+    truncate -s "$disk_size" "$disk"
     sgdisk --clear \
         --new=1:1MiB:+32MiB --typecode=1:ef00 --change-name=1:esp \
-        --new=2:0:+96MiB --typecode=2:8300 --change-name=2:root \
+        --new=2:0:+"$root_size" --typecode=2:8300 --change-name=2:root \
         --new=3:0:0 --typecode=3:8300 --change-name=3:data \
         "$disk" >/dev/null
 
@@ -130,7 +135,20 @@ build_partition_target_disk() {
     partition_sha256 "$disk" 1 >"$PARTITION_SNAPSHOTS/$name.p1.sha256"
     partition_sha256 "$disk" 3 >"$PARTITION_SNAPSHOTS/$name.p3.sha256"
     rm -rf "$work"
-    log "built $PARTITION_DISK_SIZE partition target disk $(relative "$disk"): GPT, p1 vfat ESP, p2 ext4 root holding /e2e/stale.txt, p3 ext4 data"
+    log "built $disk_size partition target disk $(relative "$disk"): GPT, p1 vfat ESP, p2 $root_size ext4 root holding /e2e/stale.txt, p3 ext4 data"
+}
+
+build_btrfs_filesystem() {
+    local image=$1
+    rm -rf "$BTRFS_CONTENT" "$image"
+    mkdir -p "$BTRFS_CONTENT/e2e"
+    local marker
+    marker="imaged e2e btrfs $(date -u +%FT%TZ) $(od -An -N8 -tx8 /dev/urandom | tr -d ' ')"
+    echo "$marker" >"$BTRFS_CONTENT/e2e/marker.txt"
+    head -c 2M /dev/urandom >"$BTRFS_CONTENT/e2e/random.bin"
+    truncate -s 256M "$image"
+    mkfs.btrfs -q -L e2e-btrfs -m single -d single -r "$BTRFS_CONTENT" --shrink "$image" >/dev/null
+    log "built btrfs filesystem $(relative "$image") rootless with --shrink: $(stat -c %s "$image") bytes, UUID $(blkid -p -o value -s UUID "$image"); marker '$marker'"
 }
 
 read_known_files() {
@@ -198,13 +216,9 @@ ext_filesystem_bytes() {
     echo $((count * size))
 }
 
-verify_partition_deploy() {
-    local disk=$1 hostname=$2 fs_uuid=$3 image_bytes=$4 name
+verify_other_partitions_unchanged() {
+    local disk=$1 name
     name=$(basename "$disk" .raw)
-    local actual=$OUT_DIR/verify/$name
-    rm -rf "$actual"
-    mkdir -p "$actual"
-
     diff "$PARTITION_SNAPSHOTS/$name.layout.json" <(partition_layout "$disk") >&2 ||
         fail "the partition table of ${disk##*/} changed"
     log "partition table (disk GUID, partition GUIDs, offsets, names) unchanged"
@@ -214,6 +228,16 @@ verify_partition_deploy() {
             fail "p$number of ${disk##*/} changed"
     done
     log "ESP (p1) and data (p3) byte-identical to before the deploy"
+}
+
+verify_partition_deploy() {
+    local disk=$1 hostname=$2 fs_uuid=$3 image_bytes=$4 name
+    name=$(basename "$disk" .raw)
+    local actual=$OUT_DIR/verify/$name
+    rm -rf "$actual"
+    mkdir -p "$actual"
+
+    verify_other_partitions_unchanged "$disk"
 
     local root=$actual/root.img
     extract_partition "$disk" 2 "$root"
@@ -249,4 +273,46 @@ verify_partition_deploy() {
         fail "the filesystem on ${disk##*/} p2 holds $fs_bytes bytes, it did not grow to fill the $partition_bytes-byte partition"
     log "the filesystem grew from the image's $image_bytes bytes to fill the $partition_bytes-byte partition"
     rm -f "$root"
+}
+
+btrfs_filesystem_bytes() {
+    btrfs inspect-internal dump-super "$1" | awk '$1 == "total_bytes" { print $2 }'
+}
+
+verify_btrfs_deploy() {
+    local disk=$1 fs_uuid=$2 image_bytes=$3 name
+    name=$(basename "$disk" .raw)
+    local actual=$OUT_DIR/verify/$name
+    rm -rf "$actual"
+    mkdir -p "$actual/files"
+
+    verify_other_partitions_unchanged "$disk"
+
+    local fs=$actual/p2.img
+    extract_partition "$disk" 2 "$fs"
+    btrfs check --readonly "$fs" >"$actual/p2.check" 2>&1 ||
+        fail "btrfs check reports errors on ${disk##*/} p2: $(cat "$actual/p2.check")"
+    log "btrfs check --readonly is clean on p2"
+    local uuid
+    uuid=$(blkid -p -o value -s UUID "$fs")
+    [[ $(blkid -p -o value -s TYPE "$fs") == btrfs && $uuid == "$fs_uuid" ]] ||
+        fail "${disk##*/} p2 holds $(blkid -p "$fs"), expected the image's btrfs filesystem $fs_uuid"
+
+    btrfs restore "$fs" "$actual/files" >"$actual/p2.restore" 2>&1 ||
+        fail "btrfs restore cannot read ${disk##*/} p2: $(cat "$actual/p2.restore")"
+    local file
+    for file in "${BTRFS_FILES[@]}"; do
+        cmp "$BTRFS_CONTENT/$file" "$actual/files/$file" >&2 || fail "$file on ${disk##*/} p2 differs from the image"
+    done
+    [[ ! -e $actual/files/e2e/stale.txt ]] || fail "${disk##*/} p2 still holds /e2e/stale.txt from before the deploy"
+    log "p2 holds btrfs filesystem $uuid with the image's files ($(cat "$actual/files/e2e/marker.txt"), random.bin sha256 $(sha256sum <"$actual/files/e2e/random.bin" | cut -c1-16)…)"
+
+    local fs_bytes partition_bytes
+    fs_bytes=$(btrfs_filesystem_bytes "$fs")
+    partition_bytes=$(stat -c %s "$fs")
+    ((image_bytes < partition_bytes)) || fail "the image's filesystem ($image_bytes bytes) already fills ${disk##*/} p2 ($partition_bytes bytes)"
+    ((fs_bytes == partition_bytes)) ||
+        fail "the btrfs filesystem on ${disk##*/} p2 has total_bytes $fs_bytes, it did not grow to fill the $partition_bytes-byte partition"
+    log "the btrfs filesystem grew from the image's $image_bytes bytes to total_bytes $fs_bytes, filling the partition"
+    rm -f "$fs"
 }

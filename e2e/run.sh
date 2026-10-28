@@ -16,12 +16,18 @@ PACKED_MAC=52:54:00:e2:e0:02
 CAPTURED_MAC=52:54:00:e2:e0:03
 PARTITION_PACKED_MAC=52:54:00:e2:e0:04
 PARTITION_CAPTURED_MAC=52:54:00:e2:e0:05
+BTRFS_PACKED_MAC=52:54:00:e2:e0:06
+BTRFS_CAPTURE_MAC=52:54:00:e2:e0:07
+BTRFS_CAPTURED_MAC=52:54:00:e2:e0:08
 SOURCE_DISK=$OUT_DIR/source.raw
 PACKED_DISK=$OUT_DIR/deploy-packed.raw
 CAPTURED_DISK=$OUT_DIR/deploy-captured.raw
 PARTITION_PACKED_DISK=$OUT_DIR/partition-packed.raw
 PARTITION_CAPTURED_DISK=$OUT_DIR/partition-captured.raw
+BTRFS_PACKED_DISK=$OUT_DIR/btrfs-packed.raw
+BTRFS_CAPTURED_DISK=$OUT_DIR/btrfs-captured.raw
 ROOT_FS_IMAGE=$OUT_DIR/root-fs.img
+BTRFS_FS_IMAGE=$OUT_DIR/btrfs-fs.img
 SCRIPT_DIR=$OUT_DIR/scripts
 SCRIPT_NAME=e2e-hostname
 PACKED_ARCHIVE=$OUT_DIR/packed.imaged
@@ -29,6 +35,8 @@ PACKED_EXPORT=$OUT_DIR/packed-export.imaged
 CAPTURED_ARCHIVE=$OUT_DIR/captured.imaged
 PARTITION_PACKED_ARCHIVE=$OUT_DIR/partition-packed.imaged
 PARTITION_CAPTURED_ARCHIVE=$OUT_DIR/partition-captured.imaged
+BTRFS_PACKED_ARCHIVE=$OUT_DIR/btrfs-packed.imaged
+BTRFS_CAPTURED_ARCHIVE=$OUT_DIR/btrfs-captured.imaged
 COMPARE_DIR=$OUT_DIR/compare
 IMAGED_DATA=$OUT_DIR/imaged-data
 
@@ -56,11 +64,11 @@ check_boot_assets() {
     command -v cpio >/dev/null || cpio=("$E2E_BUSYBOX" cpio -t)
     local listing binary
     listing=$(xz -dc "$initramfs" | "${cpio[@]}" 2>/dev/null) || fail "cannot list $initramfs; run build-initramfs x86_64"
-    for binary in bin/debugfs bin/resize2fs bin/imaged-agent; do
+    for binary in bin/debugfs bin/resize2fs bin/btrfs bin/partclone.btrfs bin/imaged-agent; do
         grep -qxE "(\./)?$binary" <<<"$listing" ||
             fail "$initramfs has no $binary; it was built from an older tree, run build-initramfs x86_64"
     done
-    log "initramfs carries bin/debugfs, bin/resize2fs and bin/imaged-agent"
+    log "initramfs carries bin/debugfs, bin/resize2fs, bin/btrfs, bin/partclone.btrfs and bin/imaged-agent"
 }
 
 build_binaries() {
@@ -81,6 +89,8 @@ build_disks() {
     build_blank_disk "$CAPTURED_DISK"
     build_partition_target_disk "$PARTITION_PACKED_DISK"
     build_partition_target_disk "$PARTITION_CAPTURED_DISK"
+    build_partition_target_disk "$BTRFS_PACKED_DISK" 320MiB 448M
+    build_partition_target_disk "$BTRFS_CAPTURED_DISK" 384MiB 512M
 }
 
 log_archive_entries() {
@@ -148,6 +158,35 @@ pack_root_filesystem() {
     log "packed the ext4 filesystem $(relative "$ROOT_FS_IMAGE") ($input_bytes bytes, UUID $uuid, left unchanged) as a format 3 partition archive shrunk to $(jq .partitions[0].size_bytes <<<"$manifest") bytes"
 }
 
+btrfs_fs_uuid() {
+    blkid -p -o value -s UUID "$BTRFS_FS_IMAGE"
+}
+
+pack_btrfs_filesystem() {
+    build_btrfs_filesystem "$BTRFS_FS_IMAGE"
+    local uuid input_bytes
+    uuid=$(btrfs_fs_uuid)
+    input_bytes=$(stat -c %s "$BTRFS_FS_IMAGE")
+    if ! "$IMAGED_PACK" "$BTRFS_FS_IMAGE" --name e2e-btrfs-packed -o "$BTRFS_PACKED_ARCHIVE" \
+        >"$OUT_DIR/imaged-pack-btrfs.log" 2>&1; then
+        tail -n 30 "$OUT_DIR/imaged-pack-btrfs.log" >&2 || true
+        fail "imaged-pack failed on $(relative "$BTRFS_FS_IMAGE"), see $(relative "$OUT_DIR/imaged-pack-btrfs.log")"
+    fi
+    log_archive_entries "$BTRFS_PACKED_ARCHIVE"
+
+    local manifest entries
+    manifest=$(manifest_of "$BTRFS_PACKED_ARCHIVE")
+    jq -e --arg uuid "$uuid" --argjson input "$input_bytes" '
+        .format == 3 and .kind == "partition" and (has("partition_table") | not) and .root_partition == null
+        and (.partitions | length) == 1
+        and (.partitions[0] | .number == 1 and .fstype == "btrfs" and .fs_uuid == $uuid and .size_bytes == $input)' \
+        <<<"$manifest" >/dev/null ||
+        fail "$(relative "$BTRFS_PACKED_ARCHIVE") is not a format 3 partition archive of btrfs filesystem $uuid without a root: $manifest"
+    entries=$(tar -tf "$BTRFS_PACKED_ARCHIVE" | sort | paste -sd' ')
+    [[ $entries == "manifest.json p-1.pcl" ]] || fail "$(relative "$BTRFS_PACKED_ARCHIVE") holds $entries, expected only manifest.json and p-1.pcl"
+    log "packed the btrfs filesystem $(relative "$BTRFS_FS_IMAGE") ($input_bytes bytes, UUID $uuid) as a format 3 partition archive without a root partition or scripts"
+}
+
 start_imaged_server() {
     cat >"$OUT_DIR/imaged.toml" <<EOF
 data_dir = "$IMAGED_DATA"
@@ -181,6 +220,16 @@ assert_partition_image() {
         <<<"$image" >/dev/null ||
         fail "$what image $id does not hold only partition 1, ext4 filesystem $(root_fs_uuid) of $size bytes: $image"
     log "$what image $id holds partition 1: ext4 filesystem $(root_fs_uuid), $size bytes"
+}
+
+assert_btrfs_image() {
+    local id=$1 what=$2 size=$3 image
+    image=$(image_json "$id")
+    jq -e --argjson size "$size" --arg uuid "$(btrfs_fs_uuid)" '.kind == "partition" and .root_partition == null
+        and [.partitions[] | {partition_number, fstype, size_bytes, fs_uuid}] == [{partition_number: 1, fstype: "btrfs", size_bytes: $size, fs_uuid: $uuid}]' \
+        <<<"$image" >/dev/null ||
+        fail "$what image $id is not a partition image without a root holding only partition 1, btrfs filesystem $(btrfs_fs_uuid) of $size bytes: $image"
+    log "$what image $id is a partition image without a root partition holding partition 1: btrfs filesystem $(btrfs_fs_uuid), $size bytes"
 }
 
 host_json() {
@@ -264,6 +313,17 @@ import_partition_archive() {
     log "packed partition image $PARTITION_PACKED_IMAGE_ID reuses library script $SCRIPT_NAME ($SCRIPT_ID)"
 }
 
+import_btrfs_archive() {
+    BTRFS_PACKED_IMAGE_ID=$(api_upload /api/ui/images/import "$BTRFS_PACKED_ARCHIVE" | jq -r .id)
+    log "imported $(relative "$BTRFS_PACKED_ARCHIVE") as image $BTRFS_PACKED_IMAGE_ID"
+    wait_until 120 "image $BTRFS_PACKED_IMAGE_ID to become ready" image_ready "$BTRFS_PACKED_IMAGE_ID"
+    log "image $BTRFS_PACKED_IMAGE_ID ready: $(image_json "$BTRFS_PACKED_IMAGE_ID")"
+    assert_btrfs_image "$BTRFS_PACKED_IMAGE_ID" "packed btrfs" "$(stat -c %s "$BTRFS_FS_IMAGE")"
+    local scripts
+    scripts=$(api_get "/api/ui/images/$BTRFS_PACKED_IMAGE_ID/scripts")
+    [[ $(jq length <<<"$scripts") == 0 ]] || fail "packed btrfs image $BTRFS_PACKED_IMAGE_ID has scripts: $scripts"
+}
+
 capture_source_disk() {
     start_network_boot_vm capture "$CAPTURE_MAC" "$SOURCE_DISK" tap-capture
     wait_until 300 "the capture VM's agent to register" host_registered "$CAPTURE_MAC"
@@ -304,6 +364,45 @@ capture_source_partition() {
     stop_process capture
     assert_partition_image "$PARTITION_CAPTURED_IMAGE_ID" "captured partition" "$(partition_bytes "$SOURCE_DISK" 2)"
     attach_test_script "$PARTITION_CAPTURED_IMAGE_ID"
+}
+
+capture_btrfs_partition() {
+    start_network_boot_vm btrfs-capture "$BTRFS_CAPTURE_MAC" "$BTRFS_PACKED_DISK" tap-bcapture
+    wait_until 300 "the btrfs-capture VM's agent to register" host_registered "$BTRFS_CAPTURE_MAC"
+    local host_id
+    host_id=$(host_id_for_mac "$BTRFS_CAPTURE_MAC")
+    wait_until 60 "the btrfs-capture VM to report 3 partitions" host_reports_partitions "$host_id" 3
+    log "btrfs-capture VM registered as host $host_id, reports partitions: $(host_partitions_summary "$host_id")"
+    local partuuid fstype
+    partuuid=$(host_partuuid "$host_id" 2)
+    [[ $partuuid == "$(disk_partuuid "$BTRFS_PACKED_DISK" 2)" ]] ||
+        fail "btrfs-capture VM reports partition 2 as '$partuuid', the disk has $(disk_partuuid "$BTRFS_PACKED_DISK" 2)"
+    fstype=$(host_json "$host_id" | jq -r '.partitions[] | select(.number == 2) | .fstype')
+    [[ $fstype == btrfs ]] || fail "btrfs-capture VM reports partition 2 as '$fstype', expected btrfs"
+
+    local created task_id
+    created=$(api_post /api/ui/images/create "$(jq -nc --argjson host "$host_id" --arg partition "$partuuid" \
+        '{req: {name: "e2e-btrfs-captured", host_id: $host, partition: $partition}}')")
+    BTRFS_CAPTURED_IMAGE_ID=$(jq -r .image.id <<<"$created")
+    task_id=$(jq -r .task.id <<<"$created")
+    jq -e --arg partuuid "$partuuid" '.image.kind == "partition" and .task.type == "capture" and .task.hosts[0].partuuid == $partuuid' \
+        <<<"$created" >/dev/null || fail "creating a capture of btrfs partition $partuuid returned: $created"
+    log "created partition image $BTRFS_CAPTURED_IMAGE_ID, capture task $task_id of btrfs partition $partuuid dispatched"
+    wait_until 600 "image $BTRFS_CAPTURED_IMAGE_ID to become ready" image_ready "$BTRFS_CAPTURED_IMAGE_ID"
+    wait_until 60 "capture task $task_id to finish" task_done "$task_id"
+    stop_process btrfs-capture
+    assert_btrfs_image "$BTRFS_CAPTURED_IMAGE_ID" "captured btrfs" "$(partition_bytes "$BTRFS_PACKED_DISK" 2)"
+}
+
+export_btrfs_image() {
+    api_download "/api/ui/images/$BTRFS_CAPTURED_IMAGE_ID/export" "$BTRFS_CAPTURED_ARCHIVE"
+    log_archive_entries "$BTRFS_CAPTURED_ARCHIVE"
+    local manifest
+    manifest=$(manifest_of "$BTRFS_CAPTURED_ARCHIVE")
+    jq -e --arg uuid "$(btrfs_fs_uuid)" '.format == 3 and .kind == "partition" and (has("partition_table") | not)
+        and .root_partition == null and [.partitions[] | {number, fstype, fs_uuid}] == [{number: 1, fstype: "btrfs", fs_uuid: $uuid}]' \
+        <<<"$manifest" >/dev/null || fail "the captured btrfs export is not a format 3 btrfs partition archive without a root: $manifest"
+    log "the captured btrfs image exports as format 3 with kind partition, no partition table and no root partition"
 }
 
 export_images() {
@@ -376,9 +475,11 @@ restore_image() {
             fail "$name VM reports partition $partition as '$target', the disk has $(disk_partuuid "$disk" "$partition")"
     fi
 
-    local inputs request path
-    inputs=$(jq -nc --argjson host "$host_id" --arg hostname "$hostname" \
-        '{shared: {}, per_machine: {($host | tostring): {hostname: {value: $hostname}}}}')
+    local inputs='{"shared":{},"per_machine":{}}' request path
+    if [[ -n $hostname ]]; then
+        inputs=$(jq -nc --argjson host "$host_id" --arg hostname "$hostname" \
+            '{shared: {}, per_machine: {($host | tostring): {hostname: {value: $hostname}}}}')
+    fi
     case $via in
         deploy)
             path=/api/ui/hosts/deploy
@@ -391,7 +492,7 @@ restore_image() {
                 '{req: ({host_ids: [$host], image_id: $image, inputs: $inputs} + if $target == "" then {} else {partitions: {($host | tostring): $target}} end)}')
             ;;
     esac
-    if [[ -n $target ]]; then
+    if [[ -n $target && -n $hostname ]]; then
         expect_partition_refusals "$path" "$request" "$host_id"
     fi
 
@@ -401,15 +502,19 @@ restore_image() {
     DEPLOY_TASK_ID=$(jq -r .id <<<"$task")
     jq -e --arg via "$via" --arg target "$target" '.type == $via and (.hosts[0].partuuid // "") == $target' <<<"$task" >/dev/null ||
         fail "$path created an unexpected task: $task"
-    log "$via task $DEPLOY_TASK_ID dispatched: image $image_id to host $host_id${target:+ partition $target} with hostname $hostname"
+    log "$via task $DEPLOY_TASK_ID dispatched: image $image_id to host $host_id${target:+ partition $target}${hostname:+ with hostname $hostname}"
     unwatch "$name"
     wait_until 600 "$via task $DEPLOY_TASK_ID to finish" deploy_finished
 
     local runs
     runs=$(api_get "/api/ui/tasks/$DEPLOY_TASK_ID/hosts/$host_id/scripts")
     log "script runs: $(jq -c 'map({script_name, exit_code, output})' <<<"$runs")"
-    jq -e --arg name "$SCRIPT_NAME" 'map(select(.script_name == $name and .exit_code == 0)) | length == 1' <<<"$runs" >/dev/null ||
-        fail "$via task $DEPLOY_TASK_ID did not run $SCRIPT_NAME successfully: $runs"
+    if [[ -n $hostname ]]; then
+        jq -e --arg name "$SCRIPT_NAME" 'map(select(.script_name == $name and .exit_code == 0)) | length == 1' <<<"$runs" >/dev/null ||
+            fail "$via task $DEPLOY_TASK_ID did not run $SCRIPT_NAME successfully: $runs"
+    else
+        [[ $(jq length <<<"$runs") == 0 ]] || fail "$via task $DEPLOY_TASK_ID ran scripts for an image without any: $runs"
+    fi
 
     log "$via task $DEPLOY_TASK_ID done, waiting for the VM to reboot"
     wait_for_exit "$name" 120
@@ -443,9 +548,17 @@ multicast_partition_captured() {
         "$PARTITION_CAPTURED_IMAGE_ID" e2e-partition-captured 2
 }
 
+deploy_btrfs_packed() {
+    restore_image deploy btrfs-packed "$BTRFS_PACKED_MAC" "$BTRFS_PACKED_DISK" tap-bpacked "$BTRFS_PACKED_IMAGE_ID" "" 2
+}
+
+deploy_btrfs_captured() {
+    restore_image deploy btrfs-captured "$BTRFS_CAPTURED_MAC" "$BTRFS_CAPTURED_DISK" tap-bcaptured "$BTRFS_CAPTURED_IMAGE_ID" "" 2
+}
+
 prepare_outside_namespace() {
     require_commands cargo cc unshare ip qemu-system-x86_64 dnsmasq curl jq sgdisk sfdisk blkid mke2fs e2fsck debugfs \
-        dumpe2fs resize2fs mkfs.vfat fsck.fat mcopy mkswap partclone.extfs partclone.vfat xz tar
+        dumpe2fs resize2fs mkfs.vfat fsck.fat mcopy mkswap partclone.extfs partclone.vfat mkfs.btrfs btrfs partclone.btrfs xz tar
     [[ -x ${E2E_BUSYBOX:-} ]] || fail "E2E_BUSYBOX must point at a static busybox binary (run inside: nix develop $REPO_DIR#e2e)"
     [[ -r /dev/kvm && -w /dev/kvm ]] || fail "/dev/kvm is not accessible"
     mkdir -p "$OUT_DIR"
@@ -455,6 +568,7 @@ prepare_outside_namespace() {
     run_step build-disks build_disks
     run_step pack pack_source_disk
     run_step pack-partition pack_root_filesystem
+    run_step pack-btrfs pack_btrfs_filesystem
 }
 
 run_in_namespace() {
@@ -463,6 +577,7 @@ run_in_namespace() {
     run_step dhcp start_dhcp_server
     run_step import import_packed_archive
     run_step import-partition import_partition_archive
+    run_step import-btrfs import_btrfs_archive
     run_step capture capture_source_disk
     run_step capture-partition capture_source_partition
     run_step export export_images
@@ -478,8 +593,17 @@ run_in_namespace() {
     run_step multicast-partition-captured multicast_partition_captured
     run_step verify-partition-captured verify_partition_deploy "$PARTITION_CAPTURED_DISK" e2e-partition-captured \
         "$(root_fs_uuid)" "$(image_field "$PARTITION_CAPTURED_IMAGE_ID" .partitions[0].size_bytes)"
+    run_step deploy-btrfs-packed deploy_btrfs_packed
+    run_step verify-btrfs-packed verify_btrfs_deploy "$BTRFS_PACKED_DISK" "$(btrfs_fs_uuid)" \
+        "$(image_field "$BTRFS_PACKED_IMAGE_ID" .partitions[0].size_bytes)"
+    run_step capture-btrfs capture_btrfs_partition
+    run_step export-btrfs export_btrfs_image
+    run_step compare-btrfs compare_archives "$BTRFS_CAPTURED_ARCHIVE" "$BTRFS_PACKED_ARCHIVE"
+    run_step deploy-btrfs-captured deploy_btrfs_captured
+    run_step verify-btrfs-captured verify_btrfs_deploy "$BTRFS_CAPTURED_DISK" "$(btrfs_fs_uuid)" \
+        "$(image_field "$BTRFS_CAPTURED_IMAGE_ID" .partitions[0].size_bytes)"
     print_step_summary
-    log "PASS: packed and captured disk and partition images imported, compared and deployed with post-install scripts ($FIRMWARE firmware)"
+    log "PASS: packed and captured disk, ext4 and btrfs partition images imported, compared and deployed, with post-install scripts where attached ($FIRMWARE firmware)"
 }
 
 if [[ -z ${E2E_IN_NAMESPACE:-} ]]; then

@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, bail, ensure};
 use derive_more::Constructor;
 use imaged_disk::{Filesystem, backup_partition_table, restore_partition_table};
 use imaged_model::agent::ImageLayout;
+use imaged_model::image::ImageKind;
 
 use super::PARTTABLE_TMP;
 use super::source::Source;
@@ -113,10 +114,12 @@ impl Shape for SinglePartition {
         let source = disk.partition(&self.partuuid)?;
         let filesystem = Filesystem::detect(source.fstype.as_deref())?
             .with_context(|| format!("partition {} holds no filesystem", self.partuuid))?;
-        if !(filesystem.is_ext() || filesystem == Filesystem::Vfat) {
+        let fstypes = ImageKind::Partition.fstypes();
+        if !fstypes.contains(&filesystem.as_str()) {
             bail!(
-                "partition {} holds {filesystem}, a partition image holds an ext2, ext3, ext4 or vfat filesystem",
-                self.partuuid
+                "partition {} holds {filesystem}, a partition image holds one of {}",
+                self.partuuid,
+                fstypes.join(", ")
             );
         }
         Ok(vec![PartitionTarget {
@@ -225,7 +228,9 @@ mod tests {
                   "label": "root fs", "partuuid": "aaaa-02" },
                 { "name": "nvme0n1p3", "size": 3000, "fstype": "swap", "uuid": "swap",
                   "partuuid": "aaaa-03" },
-                { "name": "nvme0n1p4", "size": 4000, "partuuid": "aaaa-04" }
+                { "name": "nvme0n1p4", "size": 4000, "partuuid": "aaaa-04" },
+                { "name": "nvme0n1p5", "size": 6000, "fstype": "btrfs", "uuid": "data-fs",
+                  "label": "data", "partuuid": "aaaa-05" }
             ] }"#,
         )
         .expect("valid lsblk fixture")
@@ -360,17 +365,33 @@ mod tests {
     }
 
     #[test]
-    fn only_ext_and_vfat_partitions_are_captured() {
+    fn only_ext_vfat_and_btrfs_partitions_are_captured() {
         let capture = |partuuid: &str| into(partuuid).capture_plan(&disk()).map(|p| p.len());
 
         assert_eq!(capture("aaaa-01").unwrap(), 1);
         assert_eq!(
             capture("aaaa-03").unwrap_err().to_string(),
-            "partition aaaa-03 holds swap, a partition image holds an ext2, ext3, ext4 or vfat filesystem"
+            "partition aaaa-03 holds swap, a partition image holds one of ext2, ext3, ext4, vfat, btrfs"
         );
         assert_eq!(
             capture("aaaa-04").unwrap_err().to_string(),
             "partition aaaa-04 holds no filesystem"
         );
+    }
+
+    #[test]
+    fn a_captured_btrfs_partition_is_imaged_as_btrfs_partition_one() {
+        let [source] = into("aaaa-05")
+            .capture_plan(&disk())
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(source.device, "/dev/nvme0n1p5");
+        assert_eq!(source.number, 1);
+        assert_eq!(source.filesystem, Filesystem::Btrfs);
+        assert_eq!(source.size, 6000);
+        assert_eq!(source.fs_uuid.as_deref(), Some("data-fs"));
+        assert_eq!(source.fs_label.as_deref(), Some("data"));
     }
 }

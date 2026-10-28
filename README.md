@@ -54,9 +54,10 @@ Each partition may carry `fs_uuid`, the UUID of its filesystem, and
 refer to (for a partition image, that of the disk it was captured from, or 512
 when packed from a file; a deploy needs a target disk with the same sector
 size), a power of two from 512 to 65536. `partitions` must not be empty and each
-`fstype` is one of `ext2`, `ext3`, `ext4`, `vfat` and, in a disk image,
-`swap`. Unknown manifest fields are ignored; a new payload encoding or a field
-a reader must honour needs a format bump.
+`fstype` is one of `ext2`, `ext3`, `ext4`, `vfat`, `btrfs` and, in a disk
+image, `swap`; a `btrfs` partition does not raise the format, but a reader
+older than btrfs support refuses it. Unknown manifest fields are ignored; a new
+payload encoding or a field a reader must honour needs a format bump.
 
 The `manifest` module is IO-free and validates the sector size, file names,
 partition numbers, file systems, the root partition and the scripts; an async
@@ -87,10 +88,15 @@ failed re-read (a busy disk, for example) fails the restore.
 After a restore writes an ext2/3/4 partition, `grow` reads the filesystem's
 block count and block size with `debugfs -R stats`. When the partition is
 larger than the filesystem it runs `e2fsck -f -p` (exit codes below 4 are
-accepted) and then `resize2fs`, so the filesystem fills the partition. vfat
-and swap are left as restored. Disk and partition restores both do this.
+accepted) and then `resize2fs`, so the filesystem fills the partition. For a
+btrfs partition it reads `total_bytes` and `sectorsize` with
+`btrfs inspect-internal dump-super`; when the partition is larger it mounts
+the filesystem on a temporary directory, runs `btrfs filesystem resize max` on
+it and unmounts it again, also when the resize fails, so growing btrfs needs
+root. vfat and swap are left as restored. Disk and partition restores both do
+this.
 
-ext2/3/4 and vfat partitions are cloned with `partclone`;
+ext2/3/4, vfat and btrfs partitions are cloned with `partclone`;
 swap partitions are stored as their header page only (the `SWAPSPACE2`
 signature with the UUID, label and size, 4 to 64 KiB) and restored by writing
 that page back, so the restored swap keeps its UUID and label. A swap
@@ -98,12 +104,14 @@ partition holding a hibernation image is reported as `swsuspend` and refused.
 A clone stream ends in an error when partclone fails, so a reader that reaches
 its end without an error has the whole partition. The probe runs
 `debugfs -R 'stat /etc/os-release'` against each ext partition without
-mounting it, so it needs no root; a symlinked `os-release` counts. `partclone`
-always gets `--logfile`: without it partclone writes
-`/var/log/partclone.log` and, when not root, outputs nothing. Its stderr is
-parsed: every data status line (fraction done, rate, time remaining) goes to the
-caller's progress callback, the bitmap scan before it is skipped and any other
-line is logged. A clone stream only ends once its last progress is reported.
+mounting it, so it needs no root; a symlinked `os-release` counts. vfat and
+btrfs partitions are never probed, so a btrfs root partition is never found
+and has to be set by hand. `partclone` always gets `--logfile`: without it
+partclone writes `/var/log/partclone.log` and, when not root, outputs nothing.
+Its stderr is parsed: every data status line (fraction done, rate, time
+remaining) goes to the caller's progress callback, the bitmap scan before it
+is skipped and any other line is logged. A clone stream only ends once its
+last progress is reported.
 The output of `sgdisk` and `partprobe` is logged too, and a failure carries it
 in its error; nothing is printed to the caller's terminal.
 
@@ -122,8 +130,8 @@ Hosts are keyed by their MAC address in lowercase colon form; each image records
 the sector size of its partition table.
 
 Every image has a kind, `disk` or `partition`. A partition image holds exactly
-partition 1 and no partition table file: an ext2/3/4 or vfat filesystem, its
-UUID and label, and as its size the smallest partition it fits in (the
+partition 1 and no partition table file: an ext2/3/4, vfat or btrfs filesystem,
+its UUID and label, and as its size the smallest partition it fits in (the
 filesystem's size when packed, the source partition's size when captured).
 Image partitions keep their filesystem UUID and label whenever they are known.
 The partitions each agent reports are stored per host and replaced by every
@@ -170,9 +178,9 @@ and multicast dialogs need an explicit image, list every machine whose disk
 will be erased and ask for the inputs of the image's scripts (shared values
 once, per-machine values per host). Hosts without a usable disk show why;
 every host lists the partitions its agent reported. A capture takes the whole
-disk or one ext2/3/4 or vfat partition of the source host. For a partition
-image the deploy dialog asks for the partition to overwrite and only offers
-partitions that are large enough and would not hold a second copy of the
+disk or one ext2/3/4, vfat or btrfs partition of the source host. For a
+partition image the deploy dialog asks for the partition to overwrite and only
+offers partitions that are large enough and would not hold a second copy of the
 image's filesystem UUID or label, the multicast dialog picks each host's
 partition by PARTLABEL or number, and both name the partitions they overwrite
 instead of the disks they erase. The Tasks page filters by status, type and
@@ -204,7 +212,7 @@ OPTIONS passes a cross-site check (see [Security](#security)).
   capture and returns `{"image": ..., "task": ...}`; with
   `"partition": "<partuuid>"` it captures that partition of the host into a
   partition image instead, refused (412) when the host has not reported the
-  partition or it holds no ext2/3/4 or vfat filesystem.
+  partition or it holds no ext2/3/4, vfat or btrfs filesystem.
   `POST /api/ui/hosts/deploy`, `POST /api/ui/groups/multicast` and
   `POST /api/ui/hosts/reboot` return the created task.
 - Capture, deploy and multicast refuse an unknown host (404) and a host
@@ -376,14 +384,16 @@ partition by its size (swap counts as nothing, only its header is imaged) and
 sends its latest progress at most every 5 seconds, only when it changed, and
 again after a reconnect. Uses `imaged-disk` (`partclone` for filesystem-aware
 imaging, `sgdisk` for the partition table, `debugfs` for the root partition,
-`resize2fs` to grow ext filesystems). A capture runs `e2fsck -p` or
-`fsck.fat -a` on each partition right before cloning it. Reboot tasks touch no
-disk.
+`resize2fs` and `btrfs filesystem resize` to grow ext and btrfs filesystems).
+A capture runs `e2fsck -p` or `fsck.fat -a` on each partition right before
+cloning it; a btrfs partition gets `btrfs check --readonly` instead and is
+never repaired, so a btrfs filesystem with errors fails the capture. Reboot
+tasks touch no disk.
 
 A partition task works on one existing partition of the target disk, named by
 its PARTUUID, and never touches the partition table. A partition capture clones
-that ext2/3/4 or vfat partition as partition 1 of the image. A partition deploy
-or multicast refuses before writing anything when the partition is missing
+that ext2/3/4, vfat or btrfs partition as partition 1 of the image. A partition
+deploy or multicast refuses before writing anything when the partition is missing
 (`partition <partuuid> is not on disk <disk>`), smaller than the image
 (`partition <partuuid> holds N bytes, the image needs at least M`), on a disk
 with another logical sector size (`the image is for N-byte sectors, <disk> has
@@ -393,8 +403,8 @@ restoring the image into partition <partuuid> would duplicate it`), or when
 another partition already holds the image's filesystem label, spelled exactly
 the same (``<device> already holds a filesystem labelled `<label>`, restoring
 the image into partition <partuuid> would duplicate the label``). After
-writing, every restore, disk or partition, grows ext filesystems to fill their
-partitions.
+writing, every restore, disk or partition, grows ext and btrfs filesystems to
+fill their partitions.
 
 On the machine's screen the agent draws a dashboard on tty1 (the initramfs
 starts it there with `openvt` and quiets kernel messages to errors). F1 shows
@@ -419,9 +429,9 @@ cargo run -p imaged-agent -- --no-tui http://<server>:8080   # plain logs, Ctrl-
 
 ### `crates/pack` — `imaged-pack`
 
-Rust binary that turns a raw GPT disk image file, or a raw ext2/3/4 or vfat
-filesystem image, into a `.imaged` archive without root, KVM or a PXE boot.
-The archive matches what a capture produces, so it imports through
+Rust binary that turns a raw GPT disk image file, or a raw ext2/3/4, vfat or
+btrfs filesystem image, into a `.imaged` archive without root, KVM or a PXE
+boot. The archive matches what a capture produces, so it imports through
 `POST /api/ui/images/import` and deploys like a captured image.
 
 ```
@@ -438,8 +448,8 @@ blank file included, fails with `only GPT disks are supported, found
 <label>`); an image file counts as a disk with 512-byte sectors. Each partition
 is copied into a sparse temp file, its filesystem, UUID and label read with
 `blkid -p -d`, and cloned with `imaged-disk` into `p-<n>.pcl`. Unformatted
-partitions are skipped like a capture skips them; ext2/3/4, vfat and swap are
-packed; any other filesystem fails the run, and so does a disk without any
+partitions are skipped like a capture skips them; ext2/3/4, vfat, btrfs and
+swap are packed; any other filesystem fails the run, and so does a disk without any
 packable partition (`the manifest lists no partitions`).
 
 A filesystem image becomes partition 1 of a partition image with 512-byte
@@ -447,15 +457,17 @@ sectors, no partition table and the filesystem's UUID and label. An ext
 filesystem is copied to a temp file, checked with `e2fsck -f -p` and shrunk
 with `resize2fs -M` there, so the input is never changed, and the image's size
 is the shrunk filesystem's: the smallest partition it can be deployed into,
-where the deploy grows it again. A vfat filesystem is packed as it is, with the
-file's size. Any other filesystem fails (`<IMAGE> holds neither a GPT
-partition table nor a supported filesystem: found swap, expected one of ext2,
-ext3, ext4, vfat`).
+where the deploy grows it again. A vfat or btrfs filesystem is packed as it
+is, with the file's size; btrfs is not shrunk, so build a minimal image with
+`mkfs.btrfs --rootdir <dir> --shrink <file>` (the deploy grows it). Any other
+filesystem fails (`<IMAGE> holds neither a GPT partition table nor a supported
+filesystem: found swap, expected one of ext2, ext3, ext4, vfat, btrfs`).
 
 `--root-partition <N>` sets the root partition (it must be one of the packed
 partitions, so 1 for a filesystem image); without it the root partition is
 found by the same rule as a capture and left unset when no single partition
-qualifies. The capture date is the time of packing.
+qualifies; a btrfs root partition is never found, so pass `--root-partition`
+for it. The capture date is the time of packing.
 
 `--script <PATH>` attaches a post-install script and can be repeated. The file
 is `<name>.sh`, the script name its stem; its inputs come from a sibling
@@ -486,7 +498,7 @@ nix run github:LuukBlankenstijn/imaged#imaged-pack -- disk.img --name my-image -
 ```
 
 The nix package brings its runtime tools (`sgdisk`, `blkid`, `debugfs`,
-`e2fsck`, `resize2fs`, `partclone`).
+`e2fsck`, `resize2fs`, `btrfs-progs`, `partclone`).
 
 ### `crates/e2e` — `imaged-e2e`
 
@@ -503,8 +515,8 @@ direnv allow
 ```
 
 It also provides everything else the project needs: partclone, udp-cast,
-sgdisk, sfdisk and blkid (util-linux), e2fsprogs, dosfstools, mtools, the
-initramfs packages and scripts, and the test-VM scripts; the imaging tests in
+sgdisk, sfdisk and blkid (util-linux), e2fsprogs, btrfs-progs, dosfstools,
+mtools, the initramfs packages and scripts, and the test-VM scripts; the imaging tests in
 `imaged-disk` and `imaged-pack` run these tools. The x86_64 and arm64
 kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
 (minus GPU, media, sound and wireless) and loads them by modalias at boot.
@@ -638,9 +650,11 @@ of the image's partitions instead (`POST /api/ui/images/scripts/root`). A
 capture finds the image's root partition after cloning every partition by
 reading each ext partition with `debugfs`, without mounting it: when exactly
 one holds `/etc/os-release` (a symlink counts) it becomes the image's root
-partition, otherwise it is left unset for the dashboard to choose.
+partition, otherwise it is left unset for the dashboard to choose. btrfs
+partitions are not read, so a btrfs root partition is always set by hand.
 `imaged-pack` applies the same rule. A partition image's root partition is 1
-or unset.
+or unset. Post-install scripts mount a btrfs root without options, so they run
+in its default subvolume; a root on another subvolume is not supported yet.
 
 Partitions without a filesystem, such as a BIOS boot partition, are not
 imaged: a deploy recreates them in the partition table but writes nothing into
@@ -762,9 +776,9 @@ with a real x86_64 initramfs built from this tree (`build-initramfs x86_64
 arm64`; the server does not build without the arm64 one). The script:
 
 1. builds the binaries it runs,
-2. creates the test disks: a source disk, two blank disks and two partition
+2. creates the test disks: a source disk, two blank disks and four partition
    targets, each with an ESP, an ext4 root holding a stale file and an ext4
-   data partition,
+   data partition (the last target's root is 128 MiB, the others' 96 MiB),
 3. packs the source disk with `imaged-pack` and a script that has a
    per-machine input, and packs the source's root filesystem, copied out to a
    file, into a partition archive: format 3, shrunk, with the filesystem's
@@ -789,7 +803,18 @@ arm64`; the server does not build without the arm64 one). The script:
    partition table and its ESP and data partitions byte for byte, and its root
    partition gets a clean fsck, the image's filesystem UUID and files without
    the stale one, `/etc/hostname` set by the script and a filesystem grown to
-   fill the partition.
+   fill the partition,
+9. builds a btrfs filesystem rootless (`mkfs.btrfs -r --shrink`, single
+   profiles) holding a marker file, packs it without a script into a format 3
+   partition archive of its full size with no root partition, imports it,
+   deploys it by PARTUUID into the stale ext4 root partition of the third
+   target, captures that partition in another VM, exports the capture,
+   compares it with the packed archive, and deploys it into the larger root
+   partition of the fourth target; each target keeps its partition table and
+   its ESP and data partitions byte for byte, and its root partition passes
+   `btrfs check`, is identified as btrfs with the image's UUID, holds the
+   image's files (read back with `btrfs restore`) and has a `total_bytes`
+   grown to fill the partition.
 
 `E2E_FIRMWARE` picks `bios` or `uefi`, `E2E_OUT` the directory for logs, disks
 and archives (default `e2e/out`); `CARGO_TARGET_DIR` and `IMAGED_BOOT_ASSETS`
@@ -896,7 +921,7 @@ stops the deploy when the ESP is not mounted.
 Evaluation fails when imaged cannot deploy the configuration:
 
 - disko with more than one disk, LVM, mdadm, ZFS or bcachefs devices, a table
-  other than GPT, a filesystem other than ext2/3/4, vfat or swap, or a root
+  other than GPT, a filesystem other than ext2/3/4, vfat, btrfs or swap, or a root
   partition that is not the last one (`size = "100%"`) or no partitions;
 - for a disk image without disko, block-device `fileSystems` other than `/`
   and, with an ESP, `/boot`, or block-device `swapDevices` (a swap file is

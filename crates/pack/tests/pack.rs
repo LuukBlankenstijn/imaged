@@ -119,6 +119,25 @@ fn ext4_image(dir: &Path, name: &str, size: u64, root: &Path) -> PathBuf {
     image
 }
 
+fn btrfs_image(dir: &Path, size: u64, root: &Path, options: &[&str]) -> PathBuf {
+    let image = dir.join("btrfs.img");
+    File::create(&image).unwrap().set_len(size).unwrap();
+    run(Command::new("mkfs.btrfs")
+        .args(["-q", "-L", "data"])
+        .args(options)
+        .arg("--rootdir")
+        .arg(root)
+        .arg(&image));
+    image
+}
+
+fn btrfs_file(image: &Path, name: &str, dir: &Path) -> String {
+    let files = dir.join("btrfs-files");
+    std::fs::create_dir(&files).unwrap();
+    run(Command::new("btrfs").arg("restore").arg(image).arg(&files));
+    std::fs::read_to_string(files.join(name)).unwrap()
+}
+
 fn os_root(dir: &Path, name: &str, marker: &str) -> PathBuf {
     let root = dir.join(name);
     std::fs::create_dir_all(root.join("etc")).unwrap();
@@ -234,6 +253,7 @@ async fn restore(filesystem: Filesystem, compressed: &Path, dir: &Path) -> PathB
     let mut decoder = ZstdDecoder::new(tokio::io::BufReader::new(compressed));
     let binary = match filesystem {
         Filesystem::Vfat => "partclone.vfat",
+        Filesystem::Btrfs => "partclone.btrfs",
         _ => "partclone.extfs",
     };
     let mut child = tokio::process::Command::new(binary)
@@ -743,9 +763,109 @@ async fn an_unsupported_filesystem_image_fails_without_leaving_output() {
     let archive = dir.join("image.imaged");
     assert_failed_without_output(
         pack(&image, &archive, [] as [&str; 0]),
-        "found swap, expected one of ext2, ext3, ext4, vfat",
+        "found swap, expected one of ext2, ext3, ext4, vfat, btrfs",
         &archive,
     );
+}
+
+#[tokio::test]
+async fn a_btrfs_filesystem_image_packs_as_a_partition_image_of_its_full_size_without_a_root() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let root = os_root(dir, "root", "btrfs partition\n");
+    let image = btrfs_image(dir, 128 * MIB, &root, &[]);
+
+    let archive = dir.join("image.imaged");
+    packed(pack(&image, &archive, [] as [&str; 0]));
+    assert_eq!(entry_names(&archive).await, ["manifest.json", "p-1.pcl"]);
+    let rooted = dir.join("rooted.imaged");
+    packed(pack(&image, &rooted, ["--root-partition", "1"]));
+    assert_eq!(manifest(&rooted).await.root_partition, Some(1));
+
+    let unpacked_dir = dir.join("unpacked");
+    let Unpacked { manifest, .. } = unpack(&archive, &unpacked_dir).await;
+    assert_eq!(manifest.format, 3);
+    assert_eq!(manifest.kind, ImageKind::Partition);
+    assert_eq!(manifest.partition_table, None);
+    assert_eq!(manifest.root_partition, None);
+    let partitions: Vec<_> = manifest
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.fstype.as_str(),
+                p.size_bytes,
+                p.fs_uuid.as_deref(),
+                p.fs_label.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        partitions,
+        [(
+            1,
+            "btrfs",
+            128 * MIB,
+            Some(probe(&image, "UUID").as_str()),
+            Some("data")
+        )]
+    );
+
+    let restored = restore(Filesystem::Btrfs, &unpacked_dir.join("p-1.pcl"), dir).await;
+    run(Command::new("btrfs")
+        .args(["check", "--readonly"])
+        .arg(&restored));
+    assert_eq!(probe(&restored, "UUID"), probe(&image, "UUID"));
+    assert_eq!(btrfs_file(&restored, "marker", dir), "btrfs partition\n");
+}
+
+#[tokio::test]
+async fn a_btrfs_partition_of_a_disk_image_is_packed_but_never_detected_as_the_root() {
+    let dir = TempDir::new().unwrap();
+    let dir = dir.path();
+    let disk = Disk::new(dir);
+    let root = os_root(dir, "root", "btrfs on a disk\n");
+    let btrfs = btrfs_image(dir, disk.size(2), &root, &["--mixed"]);
+    disk.write(2, &btrfs);
+
+    let archive = dir.join("image.imaged");
+    packed(pack(&disk.path, &archive, [] as [&str; 0]));
+
+    let unpacked_dir = dir.join("unpacked");
+    let Unpacked { manifest, .. } = unpack(&archive, &unpacked_dir).await;
+    assert_eq!(manifest.format, 2);
+    assert_eq!(manifest.kind, ImageKind::Disk);
+    assert_eq!(manifest.root_partition, None);
+    let partitions: Vec<_> = manifest
+        .partitions
+        .iter()
+        .map(|p| {
+            (
+                p.number,
+                p.fstype.as_str(),
+                p.size_bytes,
+                p.fs_uuid.as_deref(),
+                p.fs_label.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        partitions,
+        [(
+            2,
+            "btrfs",
+            disk.size(2),
+            Some(probe(&btrfs, "UUID").as_str()),
+            Some("data")
+        )]
+    );
+
+    let restored = restore(Filesystem::Btrfs, &unpacked_dir.join("p-2.pcl"), dir).await;
+    run(Command::new("btrfs")
+        .args(["check", "--readonly"])
+        .arg(&restored));
+    assert_eq!(btrfs_file(&restored, "marker", dir), "btrfs on a disk\n");
 }
 
 #[tokio::test]

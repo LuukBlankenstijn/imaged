@@ -32,7 +32,7 @@ let
     "samples/"
     "fs/"
   ];
-  kept = "fs/(ext4|fat|nls|jbd2|efivarfs)/|fs/mbcache|net/packet/";
+  kept = "fs/(ext4|fat|btrfs|nls|jbd2|efivarfs)/|fs/mbcache|net/packet/";
 in
 agentBin: ''
   mkdir -p "$STAGING"/{bin,proc,sys,dev,tmp,etc,run,lib/modules/${version}}
@@ -43,8 +43,10 @@ agentBin: ''
   cp ${pkgsStatic.klibc}/lib/klibc/bin.static/ipconfig "$STAGING/bin/"
   cp ${pkgsStatic.e2fsprogs.bin}/bin/{e2fsck,debugfs,resize2fs} "$STAGING/bin/"
   cp ${pkgsStatic.dosfstools}/bin/fsck.fat "$STAGING/bin/"
+  cp ${pkgsStatic.btrfs-progs}/bin/btrfs "$STAGING/bin/"
   cp ${partclone}/bin/partclone.extfs "$STAGING/bin/"
   cp ${partclone}/bin/partclone.vfat "$STAGING/bin/"
+  cp ${partclone}/bin/partclone.btrfs "$STAGING/bin/"
   cp "${agentBin}" "$STAGING/bin/imaged-agent"
   ln -sfr "$STAGING/bin/partclone.extfs" "$STAGING/bin/partclone.ext4"
   ln -sf busybox "$STAGING/bin/sh"

@@ -5,12 +5,12 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Pack a raw GPT disk image, or a raw ext2/3/4 or vfat filesystem image, into an .imaged archive that imaged can import"
+    about = "Pack a raw GPT disk image, or a raw ext2/3/4, vfat or btrfs filesystem image, into an .imaged archive that imaged can import"
 )]
 pub struct Args {
     #[arg(
         value_name = "IMAGE",
-        help = "Raw disk image with a GPT partition table, or a raw ext2/3/4 or vfat filesystem image packed as a single-partition image"
+        help = "Raw disk image with a GPT partition table, or a raw ext2/3/4, vfat or btrfs filesystem image packed as a single-partition image"
     )]
     pub image: PathBuf,
     #[arg(long, help = "Image name stored in the archive")]

@@ -20,6 +20,7 @@ impl Imager {
                 Self::Partclone("partclone.extfs")
             }
             Filesystem::Vfat => Self::Partclone("partclone.vfat"),
+            Filesystem::Btrfs => Self::Partclone("partclone.btrfs"),
             Filesystem::Swap => Self::SwapHeader,
         }
     }

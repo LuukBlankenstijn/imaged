@@ -638,7 +638,7 @@ fn a_partition_beside_one_holding_the_images_filesystem_label_is_unfit() {
 }
 
 #[test]
-fn only_ext_and_vfat_partitions_can_be_captured() {
+fn only_ext_vfat_and_btrfs_partitions_can_be_captured() {
     let host = host_with(
         4,
         vec![
@@ -647,12 +647,13 @@ fn only_ext_and_vfat_partitions_can_be_captured() {
             partition(3, None, Some("ext4"), 1, None),
             partition(4, None, Some("ntfs"), 1, None),
             partition(5, None, None, 1, None),
+            partition(6, None, Some("btrfs"), 1, None),
         ],
     );
 
     let numbers: Vec<i64> = capture_sources(&host).iter().map(|p| p.number).collect();
 
-    assert_eq!(numbers, [1, 3]);
+    assert_eq!(numbers, [1, 3, 6]);
 }
 
 #[test]

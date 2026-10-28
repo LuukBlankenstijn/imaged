@@ -2156,21 +2156,23 @@ async fn a_partition_multicast_needs_a_target_partition_on_every_host() {
 }
 
 #[tokio::test]
-async fn capturing_a_partition_needs_an_inventoried_ext_or_vfat_partition() {
+async fn capturing_a_partition_needs_an_inventoried_partition_with_a_partition_image_filesystem() {
     let (c, _guard) = container().await;
     let mut swap = host_partition(3, 1 << 30, None);
     swap.fstype = Some("swap".into());
+    let mut btrfs = host_partition(4, 1 << 30, None);
+    btrfs.fstype = Some("btrfs".into());
     let host = inventoried_host(
         &c,
         "aa:bb:cc:dd:ee:74",
-        &[host_partition(2, 1 << 30, Some(IMAGE_FS_UUID)), swap],
+        &[host_partition(2, 1 << 30, Some(IMAGE_FS_UUID)), swap, btrfs],
     )
     .await;
-    let capture = |partition: &str| {
+    let capture = |name: &str, partition: &str| {
         core::di::scope(
             c.clone(),
             crate::images::create_image(model::CreateImageRequest {
-                name: "root".into(),
+                name: name.into(),
                 host_id: host,
                 partition: Some(partition.into()),
             }),
@@ -2178,18 +2180,17 @@ async fn capturing_a_partition_needs_an_inventoried_ext_or_vfat_partition() {
     };
 
     for refused in ["missing", "00000003-part"] {
-        let err = capture(refused).await.unwrap_err();
+        let err = capture("root", refused).await.unwrap_err();
         assert!(matches!(err, AppError::FailedPrecondition(_)), "{err:?}");
     }
     assert!(c.image_repo.get_all().await.unwrap().is_empty());
 
-    let captured = capture("00000002-part").await.unwrap();
-    assert_eq!(captured.image.kind, model::ImageKind::Partition);
-    assert_eq!(captured.task.r#type, model::TaskType::Capture);
-    assert_eq!(
-        captured.task.hosts[0].partuuid.as_deref(),
-        Some("00000002-part")
-    );
-    let stored = c.task_repo.get(captured.task.id).await.unwrap();
-    assert_eq!(stored.task_type, TaskType::CapturePartition);
+    for (name, partuuid) in [("root", "00000002-part"), ("data", "00000004-part")] {
+        let captured = capture(name, partuuid).await.unwrap();
+        assert_eq!(captured.image.kind, model::ImageKind::Partition);
+        assert_eq!(captured.task.r#type, model::TaskType::Capture);
+        assert_eq!(captured.task.hosts[0].partuuid.as_deref(), Some(partuuid));
+        let stored = c.task_repo.get(captured.task.id).await.unwrap();
+        assert_eq!(stored.task_type, TaskType::CapturePartition);
+    }
 }

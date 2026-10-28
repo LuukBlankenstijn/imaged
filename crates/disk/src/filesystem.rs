@@ -9,6 +9,7 @@ pub enum Filesystem {
     Ext3,
     Ext4,
     Vfat,
+    Btrfs,
     Swap,
 }
 
@@ -27,6 +28,7 @@ impl Filesystem {
             Self::Ext3 => "ext3",
             Self::Ext4 => "ext4",
             Self::Vfat => "vfat",
+            Self::Btrfs => "btrfs",
             Self::Swap => "swap",
         }
     }
@@ -41,6 +43,7 @@ impl FromStr for Filesystem {
             "ext3" => Self::Ext3,
             "ext4" => Self::Ext4,
             "vfat" | "fat32" | "fat16" => Self::Vfat,
+            "btrfs" => Self::Btrfs,
             "swap" => Self::Swap,
             other => bail!("filesystem not supported: {other}"),
         })
@@ -82,8 +85,16 @@ mod tests {
     }
 
     #[test]
+    fn btrfs_parses_and_displays_by_name() {
+        let parsed: Filesystem = "btrfs".parse().unwrap();
+        assert_eq!(parsed, Filesystem::Btrfs);
+        assert!(!parsed.is_ext());
+        assert_eq!(parsed.to_string(), "btrfs");
+    }
+
+    #[test]
     fn unmapped_filesystems_are_rejected() {
-        for fstype in ["ntfs", "xfs", "btrfs", "swsuspend", "crypto_LUKS", ""] {
+        for fstype in ["ntfs", "xfs", "swsuspend", "crypto_LUKS", ""] {
             let e = fstype.parse::<Filesystem>().unwrap_err();
             assert_eq!(e.to_string(), format!("filesystem not supported: {fstype}"));
         }
@@ -91,7 +102,7 @@ mod tests {
 
     #[test]
     fn filesystem_names_are_case_sensitive() {
-        for fstype in ["EXT4", "Ext4", "VFAT"] {
+        for fstype in ["EXT4", "Ext4", "VFAT", "BTRFS"] {
             let e = fstype.parse::<Filesystem>().unwrap_err();
             assert_eq!(e.to_string(), format!("filesystem not supported: {fstype}"));
         }

@@ -8,10 +8,10 @@
     configureFlags = [
       "--enable-extfs"
       "--enable-fat"
+      "--enable-btrfs"
       "--disable-ntfs"
       "--enable-pkg-config-static"
       "--disable-xfs"
-      "--disable-btrfs"
       "--disable-f2fs"
       "--disable-nilfs2"
       "--disable-minix"

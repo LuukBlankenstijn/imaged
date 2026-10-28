@@ -8,6 +8,7 @@ use tokio::process::Command;
 const E2FSCK_CONFIG: &str = "/etc/e2fsck.conf";
 const E2FSCK_REPAIRED_REBOOT: i32 = 2;
 const FSCK_FAT_REPAIRED: i32 = 1;
+const BTRFS_CHECK_CLEAN: i32 = 0;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BlockDevice {
@@ -223,6 +224,11 @@ pub async fn repair_filesystem(partition: &PartitionTarget) -> Result<()> {
             let mut command = Command::new("e2fsck");
             command.env("E2FSCK_CONFIG", E2FSCK_CONFIG).arg("-p");
             (command, E2FSCK_REPAIRED_REBOOT)
+        }
+        Filesystem::Btrfs => {
+            let mut command = Command::new("btrfs");
+            command.args(["check", "--readonly"]);
+            (command, BTRFS_CHECK_CLEAN)
         }
     };
     tracing::info!(device = %partition.device, filesystem = %partition.filesystem, "checking the filesystem before capturing it");
@@ -687,5 +693,101 @@ mod tests {
             ] }"#);
         assert_eq!(disk.partition_target(&image(1, "ext4")).unwrap().size, 111);
         assert_eq!(disk.partition_target(&image(10, "ext4")).unwrap().size, 222);
+    }
+
+    fn btrfs_target(dir: &std::path::Path, name: &str) -> PartitionTarget {
+        let image = dir.join(name);
+        std::fs::File::create(&image)
+            .unwrap()
+            .set_len(128 << 20)
+            .unwrap();
+        let formatted = std::process::Command::new("mkfs.btrfs")
+            .arg("-q")
+            .arg(&image)
+            .status()
+            .unwrap();
+        assert!(formatted.success());
+        PartitionTarget {
+            device: image.to_str().unwrap().to_owned(),
+            number: 1,
+            filesystem: Filesystem::Btrfs,
+            size: 128 << 20,
+            fs_uuid: None,
+            fs_label: None,
+        }
+    }
+
+    fn damage_tree_root(image: &str) -> Vec<(u64, Vec<u8>)> {
+        use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+
+        let run = |program: &str, args: &[&str]| {
+            let output = std::process::Command::new(program)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{program}: {output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let superblock = run("btrfs", &["inspect-internal", "dump-super", image]);
+        let root = superblock
+            .lines()
+            .find_map(|line| line.strip_prefix("root\t"))
+            .unwrap()
+            .trim();
+        let mut file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(image)
+            .unwrap();
+        run("btrfs-map-logical", &["-l", root, image])
+            .lines()
+            .filter(|line| line.starts_with("mirror"))
+            .map(|mirror| {
+                let physical: u64 = mirror
+                    .split_whitespace()
+                    .skip_while(|&word| word != "physical")
+                    .nth(1)
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let offset = physical + 256;
+                file.seek(SeekFrom::Start(offset)).unwrap();
+                file.write_all(b"damaged tree block").unwrap();
+                let mut written = vec![0; 4096];
+                file.seek(SeekFrom::Start(offset)).unwrap();
+                file.read_exact(&mut written).unwrap();
+                (offset, written)
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_btrfs_partition_is_checked_read_only_and_one_with_errors_fails_the_capture() {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+
+        let dir = std::env::temp_dir().join(format!("imaged-agent-btrfs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        repair_filesystem(&btrfs_target(&dir, "clean.img"))
+            .await
+            .expect("a clean btrfs filesystem passes the check");
+
+        let damaged = btrfs_target(&dir, "damaged.img");
+        let blocks = damage_tree_root(&damaged.device);
+        let e = repair_filesystem(&damaged).await.unwrap_err();
+
+        assert!(
+            e.to_string()
+                .starts_with(&format!("{} has filesystem errors", damaged.device)),
+            "{e:#}"
+        );
+        let mut file = std::fs::File::open(&damaged.device).unwrap();
+        for (offset, damage) in blocks {
+            let mut now = vec![0; damage.len()];
+            file.seek(SeekFrom::Start(offset)).unwrap();
+            file.read_exact(&mut now).unwrap();
+            assert_eq!(now, damage, "the check changed the block at {offset}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

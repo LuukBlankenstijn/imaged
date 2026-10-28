@@ -312,6 +312,7 @@ let
             "ext3"
             "ext4"
             "vfat"
+            "btrfs"
           ]
         );
       unsupported = lib.filter (p: !supported p) partitions;
@@ -344,7 +345,7 @@ let
     ++ lib.optionals (lib.length (lib.attrNames disks) == 1 && table.type or null == "gpt") [
       {
         assertion = unsupported == [ ];
-        message = "imaged can image ext2/3/4, vfat and swap partitions and partitions without content, not: ${lib.concatMapStringsSep ", " describe unsupported}";
+        message = "imaged can image ext2/3/4, vfat, btrfs and swap partitions and partitions without content, not: ${lib.concatMapStringsSep ", " describe unsupported}";
       }
       {
         assertion = partitions != [ ] && root.content != null && root.content.mountpoint or null == "/";

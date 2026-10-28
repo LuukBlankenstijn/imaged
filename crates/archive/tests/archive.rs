@@ -469,7 +469,7 @@ async fn manifests_breaking_the_image_kind_rules_are_rejected_before_unpacking()
                 manifest.as_object_mut().unwrap().remove("partition_table");
                 manifest["partitions"][0]["fstype"] = json!("swap");
             },
-            "partition 1 has unsupported fstype `swap`, expected one of ext2, ext3, ext4, vfat",
+            "partition 1 has unsupported fstype `swap`, expected one of ext2, ext3, ext4, vfat, btrfs",
         ),
         (
             |manifest| {
@@ -479,12 +479,19 @@ async fn manifests_breaking_the_image_kind_rules_are_rejected_before_unpacking()
             "script `setup` root partition 2 is not one of the archived partitions",
         ),
     ];
-    let mut accepted: serde_json::Value = serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
-    partition(&mut accepted);
-    Manifest::parse(&serde_json::to_vec(&accepted).unwrap())
-        .unwrap()
-        .checksums()
-        .unwrap();
+    let accepts = |edit: Edit, fstype: &str| {
+        let mut accepted: serde_json::Value =
+            serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
+        edit(&mut accepted);
+        accepted["partitions"][0]["fstype"] = json!(fstype);
+        Manifest::parse(&serde_json::to_vec(&accepted).unwrap())
+            .unwrap()
+            .checksums()
+            .unwrap();
+    };
+    accepts(partition, "ext4");
+    accepts(partition, "btrfs");
+    accepts(|_| {}, "btrfs");
     for (edit, expected) in cases {
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&manifest(&[(1, SMALL)])).unwrap();
@@ -616,7 +623,7 @@ async fn manifests_outside_the_format_are_rejected_before_unpacking() {
     let cases: [(Edit, &str); 5] = [
         (
             |manifest| manifest["partitions"][0]["fstype"] = json!("ntfs"),
-            "partition 1 has unsupported fstype `ntfs`, expected one of ext2, ext3, ext4, vfat, swap",
+            "partition 1 has unsupported fstype `ntfs`, expected one of ext2, ext3, ext4, vfat, btrfs, swap",
         ),
         (
             |manifest| manifest["partitions"] = json!([]),
