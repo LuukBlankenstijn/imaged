@@ -68,15 +68,22 @@ agentBin: ''
   if [ -f "$nouveau" ]; then
     gspFirmware=$(${kmod}/bin/modinfo -F firmware "$nouveau" | ${gawk}/bin/awk -F/ '$3 == "gsp"')
     gspVersion=$(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ 'match($4, /^gsp-.*\.bin$/) { print substr($4, 5, RLENGTH - 8) }' | sort -V | tail -n 1)
-    mkdir -p "$STAGING/lib/firmware"
     printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ '{ print $1 "/" $2 "/" $3 }' | sort -u \
-      | (cd ${linux-firmware}/lib/firmware && while read -r dir; do
+      | (cd ${linux-firmware}/lib/firmware && declare -A staged && while read -r dir; do
+          mkdir -p "$STAGING/lib/firmware/$dir"
           for file in "$dir"/*-"$gspVersion".bin; do
-            if [ -e "$file" ]; then
-              printf '%s\0' "$file"
+            if [ ! -e "$file" ]; then
+              continue
+            fi
+            inode=$(stat -L -c %d:%i "$file")
+            if [ -n "''${staged[$inode]:-}" ]; then
+              ln -sr "$STAGING/lib/firmware/''${staged[$inode]}" "$STAGING/lib/firmware/$file"
+            else
+              cp -L --no-preserve=mode "$file" "$STAGING/lib/firmware/$file"
+              staged[$inode]=$file
             fi
           done
-        done | xargs -0 cp -L --preserve=links --no-preserve=mode --parents -t "$STAGING/lib/firmware")
+        done)
   fi
 
   install -m 0755 ${./init.sh} "$STAGING/init"
