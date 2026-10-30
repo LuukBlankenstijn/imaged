@@ -75,12 +75,12 @@ agentBin: ''
             if [ ! -e "$file" ]; then
               continue
             fi
-            inode=$(stat -L -c %d:%i "$file")
-            if [ -n "''${staged[$inode]:-}" ]; then
-              ln -sr "$STAGING/lib/firmware/''${staged[$inode]}" "$STAGING/lib/firmware/$file"
+            hash=$(sha256sum "$file" | cut -d' ' -f1)
+            if [ -n "''${staged[$hash]:-}" ]; then
+              ln -sr "$STAGING/lib/firmware/''${staged[$hash]}" "$STAGING/lib/firmware/$file"
             else
               cp -L --no-preserve=mode "$file" "$STAGING/lib/firmware/$file"
-              staged[$inode]=$file
+              staged[$hash]=$file
             fi
           done
         done)
