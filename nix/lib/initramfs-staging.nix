@@ -68,22 +68,24 @@ agentBin: ''
   if [ -f "$nouveau" ]; then
     gspFirmware=$(${kmod}/bin/modinfo -F firmware "$nouveau" | ${gawk}/bin/awk -F/ '$3 == "gsp"')
     gspVersion=$(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ 'match($4, /^gsp-.*\.bin$/) { print substr($4, 5, RLENGTH - 8) }' | sort -V | tail -n 1)
-    printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ '{ print $1 "/" $2 "/" $3 }' | sort -u \
-      | (cd ${linux-firmware}/lib/firmware && declare -A staged && while read -r dir; do
-          mkdir -p "$STAGING/lib/firmware/$dir"
-          for file in "$dir"/*-"$gspVersion".bin; do
-            if [ ! -e "$file" ]; then
-              continue
-            fi
-            hash=$(sha256sum "$file" | cut -d' ' -f1)
-            if [ -n "''${staged[$hash]:-}" ]; then
-              ln -sr "$STAGING/lib/firmware/''${staged[$hash]}" "$STAGING/lib/firmware/$file"
-            else
-              cp -L --no-preserve=mode "$file" "$STAGING/lib/firmware/$file"
-              staged[$hash]=$file
-            fi
-          done
-        done)
+    firmware=${linux-firmware}/lib/firmware
+    declare -A staged=()
+    while read -r dir; do
+      mkdir -p "$STAGING/lib/firmware/$dir"
+      for source in "$firmware/$dir"/*-"$gspVersion".bin; do
+        if [ ! -e "$source" ]; then
+          continue
+        fi
+        file="$dir/''${source##*/}"
+        hash=$(sha256sum "$source" | cut -d' ' -f1)
+        if [ -n "''${staged[$hash]:-}" ]; then
+          ln -sr "$STAGING/lib/firmware/''${staged[$hash]}" "$STAGING/lib/firmware/$file"
+        else
+          cp -L --no-preserve=mode "$source" "$STAGING/lib/firmware/$file"
+          staged[$hash]=$file
+        fi
+      done
+    done < <(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ '{ print $1 "/" $2 "/" $3 }' | sort -u)
   fi
 
   install -m 0755 ${./init.sh} "$STAGING/init"
