@@ -95,7 +95,7 @@ pub async fn build_di_container(
     let machine_ip = Arc::default();
     let agent_liveness = AgentLiveness {
         ping_interval: Duration::from_secs(1),
-        timeout: Duration::from_secs(3),
+        timeout: Duration::from_secs(30),
     };
 
     Ok(DIContainer::new(

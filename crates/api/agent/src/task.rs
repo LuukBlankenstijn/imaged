@@ -42,11 +42,6 @@ pub async fn started(
         .image_id
         .ok_or_else(|| AppError::InvalidArgument(format!("Task {task_id} has no image")))?;
     if task.task_type.captures() {
-        if running {
-            return Err(AppError::InvalidArgument(
-                "Task has already started".to_string(),
-            ));
-        }
         let sector_size = sector_size.ok_or_else(|| {
             AppError::InvalidArgument("a capture must report its logical sector size".to_string())
         })?;
@@ -57,6 +52,9 @@ pub async fn started(
         }
         image_service.clear_image_data(image_id).await?;
         image_repo.start_capture(image_id, sector_size).await?;
+        if running {
+            return Ok(());
+        }
     } else if image_repo.get_status(image_id).await? != ImageStatus::Ready {
         return Err(AppError::FailedPrecondition(format!(
             "Image {image_id} is not ready"
