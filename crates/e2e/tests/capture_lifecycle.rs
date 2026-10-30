@@ -179,7 +179,7 @@ async fn capture_happy_path_uploads_and_yields_a_usable_image() {
 }
 
 #[tokio::test]
-async fn starting_a_capture_requires_a_pending_task() {
+async fn a_capture_its_host_starts_again_is_accepted() {
     let s = harness::server().await;
 
     let mac = harness::unique_mac();
@@ -195,7 +195,7 @@ async fn starting_a_capture_requires_a_pending_task() {
     start_capture(s, task_id, &mac).await;
 
     let resp = s.agent_post_empty(&started_uri(task_id), &mac).await;
-    harness::expect_status(resp, StatusCode::BAD_REQUEST).await;
+    harness::expect_status(resp, StatusCode::OK).await;
 }
 
 #[tokio::test]
