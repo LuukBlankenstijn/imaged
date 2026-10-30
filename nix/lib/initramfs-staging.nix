@@ -19,7 +19,7 @@ let
   modules = "${kernel.modules}/lib/modules/${version}";
   excluded = builtins.concatStringsSep "|" [
     "drivers/(media|iio|infiniband|staging|comedi|bluetooth|net/wireless|net/can)/"
-    "drivers/gpu/drm/(amd|radeon|nouveau|i915|xe|panfrost|panthor|lima|etnaviv|v3d|msm)/"
+    "drivers/gpu/drm/(amd|radeon|nouveau|xe|panfrost|panthor|lima|etnaviv|v3d|msm)/"
     "drivers/(md|mtd|hwmon|isdn|accel|vfio|target|nfc|edac|watchdog|leds|w1|fpga|ntb)/"
     "drivers/(thunderbolt|firewire|parport|hte|siox|most|greybus|counter)/"
     "drivers/net/ethernet/(chelsio|qlogic|huawei|cavium|sfc|netronome|pensando|emulex|brocade)/"
