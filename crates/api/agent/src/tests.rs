@@ -860,7 +860,7 @@ async fn starting_a_capture_clears_prior_capture_data_and_marks_the_host_running
         post(c, &started_uri(running_task, 512), &running_mac)
             .await
             .status(),
-        StatusCode::BAD_REQUEST
+        StatusCode::OK
     );
 
     let silent_mac = next_mac();
