@@ -5,6 +5,7 @@
   gawk,
   kmod,
   xz,
+  linux-firmware,
 }:
 
 # Populates the initramfs staging tree at the directory named by the `$STAGING`
@@ -19,7 +20,7 @@ let
   modules = "${kernel.modules}/lib/modules/${version}";
   excluded = builtins.concatStringsSep "|" [
     "drivers/(media|iio|infiniband|staging|comedi|bluetooth|net/wireless|net/can)/"
-    "drivers/gpu/drm/(amd|radeon|nouveau|xe|panfrost|panthor|lima|etnaviv|v3d|msm)/"
+    "drivers/gpu/drm/(amd|radeon|xe|panfrost|panthor|lima|etnaviv|v3d|msm)/"
     "drivers/(md|mtd|hwmon|isdn|accel|vfio|target|nfc|edac|watchdog|leds|w1|fpga|ntb)/"
     "drivers/(thunderbolt|firewire|parport|hte|siox|most|greybus|counter)/"
     "drivers/net/ethernet/(chelsio|qlogic|huawei|cavium|sfc|netronome|pensando|emulex|brocade)/"
@@ -62,6 +63,21 @@ agentBin: ''
   chmod -R u+w "$STAGING/lib/modules"
   find "$STAGING/lib/modules" -name '*.ko.xz' -exec ${xz}/bin/xz -d {} +
   ${kmod}/bin/depmod -b "$STAGING" ${version}
+
+  nouveau="$STAGING/lib/modules/${version}/kernel/drivers/gpu/drm/nouveau/nouveau.ko"
+  if [ -f "$nouveau" ]; then
+    gspFirmware=$(${kmod}/bin/modinfo -F firmware "$nouveau" | ${gawk}/bin/awk -F/ '$3 == "gsp"')
+    gspVersion=$(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ 'match($4, /^gsp-.*\.bin$/) { print substr($4, 5, RLENGTH - 8) }' | sort -V | tail -n 1)
+    mkdir -p "$STAGING/lib/firmware"
+    printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ '{ print $1 "/" $2 "/" $3 }' | sort -u \
+      | (cd ${linux-firmware}/lib/firmware && while read -r dir; do
+          for file in "$dir"/*-"$gspVersion".bin; do
+            if [ -e "$file" ]; then
+              printf '%s\0' "$file"
+            fi
+          done
+        done | xargs -0 cp -L --preserve=links --no-preserve=mode --parents -t "$STAGING/lib/firmware")
+  fi
 
   install -m 0755 ${./init.sh} "$STAGING/init"
   install -m 0644 ${./mdev.conf} "$STAGING/etc/mdev.conf"

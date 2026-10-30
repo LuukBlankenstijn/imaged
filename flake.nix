@@ -57,7 +57,7 @@
             };
             initramfsStaging = import ./nix/lib/initramfs-staging.nix {
               inherit (targetPkgs) pkgsStatic;
-              inherit (pkgs) gawk kmod xz;
+              inherit (pkgs) gawk kmod xz linux-firmware;
               inherit partclone kernel;
             };
           in
