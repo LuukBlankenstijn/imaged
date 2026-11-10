@@ -20,7 +20,7 @@ struct BuiltIn {
 }
 
 #[cfg(feature = "x86_64")]
-const X86_64: BuiltIn = BuiltIn {
+static X86_64: BuiltIn = BuiltIn {
     kernel: include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/x86_64/vmlinuz")),
     initramfs: include_bytes!(concat!(
         env!("IMAGED_BOOT_ASSETS_DIR"),
@@ -33,7 +33,7 @@ const X86_64: BuiltIn = BuiltIn {
 };
 
 #[cfg(feature = "arm64")]
-const ARM64: BuiltIn = BuiltIn {
+static ARM64: BuiltIn = BuiltIn {
     kernel: include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/arm64/vmlinuz")),
     initramfs: include_bytes!(concat!(
         env!("IMAGED_BOOT_ASSETS_DIR"),
