@@ -1,31 +1,28 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
+};
 
 use axum::{
     Router,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, RawQuery, State},
     http::{Response, StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
 use derive_more::Display;
+use futures_lite::stream;
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 
-static X86_64_VMLINUZ: &[u8] =
-    include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/x86_64/vmlinuz"));
-static X86_64_INITRAMFS: &[u8] = include_bytes!(concat!(
-    env!("IMAGED_BOOT_ASSETS_DIR"),
-    "/x86_64/initramfs.cpio.xz"
-));
-static ARM64_VMLINUZ: &[u8] =
-    include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/arm64/vmlinuz"));
-static ARM64_INITRAMFS: &[u8] = include_bytes!(concat!(
-    env!("IMAGED_BOOT_ASSETS_DIR"),
-    "/arm64/initramfs.cpio.xz"
-));
+use crate::{BootClient, BootFiles, files::Profile};
 
-#[derive(Clone, Copy, Deserialize, Display)]
-pub(crate) enum Arch {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Display)]
+pub enum Arch {
     #[serde(rename = "x86_64", alias = "i386")]
     #[display("x86_64")]
     X86_64,
@@ -37,8 +34,8 @@ pub(crate) enum Arch {
 impl Arch {
     fn serial_console(self) -> &'static str {
         match self {
-            Arch::X86_64 => "ttyS0",
-            Arch::Arm64 => "ttyAMA0",
+            Arch::X86_64 => "ttyS0,115200n8",
+            Arch::Arm64 => "ttyAMA0,115200n8",
         }
     }
 
@@ -48,115 +45,216 @@ impl Arch {
             Arch::Arm64 => "earlycon",
         }
     }
+}
 
-    pub(crate) fn vmlinuz(self) -> &'static [u8] {
-        match self {
-            Arch::X86_64 => X86_64_VMLINUZ,
-            Arch::Arm64 => ARM64_VMLINUZ,
-        }
-    }
+impl FromStr for Arch {
+    type Err = ();
 
-    pub(crate) fn initramfs(self) -> &'static [u8] {
-        match self {
-            Arch::X86_64 => X86_64_INITRAMFS,
-            Arch::Arm64 => ARM64_INITRAMFS,
+    fn from_str(arch: &str) -> Result<Self, ()> {
+        match arch {
+            "x86_64" | "i386" => Ok(Arch::X86_64),
+            "arm64" => Ok(Arch::Arm64),
+            _ => Err(()),
         }
     }
 }
 
-#[derive(Deserialize)]
-struct BootParams {
-    arch: Arch,
-    product: Option<String>,
-    manufacturer: Option<String>,
+#[derive(Clone)]
+struct Pxe {
+    base: Arc<str>,
+    files: Arc<BootFiles>,
+}
+
+fn boot_client(ip: IpAddr, query: &str) -> Option<BootClient> {
+    let mut params = HashMap::new();
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        params.insert(
+            key,
+            percent_decode_str(value).decode_utf8_lossy().into_owned(),
+        );
+    }
+    let mut client = BootClient::new(params.get("arch")?.parse().ok()?, ip);
+    client.mac = params.get("mac").and_then(|mac| mac.parse().ok());
+    let mut text = |key| {
+        params
+            .remove(key)
+            .filter(|value: &String| !value.trim().is_empty())
+    };
+    client.manufacturer = text("manufacturer");
+    client.product = text("product");
+    Some(client)
 }
 
 /// This ipxe script determines the machine type and chains into the manifest handler
-async fn bootstrap_ipxe(State(base): State<Arc<str>>) -> impl IntoResponse {
+async fn bootstrap_ipxe(State(Pxe { base, .. }): State<Pxe>) -> impl IntoResponse {
     let body = format!(
         "#!ipxe\n\
-         chain {base}/boot/manifest.ipxe?arch=${{buildarch}}&product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
+         chain {base}/boot/manifest.ipxe?arch=${{buildarch}}&mac=${{netX/mac}}&product=${{smbios/product:uristring}}&manufacturer=${{smbios/manufacturer:uristring}}\n"
     );
 
     ([("content-type", "text/plain; charset=utf-8")], body)
 }
 
 async fn manifest_ipxe(
-    State(base): State<Arc<str>>,
-    Query(params): Query<BootParams>,
-) -> impl IntoResponse {
-    let product = params.product.as_deref().unwrap_or("");
-    let manufacturer = params.manufacturer.as_deref().unwrap_or("");
+    State(Pxe { base, files }): State<Pxe>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    RawQuery(query): RawQuery,
+) -> Response<Body> {
+    let Some(client) = boot_client(peer.ip(), query.as_deref().unwrap_or("")) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "manifest.ipxe needs arch: x86_64, i386 or arm64",
+        )
+            .into_response();
+    };
 
+    let product = client.product.as_deref().unwrap_or("");
+    let manufacturer = client.manufacturer.as_deref().unwrap_or("");
     let is_vm = product.contains("QEMU")
         || product.contains("Standard PC")
         || manufacturer.contains("QEMU");
 
-    let serial = format!("console={},115200n8", params.arch.serial_console());
+    let arch = client.arch;
+    let (name, profile) = files.select(&client);
+    let serial = format!(
+        "console={}",
+        profile.console.as_deref().unwrap_or(arch.serial_console())
+    );
     let console_args = if is_vm {
         format!("console=tty0 {serial}")
     } else {
         format!("{serial} console=tty0")
     };
+    tracing::info!(?client, profile = %name, console_args = %console_args, "boot profile selected");
 
-    tracing::info!(console_args = %console_args, "Selected console line");
-
-    let arch = params.arch;
     let early_console = arch.early_console();
     let body = format!(
         "#!ipxe\n\
          set base {base}\n\
-         kernel ${{base}}/boot/{arch}/vmlinuz initrd=initramfs.cpio.xz img_srv=${{base}} {console_args} {early_console} loglevel=8\n\
-         initrd ${{base}}/boot/{arch}/initramfs.cpio.xz\n\
+         kernel ${{base}}/boot/profile/{name}/vmlinuz initrd=initramfs.cpio.xz img_srv=${{base}} {console_args} {early_console} loglevel=8\n\
+         initrd ${{base}}/boot/profile/{name}/initramfs.cpio.xz\n\
          boot\n",
     );
 
-    ([("content-type", "text/plain; charset=utf-8")], body)
+    ([("content-type", "text/plain; charset=utf-8")], body).into_response()
 }
 
-async fn serve_vmlinuz(Path(arch): Path<Arch>) -> impl IntoResponse {
-    let vmlinuz = arch.vmlinuz();
+fn selected<'a>(files: &'a BootFiles, arch: &str, peer: SocketAddr) -> Option<&'a Profile> {
+    let client = BootClient::new(arch.parse().ok()?, peer.ip());
+    let (name, profile) = files.select(&client);
+    tracing::info!(?client, profile = %name, "boot profile selected for a fixed arch path");
+    Some(profile)
+}
+
+fn kernel_response(profile: Option<&Profile>) -> Response<Body> {
+    let Some(profile) = profile else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let kernel = profile.kernel.clone();
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(header::CONTENT_LENGTH, vmlinuz.len().to_string())
-        .body(Body::from(vmlinuz))
+        .header(header::CONTENT_LENGTH, kernel.len().to_string())
+        .body(Body::from(kernel))
         .unwrap()
 }
 
-async fn serve_initramfs(Path(arch): Path<Arch>) -> impl IntoResponse {
-    let initramfs = arch.initramfs();
+fn initramfs_response(profile: Option<&Profile>) -> Response<Body> {
+    let Some(profile) = profile else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let parts = profile
+        .initramfs
+        .clone()
+        .into_iter()
+        .map(Ok::<_, Infallible>);
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/x-xz")
-        .header(header::CONTENT_LENGTH, initramfs.len().to_string())
-        .body(Body::from(initramfs))
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_LENGTH, profile.initramfs_size().to_string())
+        .body(Body::from_stream(stream::iter(parts)))
         .unwrap()
 }
 
-pub fn router(public_url: &str) -> Router {
+async fn arch_vmlinuz(
+    State(pxe): State<Pxe>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(arch): Path<String>,
+) -> Response<Body> {
+    kernel_response(selected(&pxe.files, &arch, peer))
+}
+
+async fn arch_initramfs(
+    State(pxe): State<Pxe>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(arch): Path<String>,
+) -> Response<Body> {
+    initramfs_response(selected(&pxe.files, &arch, peer))
+}
+
+async fn profile_vmlinuz(State(pxe): State<Pxe>, Path(name): Path<String>) -> Response<Body> {
+    kernel_response(pxe.files.profile(&name))
+}
+
+async fn profile_initramfs(State(pxe): State<Pxe>, Path(name): Path<String>) -> Response<Body> {
+    initramfs_response(pxe.files.profile(&name))
+}
+
+pub fn router(public_url: &str, files: Arc<BootFiles>) -> Router {
     Router::new()
         .route("/boot/boot.ipxe", get(bootstrap_ipxe))
         .route("/boot/manifest.ipxe", get(manifest_ipxe))
-        .route("/boot/{arch}/vmlinuz", get(serve_vmlinuz))
-        .route("/boot/{arch}/initramfs.cpio.xz", get(serve_initramfs))
-        .with_state(Arc::from(public_url.trim_end_matches('/')))
+        .route("/boot/{arch}/vmlinuz", get(arch_vmlinuz))
+        .route("/boot/{arch}/initramfs.cpio.xz", get(arch_initramfs))
+        .route("/boot/profile/{profile}/vmlinuz", get(profile_vmlinuz))
+        .route(
+            "/boot/profile/{profile}/initramfs.cpio.xz",
+            get(profile_initramfs),
+        )
+        .with_state(Pxe {
+            base: Arc::from(public_url.trim_end_matches('/')),
+            files,
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ProfileName, ProfileSelector, ProfileSources, Sources,
+        files::tests::{CLIENT_IP, Fixed, TempFile, name, profile_with},
+    };
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
     const PUBLIC_URL: &str = "https://imaged.example:8443";
 
+    async fn built_in() -> Arc<BootFiles> {
+        Arc::new(BootFiles::load(&Sources::default(), None).await.unwrap())
+    }
+
+    async fn get_from(router: Router, uri: &str) -> Response<Body> {
+        let request = Request::builder()
+            .uri(uri)
+            .extension(ConnectInfo(SocketAddr::new(CLIENT_IP, 4011)))
+            .body(Body::empty())
+            .unwrap();
+        router.oneshot(request).await.unwrap()
+    }
+
     async fn get(uri: &str) -> Response<Body> {
-        router(PUBLIC_URL)
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        get_from(router(PUBLIC_URL, built_in().await), uri).await
+    }
+
+    async fn text(router: Router, uri: &str) -> String {
+        let resp = get_from(router, uri).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
-            .unwrap()
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
     }
 
     async fn manifest_body(uri: &str) -> String {
@@ -179,21 +277,21 @@ mod tests {
             "missing boot line: {script}"
         );
         assert!(
-            script.contains(&format!("/boot/{arch}/vmlinuz ")),
+            script.contains(&format!("/boot/profile/{arch}/vmlinuz ")),
             "missing {arch} kernel url: {script}"
         );
         assert!(
-            script.contains(&format!("/boot/{arch}/initramfs.cpio.xz\n")),
+            script.contains(&format!("/boot/profile/{arch}/initramfs.cpio.xz\n")),
             "missing {arch} initramfs url: {script}"
         );
     }
 
-    async fn assert_serves(uri: &str, content_type: &str, asset: &[u8]) {
-        let resp = get(uri).await;
+    async fn assert_serves(router: Router, uri: &str, asset: &[u8]) {
+        let resp = get_from(router, uri).await;
         assert_eq!(resp.status(), StatusCode::OK, "{uri}");
         assert_eq!(
             resp.headers().get(header::CONTENT_TYPE).unwrap(),
-            content_type
+            "application/octet-stream"
         );
         assert_eq!(
             resp.headers().get(header::CONTENT_LENGTH).unwrap(),
@@ -206,11 +304,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_chains_into_the_manifest_at_the_public_url_with_the_ipxe_build_arch() {
+    async fn bootstrap_chains_into_the_manifest_with_the_build_arch_and_booting_interface() {
         let script = manifest_body("/boot/boot.ipxe").await;
         assert!(
             script.contains(&format!(
-                "chain {PUBLIC_URL}/boot/manifest.ipxe?arch=${{buildarch}}&"
+                "chain {PUBLIC_URL}/boot/manifest.ipxe?arch=${{buildarch}}&mac=${{netX/mac}}&"
             )),
             "{script}"
         );
@@ -218,15 +316,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_trailing_slash_on_the_public_url_does_not_double_the_path_separator() {
-        let resp = router(&format!("{PUBLIC_URL}/"))
-            .oneshot(
-                Request::builder()
-                    .uri("/boot/manifest.ipxe?arch=arm64")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = get_from(
+            router(&format!("{PUBLIC_URL}/"), built_in().await),
+            "/boot/manifest.ipxe?arch=arm64&ip=192.168.213.100",
+        )
+        .await;
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -236,7 +330,10 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_qemu_product() {
-        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&product=QEMU%20Standard").await;
+        let script = manifest_body(
+            "/boot/manifest.ipxe?arch=x86_64&ip=192.168.213.100&product=QEMU%20Standard",
+        )
+        .await;
         assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
@@ -246,8 +343,10 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_standard_pc_product() {
-        let script =
-            manifest_body("/boot/manifest.ipxe?arch=x86_64&product=Standard%20PC%20(i440FX)").await;
+        let script = manifest_body(
+            "/boot/manifest.ipxe?arch=x86_64&ip=192.168.213.100&product=Standard%20PC%20(i440FX)",
+        )
+        .await;
         assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
@@ -257,7 +356,9 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_vm_console_line_for_a_qemu_manufacturer() {
-        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&manufacturer=QEMU").await;
+        let script =
+            manifest_body("/boot/manifest.ipxe?arch=x86_64&ip=192.168.213.100&manufacturer=QEMU")
+                .await;
         assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=tty0 console=ttyS0,115200n8"),
@@ -267,7 +368,9 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_selects_the_physical_console_line_by_default() {
-        let script = manifest_body("/boot/manifest.ipxe?arch=x86_64&product=Dell%20Inc.").await;
+        let script =
+            manifest_body("/boot/manifest.ipxe?arch=x86_64&ip=192.168.213.100&product=Dell%20Inc.")
+                .await;
         assert_common_ipxe_invariants(&script, "x86_64");
         assert!(
             script.contains("console=ttyS0,115200n8 console=tty0"),
@@ -277,13 +380,17 @@ mod tests {
 
     #[tokio::test]
     async fn manifest_boots_bios_ipxe_into_the_x86_64_kernel() {
-        let script = manifest_body("/boot/manifest.ipxe?arch=i386&product=Dell%20Inc.").await;
+        let script =
+            manifest_body("/boot/manifest.ipxe?arch=i386&ip=192.168.213.100&product=Dell%20Inc.")
+                .await;
         assert_common_ipxe_invariants(&script, "x86_64");
     }
 
     #[tokio::test]
     async fn manifest_boots_arm64_into_the_arm64_kernel_on_the_pl011_console() {
-        let script = manifest_body("/boot/manifest.ipxe?arch=arm64&manufacturer=QEMU").await;
+        let script =
+            manifest_body("/boot/manifest.ipxe?arch=arm64&ip=192.168.213.100&manufacturer=QEMU")
+                .await;
         assert_common_ipxe_invariants(&script, "arm64");
         assert!(
             script.contains("console=tty0 console=ttyAMA0,115200n8 earlycon "),
@@ -292,40 +399,156 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manifest_rejects_an_unknown_arch() {
-        let resp = get("/boot/manifest.ipxe?arch=riscv64").await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    async fn manifest_rejects_a_missing_or_unknown_arch() {
+        for uri in [
+            "/boot/manifest.ipxe?arch=riscv64",
+            "/boot/manifest.ipxe?product=OptiPlex",
+            "/boot/manifest.ipxe",
+        ] {
+            assert_eq!(get(uri).await.status(), StatusCode::BAD_REQUEST, "{uri}");
+        }
     }
 
     #[tokio::test]
-    async fn serve_vmlinuz_returns_the_kernel_built_for_the_requested_arch() {
-        assert_serves(
-            "/boot/x86_64/vmlinuz",
-            "application/octet-stream",
-            X86_64_VMLINUZ,
-        )
-        .await;
-        assert_serves(
-            "/boot/arm64/vmlinuz",
-            "application/octet-stream",
-            ARM64_VMLINUZ,
-        )
-        .await;
-    }
+    async fn profile_paths_serve_that_profile_and_arch_paths_ask_the_selector() {
+        let kernel = TempFile::new("pxe-kernel", b"custom arm64 kernel");
+        let extra = TempFile::new("pxe-extra-initrd", b"extra x86_64 initrd");
+        let mut sources = Sources::default();
+        sources
+            .profiles
+            .insert(name("arm64"), profile_with(Arch::Arm64, Some(&kernel), &[]));
+        sources
+            .profiles
+            .insert(name("box"), profile_with(Arch::X86_64, None, &[&extra]));
+        let files = Arc::new(
+            BootFiles::load(&sources, Some(Arc::new(Fixed(Some("box")))))
+                .await
+                .unwrap(),
+        );
+        let router = router(PUBLIC_URL, files.clone());
+        let box_initramfs = files.profile("box").unwrap().initramfs.concat();
+        let x86_64_initramfs = files.profile("x86_64").unwrap().initramfs.concat();
+        assert!(box_initramfs.ends_with(b"extra x86_64 initrd\0"));
 
-    #[tokio::test]
-    async fn serve_initramfs_returns_the_initramfs_built_for_the_requested_arch() {
         assert_serves(
+            router.clone(),
+            "/boot/profile/box/initramfs.cpio.xz",
+            &box_initramfs,
+        )
+        .await;
+        assert_serves(
+            router.clone(),
+            "/boot/profile/x86_64/initramfs.cpio.xz",
+            &x86_64_initramfs,
+        )
+        .await;
+        assert_serves(
+            router.clone(),
             "/boot/x86_64/initramfs.cpio.xz",
-            "application/x-xz",
-            X86_64_INITRAMFS,
+            &box_initramfs,
         )
         .await;
         assert_serves(
-            "/boot/arm64/initramfs.cpio.xz",
-            "application/x-xz",
-            ARM64_INITRAMFS,
+            router.clone(),
+            "/boot/arm64/vmlinuz",
+            b"custom arm64 kernel",
         )
         .await;
+        assert_serves(
+            router.clone(),
+            "/boot/profile/arm64/vmlinuz",
+            b"custom arm64 kernel",
+        )
+        .await;
+        for missing in [
+            "/boot/profile/unknown/vmlinuz",
+            "/boot/profile/a%20b/initramfs.cpio.xz",
+            "/boot/box/vmlinuz",
+            "/boot/riscv64/vmlinuz",
+        ] {
+            let resp = get_from(router.clone(), missing).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{missing}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_manifest_points_both_files_at_the_profile_the_selector_picked() {
+        let mut sources = Sources::default();
+        let mut jetson = ProfileSources::new(Arch::Arm64);
+        jetson.console = Some("ttyTCU0,115200n8".to_string());
+        sources.profiles.insert(name("jetson"), jetson);
+        sources.products.insert(
+            "NVIDIA Jetson Orin Nano Developer Kit".to_string(),
+            name("jetson"),
+        );
+        let files = Arc::new(BootFiles::load(&sources, None).await.unwrap());
+        let router = router(PUBLIC_URL, files);
+
+        let jetson = text(
+            router.clone(),
+            "/boot/manifest.ipxe?arch=arm64&ip=192.168.213.100&mac=48:b0:2d:aa:bb:cc&product=NVIDIA%20Jetson%20Orin%20Nano%20Developer%20Kit&manufacturer=NVIDIA",
+        )
+        .await;
+        assert!(
+            jetson.contains("kernel ${base}/boot/profile/jetson/vmlinuz "),
+            "{jetson}"
+        );
+        assert!(
+            jetson.contains("initrd ${base}/boot/profile/jetson/initramfs.cpio.xz\n"),
+            "{jetson}"
+        );
+        assert!(
+            jetson.contains("console=ttyTCU0,115200n8 console=tty0"),
+            "{jetson}"
+        );
+
+        let other = text(
+            router,
+            "/boot/manifest.ipxe?arch=x86_64&ip=192.168.213.100&product=NVIDIA%20Jetson%20Orin%20Nano%20Developer%20Kit",
+        )
+        .await;
+        assert_common_ipxe_invariants(&other, "x86_64");
+    }
+
+    #[tokio::test]
+    async fn the_selector_sees_what_the_client_reported() {
+        #[derive(Debug, Default)]
+        struct Recording(std::sync::Mutex<Vec<BootClient>>);
+        impl ProfileSelector for Recording {
+            fn profile(&self, client: &BootClient) -> Option<ProfileName> {
+                self.0.lock().unwrap().push(client.clone());
+                None
+            }
+        }
+        let selector = Arc::new(Recording::default());
+        let files = BootFiles::load(&Sources::default(), Some(selector.clone()))
+            .await
+            .unwrap();
+        let router = router(PUBLIC_URL, Arc::new(files));
+
+        text(
+            router.clone(),
+            "/boot/manifest.ipxe?arch=i386&ip=192.168.213.100&mac=52-54-00-AB-CD-EF&product=Standard%20PC%20(Q35%20+%20ICH9,%202009)&manufacturer=Dell%20Inc.%26Co",
+        )
+        .await;
+        text(
+            router,
+            "/boot/manifest.ipxe?arch=arm64&ip=192.168.213.100&mac=&product=&manufacturer=",
+        )
+        .await;
+
+        let seen = selector.0.lock().unwrap();
+        assert_eq!(seen[0].arch, Arch::X86_64);
+        assert_eq!(seen[0].ip, CLIENT_IP);
+        assert_eq!(
+            seen[0].mac.map(|mac| mac.to_string()).as_deref(),
+            Some("52:54:00:ab:cd:ef")
+        );
+        assert_eq!(
+            seen[0].product.as_deref(),
+            Some("Standard PC (Q35 + ICH9, 2009)")
+        );
+        assert_eq!(seen[0].manufacturer.as_deref(), Some("Dell Inc.&Co"));
+        assert_eq!(seen[1], BootClient::new(Arch::Arm64, CLIENT_IP));
     }
 }

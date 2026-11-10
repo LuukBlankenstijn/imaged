@@ -16,6 +16,10 @@ use std::{
 use axum::{Router, http::Uri, routing::get};
 use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
 pub use imaged_api_ui::model::{Image, TaskProgress};
+pub use imaged_boot::{
+    Arch, BootClient, BootFiles, ProfileName, ProfileSelector,
+    ProfileSources as BootProfileSources, Sources as BootSources,
+};
 use imaged_core::{
     self as core,
     di::{DIContainer, MachineIp},
@@ -51,6 +55,8 @@ pub struct Listeners {
     pub tftp: Option<SocketAddr>,
     pub proxy: Option<SocketAddr>,
     pub dashboard: Dashboard,
+    pub boot: BootSources,
+    pub profile_selector: Option<Arc<dyn ProfileSelector>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +86,8 @@ impl Listeners {
             tftp: None,
             proxy: None,
             dashboard: Dashboard::Off,
+            boot: BootSources::default(),
+            profile_selector: None,
         }
     }
 }
@@ -138,7 +146,9 @@ impl Imaged {
         validate_public_url(&listeners.public_url)?;
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
-        let machine_router = machine_router(&listeners.public_url);
+        let boot_files =
+            Arc::new(BootFiles::load(&listeners.boot, listeners.profile_selector.clone()).await?);
+        let machine_router = machine_router(&listeners.public_url, boot_files.clone());
         let (machine_router, separate_dashboard) = match listeners.dashboard {
             Dashboard::Off => (machine_router, None),
             Dashboard::OnMachineListener => (machine_router.merge(dashboard_router()?), None),
@@ -154,7 +164,7 @@ impl Imaged {
             None => None,
         };
         let tftp = match listeners.tftp {
-            Some(address) => Some(imaged_boot::tftp::bind(address).await?),
+            Some(address) => Some(imaged_boot::tftp::bind(address, boot_files).await?),
             None => None,
         };
         let proxy = match listeners.proxy {
@@ -326,8 +336,8 @@ impl Drop for ServingClaim {
 }
 
 #[doc(hidden)]
-pub fn machine_router(public_url: &str) -> Router {
-    imaged_boot::pxe::router(public_url).merge(imaged_api_agent::router())
+pub fn machine_router(public_url: &str, boot_files: Arc<BootFiles>) -> Router {
+    imaged_boot::pxe::router(public_url, boot_files).merge(imaged_api_agent::router())
 }
 
 fn validate_public_url(public_url: &str) -> io::Result<()> {

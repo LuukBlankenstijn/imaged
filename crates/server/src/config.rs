@@ -7,7 +7,7 @@ use std::{
     str::FromStr,
 };
 
-use imaged_server::{Config, Dashboard, Listeners};
+use imaged_server::{BootSources, Config, Dashboard, Listeners};
 use serde::{Deserialize, Deserializer, de::Error as _};
 use toml_file_refs::ConfigLoader;
 use tracing::level_filters::LevelFilter;
@@ -31,6 +31,8 @@ pub struct FileConfig {
     listen: Listen,
     #[serde(default)]
     script_variables: BTreeMap<String, String>,
+    #[serde(default)]
+    boot: BootSources,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +133,7 @@ impl FileConfig {
         listeners.dashboard = self.listen.dashboard;
         listeners.tftp = self.listen.tftp;
         listeners.proxy = self.listen.proxy;
+        listeners.boot = self.boot;
         Ok((config, listeners))
     }
 }
@@ -138,6 +141,7 @@ impl FileConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use imaged_server::{Arch, ProfileName};
 
     struct ConfigFile(PathBuf);
 
@@ -246,5 +250,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.script_proxy.as_deref(), Some("http://10.0.0.1:3128"));
+    }
+
+    #[test]
+    fn boot_profiles_and_products_come_from_the_boot_section() {
+        let (_, listeners) = server(
+            "boot",
+            "public_url = \"http://10.0.0.1:8080\"\n\
+             [boot.profiles.x86_64]\n\
+             arch = \"x86_64\"\n\
+             initrds = [\"/srv/display-intel.cpio.xz\", \"/srv/display-nvidia.cpio.xz\"]\n\
+             [boot.profiles.jetson-orin-nano]\n\
+             arch = \"arm64\"\n\
+             kernel = \"/srv/jetson/Image\"\n\
+             initrds = [\"/srv/jetson/modules.cpio.xz\"]\n\
+             console = \"ttyTCU0,115200n8\"\n\
+             [boot.products]\n\
+             \"NVIDIA Jetson Orin Nano Developer Kit\" = \"jetson-orin-nano\"",
+        )
+        .unwrap();
+
+        let profile = |name: &str| &listeners.boot.profiles[&name.parse::<ProfileName>().unwrap()];
+        let x86_64 = profile("x86_64");
+        assert_eq!(x86_64.arch, Arch::X86_64);
+        assert_eq!(x86_64.kernel, None);
+        assert_eq!(
+            x86_64.initrds,
+            [
+                PathBuf::from("/srv/display-intel.cpio.xz"),
+                PathBuf::from("/srv/display-nvidia.cpio.xz")
+            ]
+        );
+        let jetson = profile("jetson-orin-nano");
+        assert_eq!(jetson.arch, Arch::Arm64);
+        assert_eq!(jetson.kernel, Some(PathBuf::from("/srv/jetson/Image")));
+        assert_eq!(jetson.console.as_deref(), Some("ttyTCU0,115200n8"));
+        assert_eq!(
+            listeners.boot.products["NVIDIA Jetson Orin Nano Developer Kit"].as_str(),
+            "jetson-orin-nano"
+        );
+    }
+
+    #[test]
+    fn malformed_boot_profiles_are_rejected() {
+        for (name, boot, expected) in [
+            (
+                "bad-arch",
+                "[boot.profiles.box]\narch = \"riscv64\"",
+                "riscv64",
+            ),
+            ("no-arch", "[boot.profiles.box]\ninitrds = []", "arch"),
+            (
+                "bad-name",
+                "[boot.profiles.\"a b\"]\narch = \"arm64\"",
+                "\"a b\"",
+            ),
+            ("old-section", "[boot.x86_64]\ninitrds = []", "x86_64"),
+        ] {
+            let error = load_error(
+                name,
+                &format!("public_url = \"http://10.0.0.1:8080\"\n{boot}"),
+            );
+            assert!(error.contains(expected), "{name}: {error}");
+        }
     }
 }

@@ -53,6 +53,20 @@ let
         ) cfg.scriptVariableFiles;
     }
     // optionalAttrs (cfg.scriptProxy != null) { script_proxy = cfg.scriptProxy; }
+    // {
+      boot = {
+        profiles = mapAttrs (
+          _: profile:
+          {
+            inherit (profile) arch;
+            initrds = map (initrd: "${initrd}") profile.initrds;
+          }
+          // optionalAttrs (profile.kernel != null) { kernel = "${profile.kernel}"; }
+          // optionalAttrs (profile.console != null) { inherit (profile) console; }
+        ) cfg.boot.profiles;
+        inherit (cfg.boot) products;
+      };
+    }
   );
 in
 {
@@ -148,6 +162,63 @@ in
       type = types.bool;
       default = false;
       description = "Open the machine, TFTP and proxy ports on multicastInterface. The dashboard port is never opened.";
+    };
+    boot.profiles = mkOption {
+      default = { };
+      example = literalExpression ''
+        {
+          x86_64 = {
+            arch = "x86_64";
+            initrds = [ imaged.packages.''${pkgs.system}.display-intel ];
+          };
+          jetson-orin-nano = {
+            arch = "arm64";
+            kernel = "/srv/imaged/jetson/Image";
+            initrds = [ "/srv/imaged/jetson/modules.cpio.xz" ];
+            console = "ttyTCU0,115200n8";
+          };
+        }
+      '';
+      description = ''
+        Boot profiles ([boot.profiles]). The profiles named x86_64 and arm64 are the arch defaults
+        and exist built in; defining one replaces it.
+      '';
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            arch = mkOption {
+              type = types.enum [
+                "x86_64"
+                "arm64"
+              ];
+            };
+            kernel = mkOption {
+              type = types.nullOr types.path;
+              default = null;
+              description = "Kernel instead of the built-in one, whose modules are then left out.";
+            };
+            initrds = mkOption {
+              type = types.listOf types.path;
+              default = [ ];
+              description = "Archives appended to the built-in initramfs, in order.";
+            };
+            console = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "ttyTCU0,115200n8";
+              description = "Serial console for iPXE boots instead of the arch's.";
+            };
+          };
+        }
+      );
+    };
+    boot.products = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      example = {
+        "NVIDIA Jetson Orin Nano Developer Kit" = "jetson-orin-nano";
+      };
+      description = "[boot.products]: the SMBIOS product name iPXE reports, matched exactly, to a profile.";
     };
   };
 

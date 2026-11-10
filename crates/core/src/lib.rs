@@ -121,8 +121,10 @@ pub async fn serve(
     router: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    let service = router.layer(TraceLayer::new_for_http()).into_make_service();
-    axum::serve(listener, service)
+    let service = router
+        .layer(TraceLayer::new_for_http())
+        .into_make_service_with_connect_info::<SocketAddr>();
+    axum::serve(axum::serve::ListenerExt::tap_io(listener, |_| {}), service)
         .with_graceful_shutdown(shutdown)
         .await
 }

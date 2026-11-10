@@ -6,14 +6,16 @@ use std::{
 
 const ASSETS_ENV: &str = "IMAGED_BOOT_ASSETS";
 
-const REQUIRED: [&str; 7] = [
+const REQUIRED: [&str; 9] = [
     "ipxe.efi",
     "ipxe-arm64.efi",
     "undionly.kpxe",
     "x86_64/vmlinuz",
     "x86_64/initramfs.cpio.xz",
+    "x86_64/modules.cpio.xz",
     "arm64/vmlinuz",
     "arm64/initramfs.cpio.xz",
+    "arm64/modules.cpio.xz",
 ];
 
 fn main() -> ExitCode {
@@ -51,8 +53,8 @@ fn main() -> ExitCode {
         }
         eprintln!(
             "Either set {ASSETS_ENV} to an absolute directory holding {}, or put them in {} \
-             (in the dev shell the shell hook copies the kernels and iPXE there and \
-             `build-initramfs x86_64 arm64` builds the initramfs).",
+             (in the dev shell the shell hook copies the kernels, their modules and iPXE there \
+             and `build-initramfs x86_64 arm64` builds the initramfs).",
             REQUIRED.join(", "),
             default.display()
         );

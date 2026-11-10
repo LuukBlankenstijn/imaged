@@ -155,16 +155,20 @@ exports as format 2 unless one of its scripts has a root partition of its own.
 
 ### `crates/boot` — `imaged-boot`
 
-Network boot: the PXE routes (`imaged_boot::pxe::router(public_url)`:
-`/boot/boot.ipxe`, `/boot/manifest.ipxe`, `/boot/{arch}/vmlinuz` and
-`/boot/{arch}/initramfs.cpio.xz`) and the read-only TFTP server
-(`imaged_boot::tftp::bind(address)`) that hands out the iPXE binaries, kernels
-and initramfs. All of them are embedded at compile time, so the server ships as
-one executable. The build script reads them from `IMAGED_BOOT_ASSETS` (an
-absolute path) when set, otherwise from `assets/` at the repository root, and
-fails naming every missing file. The directory holds `ipxe.efi`,
-`ipxe-arm64.efi`, `undionly.kpxe` and `x86_64/` and `arm64/` with `vmlinuz`
-and `initramfs.cpio.xz` each; `nix build .#boot-assets` builds exactly that
+Network boot: the PXE routes (`imaged_boot::pxe::router(public_url, files)`:
+`/boot/boot.ipxe`, `/boot/manifest.ipxe`, `/boot/{arch}/…` and
+`/boot/profile/{name}/…` for `vmlinuz` and `initramfs.cpio.xz`) and the read-only TFTP server
+(`imaged_boot::tftp::bind(address, files)`) that hands out the iPXE binaries,
+kernels and initramfs. The iPXE binaries, kernels, initramfs and the kernels'
+module archives are embedded at compile time, so the server ships as one
+executable; `BootFiles::load(&sources, selector)` loads the boot profiles from
+disk and picks one per booting machine (see
+[Boot profiles](#boot-profiles)). The build script
+reads the embedded files from `IMAGED_BOOT_ASSETS` (an absolute path) when set,
+otherwise from `assets/` at the repository root, and fails naming every missing
+file. The directory holds `ipxe.efi`, `ipxe-arm64.efi`, `undionly.kpxe` and
+`x86_64/` and `arm64/` with `vmlinuz`, `initramfs.cpio.xz` and
+`modules.cpio.xz` each; `nix build .#boot-assets` builds exactly that
 directory. Nothing else depends on the assets: `imaged-core` and the API
 crates build and test without them.
 
@@ -288,9 +292,13 @@ With the `server` feature it is also a library for embedding imaged in another
 program. `Imaged::open(config)` once per process, with
 `Config::new(data_dir, multicast_interface)` and its `script_proxy` and
 `script_variables` fields set as needed; then `imaged.serve(listeners)` with
-`Listeners::new(machine, public_url)` and its `tftp`, `proxy` and `dashboard`
-fields (`Dashboard::Off` unless set to `OnMachineListener` or
-`Separate(address)`) returns a `Server`. `Config`, `Listeners` and `Dashboard`
+`Listeners::new(machine, public_url)` and its `tftp`, `proxy`, `dashboard`
+(`Dashboard::Off` unless set to `OnMachineListener` or `Separate(address)`),
+`boot` (`BootSources`, the `[boot]` config section) and `profile_selector` (an
+`Arc<dyn ProfileSelector>` that replaces `[boot.products]`, see
+[Boot profiles](#boot-profiles)) fields returns a `Server`; a boot file it
+cannot read or an inconsistent `[boot]` section fails `serve`. `Config`,
+`Listeners`, `Dashboard`, `BootSources`, `BootProfileSources` and `BootClient`
 are `#[non_exhaustive]`. `serve` refuses a `public_url` that is not an
 `http://` or `https://` URL with a host (`InvalidInput`) before binding
 anything. A dashboard needs the bundle's `public/` directory next to the
@@ -354,7 +362,20 @@ proxy = "192.168.100.1:3128"          # optional HTTP proxy for post-install scr
 NTP_SERVER = "10.0.0.1"
 SITE_NAME_file = "/etc/imaged/site-name"
 AGE_KEY_file_contents = "/etc/imaged/age-key"
+
+[boot.profiles.x86_64]                # optional; see "Boot profiles"
+arch = "x86_64"
+kernel = "/srv/imaged/x86_64/vmlinuz" # replaces the built-in kernel and leaves its modules out; default built-in
+initrds = ["/srv/imaged/x86_64/display-intel.cpio.xz"] # appended to the initramfs in order; default none
+console = "ttyS1,115200n8"            # serial console for iPXE boots; default the arch's
+
+[boot.products]                       # SMBIOS product name, matched exactly, to a profile
+"NVIDIA Jetson Orin Nano Developer Kit" = "jetson-orin-nano"
 ```
+
+`[boot]` paths are relative to the working directory, like `data_dir`. The
+server reads those files into memory when it starts serving, so replacing one
+takes a restart.
 
 `log_level` applies to imaged's own crates; everything else logs at `warn`.
 A set `RUST_LOG` replaces the whole filter. The NixOS module writes the file
@@ -518,17 +539,18 @@ It also provides everything else the project needs: partclone, udp-cast,
 sgdisk, sfdisk and blkid (util-linux), e2fsprogs, btrfs-progs, dosfstools,
 mtools, the initramfs packages and scripts, and the test-VM scripts; the imaging tests in
 `imaged-disk` and `imaged-pack` run these tools. The x86_64 and arm64
-kernels are nixpkgs' `linuxPackages_latest`; the initramfs carries its modules
-(minus GPU, media, sound and wireless) and loads them by modalias at boot.
-`build-initramfs` builds the initramfs for every arch, or only the ones passed
-as arguments (`build-initramfs arm64`).
+kernels are nixpkgs' `linuxPackages_latest`; their `modules.cpio.xz` carries
+their modules minus GPU, media, sound and wireless (see
+[Kernel, modules and firmware](#kernel-modules-and-firmware)). The initramfs
+itself holds no kernel modules. `build-initramfs` builds the initramfs for
+every arch, or only the ones passed as arguments (`build-initramfs arm64`).
 
 Entering the dev shell, from any directory of the checkout, works on the
-repository root: it copies the kernels and iPXE binaries into `assets/`,
-regenerates `crates/web/assets/tailwind.css` (the dashboard does not compile
-without it) and sets `IMAGED_CONFIG` to `dev/imaged.toml`. `imaged-boot`
-embeds the boot assets from `assets/` (see above) and `build-initramfs` writes
-the initramfs there from the working tree.
+repository root: it copies the kernels, their module archives and the iPXE
+binaries into `assets/`, regenerates `crates/web/assets/tailwind.css` (the
+dashboard does not compile without it) and sets `IMAGED_CONFIG` to
+`dev/imaged.toml`. `imaged-boot` embeds the boot assets from `assets/` (see
+above) and `build-initramfs` writes the initramfs there from the working tree.
 
 The shell also sets `DATABASE_URL=sqlite://imaged.db`, so sqlx checks its
 queries against `imaged.db` at the repository root, which a fresh checkout
@@ -567,8 +589,10 @@ sets `listen.dashboard = "machine"`, so the dashboard is at
 
 `nix build` builds `imaged-server` (the default package: binary plus the
 dashboard's `public/` next to it); `.#imaged-pack`, `.#imaged-agent` and
-`.#boot-assets` build the rest. `overlays.default` adds `imaged-server` and
-`imaged-pack` to nixpkgs.
+`.#boot-assets` build the rest, and `.#display-intel`, `.#display-nvidia` and
+`.#display-nvidia-arm64` build the optional display driver archives (see
+[Kernel, modules and firmware](#kernel-modules-and-firmware)).
+`overlays.default` adds `imaged-server` and `imaged-pack` to nixpkgs.
 
 `nixosModules.default` runs the server as a hardened systemd service:
 
@@ -584,6 +608,10 @@ services.imaged.server = {
   scriptVariables.NTP_SERVER = "192.168.100.1";
   scriptVariableFiles.AGE_KEY = "/run/agenix/imaged-age-key";
   openFirewall = true;
+  boot.profiles.x86_64 = {
+    arch = "x86_64";
+    initrds = [ imaged.packages.x86_64-linux.display-intel ];
+  };
 };
 ```
 
@@ -600,15 +628,17 @@ deploy's input values. The service waits for `network-online.target`, which
 does not cover a bridge that comes up later (such as a Docker network): it
 restarts every 5 s until its addresses can be bound. `useBinaryCache = true`
 makes the whole system trust the project's cachix cache
-(`luukblankenstijn.cachix.org`); it is off by default.
+(`luukblankenstijn.cachix.org`); it is off by default. `boot.profiles` and
+`boot.products` write the `[boot]` section.
 
 ## Network boot
 
 DHCP hands bare PXE ROMs an iPXE binary over TFTP by client architecture
 (option 93): `undionly.kpxe` for BIOS (0), `ipxe.efi` for x86 UEFI (6, 7, 9)
 and `ipxe-arm64.efi` for arm64 UEFI (11). iPXE then chains
-`/boot/boot.ipxe`, which reports its build architecture so the server answers
-with the matching kernel and initramfs. See `dev/dnsmasq.conf` for a working
+`/boot/boot.ipxe`, which reports its build architecture and hardware so the
+server answers with the kernel and initramfs of the machine's
+[boot profile](#boot-profiles). See `dev/dnsmasq.conf` for a working
 setup: `docker compose -f dev/compose.yaml up` (project `imaged`) runs it with
 `assets/` mounted read-only, so build every initramfs first; a missing file
 fails instead of turning into a root-owned directory.
@@ -624,6 +654,124 @@ an organisation-local group in 239.192.0.0/14, on `multicast_interface`; a
 partition image sends only its partition 1, on 50002/50003. Machines have 5
 minutes to join. Open that port range on the netboot interface and turn off
 IGMP snooping on bridges in between.
+
+## Boot profiles
+
+A boot profile is a name, an `arch`, an optional `kernel`, `initrds` and an
+optional serial `console`. The profiles `x86_64` and `arm64` are the arch
+defaults and exist built in (the built-in kernel with its modules); defining
+one in `[boot.profiles]` replaces it, and its `arch` must match its name.
+Profile names are letters, digits, `-` and `_`. Each profile is served as is at
+`/boot/profile/<name>/vmlinuz` and `/boot/profile/<name>/initramfs.cpio.xz`,
+over TFTP at `profile/<name>/…`.
+
+```toml
+[boot.profiles.jetson-orin-nano]
+arch = "arm64"
+kernel = "/srv/imaged/jetson/Image"
+initrds = ["/srv/imaged/jetson/modules.cpio.xz"]
+console = "ttyTCU0,115200n8"
+
+[boot.products]
+"NVIDIA Jetson Orin Nano Developer Kit" = "jetson-orin-nano"
+```
+
+A selector picks one profile per boot from what the machine reports
+(`BootClient`: arch, IP, MAC, SMBIOS manufacturer and product). It returns one
+name or none; none, a name that is not a profile, or a profile of another arch
+(logged) boots the profile named after the machine's arch, so a machine
+nobody recognises gets the arch default.
+
+- iPXE reports its build arch, the MAC of the interface it booted from
+  (`${netX/mac}`) and the SMBIOS manufacturer and product to
+  `/boot/manifest.ipxe`; the IP is the connection's. The profile is picked
+  there once and the manifest points both the kernel and the initramfs at
+  `/boot/profile/<name>/…`, which is never re-selected, so the two always come
+  from that profile. The profile's `console` replaces the arch's serial console
+  (`ttyS0,115200n8`, `ttyAMA0,115200n8`) on the kernel command line.
+- A request for the fixed names `x86_64/…` or `arm64/…`, over HTTP
+  (`/boot/arm64/vmlinuz`) or TFTP, asks the selector with only the arch and the
+  client's IP, so U-Boot boot scripts with fixed names still get a profile when
+  the selector knows that IP. Each of the two files is resolved on its own
+  request.
+
+The built-in selector is `[boot.products]`: the exact SMBIOS product name
+(surrounding whitespace ignored) to a profile. Keys are unique, so a machine
+never matches two profiles; a product that is not listed gets the arch
+default. A program embedding imaged can set `Listeners::profile_selector`
+to its own `ProfileSelector` instead (for example one that remembers what each
+client's DHCP request revealed); `[boot.products]` must then be empty. Its
+`profile` runs on every manifest and TFTP request, so it should answer from
+memory.
+
+At startup the server checks that every product maps to a defined profile and
+reads every profile's files once, even when several profiles share one.
+
+## Kernel, modules and firmware
+
+A booting machine gets one kernel and one initramfs from its profile. The
+server builds the initramfs by concatenating separate archives, which the
+kernel unpacks in order, a later file replacing an earlier one with the same
+path:
+
+1. the built-in `initramfs.cpio.xz`: busybox, the imaging tools, the agent and
+   `/init`, with no kernel modules or firmware;
+2. the built-in `modules.cpio.xz` for the built-in kernel, left out when the
+   profile has its own `kernel`;
+3. every `initrds` archive of the profile, in order.
+
+Each archive is padded with zeros to a multiple of 4 bytes, which the kernel
+skips, so an uncompressed archive can follow one of any length.
+
+`/init` runs busybox `depmod` over `/lib/modules/$(uname -r)` before loading
+drivers by modalias, so modules from any archive load like built-in ones.
+The kernel loads firmware from `/lib/firmware`.
+
+The built-in modules leave out GPU, media, sound, wireless and other drivers a
+machine does not need for imaging, so most displays stay on the firmware
+framebuffer (`efifb`/`simpledrm`). Machines whose display only comes back with
+its native driver, such as after a kexec from a system that drove it, need a
+display archive:
+
+| Package | Arch | Contents | Unpacked |
+| --- | --- | --- | --- |
+| `display-intel` | x86_64 | `i915` and its dependencies | 13 MiB |
+| `display-nvidia` | x86_64 | `nouveau`, its dependencies and the newest GSP firmware it supports | 99 MiB |
+| `display-nvidia-arm64` | arm64 | the same for the arm64 kernel | 97 MiB |
+
+The initramfs is unpacked into RAM, and the kernel caps it at half the
+machine's memory. The built-in parts take 326 MiB on x86_64 (47 MiB initramfs,
+279 MiB modules) and 251 MiB on arm64 (43 and 208). In `e2e/boot.sh` a 1 GiB
+x86_64 VM ran out of space with both x86_64 display archives appended, so
+drivers went missing and the agent never connected; with 2 GiB it boots. Give
+machines that need `display-nvidia` at least 2 GiB.
+
+An archive is a cpio archive (newc), optionally compressed with anything the
+kernel can unpack (`xz --check=crc32`, gzip, zstd, ...). Modules go to
+`/lib/modules/<kernel version>/` as uncompressed `.ko` files, built for that
+exact kernel; firmware goes to `/lib/firmware/`. Archives built with
+`lib.<system>.modulesInitrd` from this flake follow that layout:
+
+```nix
+imaged.lib.x86_64-linux.modulesInitrd {
+  arch = "x86_64";                                  # selects the built-in kernel
+  name = "display-amd";
+  modules = [ "drivers/gpu/drm/amd/amdgpu/amdgpu\\.ko" ];  # extended regexes on paths under kernel/
+  excludedModules = [ ];                            # optional
+  firmware = [ "amdgpu/*" ];                        # optional; globs under linux-firmware's lib/firmware
+  # kernel = pkgs.linuxPackages_6_12.kernel;        # optional; another kernel's modules
+}
+```
+
+It adds every module's dependencies from `modules.dep`, and fails when a
+`modules` pattern matches no module or a `firmware` glob matches no file.
+`extraCommands` runs shell after staging, with `$MODULES` (the staged module
+directory), `$FIRMWARE` (linux-firmware's `lib/firmware`) and
+`stage_firmware <path under $FIRMWARE>`, which stores files with identical
+content once. A profile with its own kernel needs its modules: build them with
+`kernel` set and list the archive in `initrds`. The initramfs needs a kernel
+with devtmpfs, the initramfs decompressor of the archives and, for UEFI,
+efivarfs.
 
 ## Post-install scripts
 
@@ -841,6 +989,27 @@ cases (default `sdboot:uefi grub-bios:bios grub-hybrid:bios grub-hybrid:uefi
 disko:uefi disko-grub:bios partition:uefi partition-grub-bios:bios`), `E2E_OUT`
 defaults to `e2e/out/nixos`. The images are built from the checkout through
 `git+file://`, so files git does not track are left out of them.
+
+```sh
+nix develop .#e2e -c e2e/boot.sh
+```
+
+tests boot profiles by network-booting blank VMs until their agent registers,
+with a server restarted per case. Every case first checks that HTTP and TFTP
+(block size 1468) serve the profile's kernel and exactly the expected padded
+concatenation of initramfs parts, and every boot that the serial log shows no
+initramfs unpacking error, panic or recovery shell. `extra-initrds` replaces
+the `x86_64` profile with one that appends the display archives, an
+odd-length gzip archive and an uncompressed archive whose `/init` prints a
+marker, and checks the marker. `profile` maps QEMU's SMBIOS product to a
+profile `lts` with nixpkgs' `linuxPackages` kernel and a modules archive built
+by `lib.x86_64-linux.modulesInitrd` that carries the virtio drivers, so the
+agent only registers when iPXE was sent to that profile and its modules load;
+it also checks that TFTP `x86_64/vmlinuz`, which reports no product, is the
+built-in kernel. `arm64` boots an emulated arm64 UEFI VM with
+`display-nvidia-arm64` appended. `E2E_BOOT_CASES` picks the cases (default
+`extra-initrds:bios extra-initrds:uefi profile:bios profile:uefi arm64:uefi`),
+`E2E_OUT` defaults to `e2e/out/boot`.
 
 ## NixOS images
 

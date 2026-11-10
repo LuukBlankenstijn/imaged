@@ -73,10 +73,17 @@ async fn build_server() -> TestServer {
         .expect("bind harness listener");
     let addr = listener.local_addr().expect("harness local addr");
     let base_url = format!("http://{addr}");
-    let router = imaged_server::machine_router(&base_url)
+    let boot_files = imaged_server::BootFiles::load(&imaged_server::BootSources::default(), None)
+        .await
+        .expect("load the built-in boot files");
+    let router = imaged_server::machine_router(&base_url, std::sync::Arc::new(boot_files))
         .merge(imaged_api_ui::router().with_state(dioxus_server::FullstackState::headless()));
     tokio::spawn(async move {
-        let _ = axum::serve(listener, router.into_make_service()).await;
+        let _ = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await;
     });
 
     TestServer {

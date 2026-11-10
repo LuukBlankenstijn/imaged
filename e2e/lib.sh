@@ -312,7 +312,7 @@ start_network_boot_vm() {
         -machine q35,accel=kvm \
         -cpu host \
         -smp 2 \
-        -m 1G \
+        -m "${VM_MEMORY:-1G}" \
         -nodefaults \
         -display none \
         -no-reboot \

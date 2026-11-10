@@ -12,8 +12,10 @@ axum.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 serde.workspace = true
 tracing.workspace = true
-tokio.workspace = true
+imaged-model.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 async-tftp = "0.4.2"
+percent-encoding = "2.3.2"
 futures-lite = "2.6.1"
 
 [dev-dependencies]
