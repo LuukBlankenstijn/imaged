@@ -18,6 +18,9 @@ jobs:
         target:
           - .#imaged-server
           - .#imaged-pack
+          - .#display-intel
+          - .#display-nvidia
+          - .#display-nvidia-arm64
           - .#devShells.x86_64-linux.default.inputDerivation
     steps:
       - uses: actions/checkout@v7

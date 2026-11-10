@@ -1,15 +1,25 @@
-{ writeShellApplication, qemu }:
+{
+  writeShellApplication,
+  qemu,
+  coreutils,
+}:
 
 writeShellApplication {
   name = "run-vm";
-  runtimeInputs = [ qemu ];
+  runtimeInputs = [
+    qemu
+    coreutils
+  ];
   text = ''
-    exec qemu-system-x86_64 \
+    initrd=$(mktemp)
+    trap 'rm -f "$initrd"' EXIT
+    cat assets/x86_64/initramfs.cpio.xz assets/x86_64/modules.cpio.xz > "$initrd"
+    qemu-system-x86_64 \
       -cpu host \
       -enable-kvm \
       -m 1G \
       -kernel assets/x86_64/vmlinuz \
-      -initrd assets/x86_64/initramfs.cpio.xz \
+      -initrd "$initrd" \
       -drive file=storage.qcow2,format=qcow2,if=virtio \
       -append "console=tty0 console=ttyS0 earlyprintk=vga loglevel=8 img_srv=http://192.168.100.1:8080" \
       -nographic \

@@ -3,6 +3,9 @@
 /bin/busybox mount -t proc none /proc
 /bin/busybox mount -t sysfs none /sys
 /bin/busybox mount -t devtmpfs none /dev
+if [ -d "/lib/modules/$(uname -r)" ]; then
+    /bin/depmod
+fi
 echo /bin/modprobe > /proc/sys/kernel/modprobe
 /bin/mdev -d
 

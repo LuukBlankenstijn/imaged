@@ -57,15 +57,29 @@
             };
             initramfsStaging = import ./nix/lib/initramfs-staging.nix {
               inherit (targetPkgs) pkgsStatic;
-              inherit (pkgs) gawk kmod xz linux-firmware;
-              inherit partclone kernel;
+              inherit partclone;
             };
+            modulesInitrd =
+              args:
+              import ./nix/lib/modules-initrd.nix {
+                inherit (pkgs)
+                  lib
+                  runCommand
+                  cpio
+                  xz
+                  gawk
+                  gnugrep
+                  kmod
+                  linux-firmware
+                  ;
+              } ({ inherit kernel; } // args);
           in
           {
             inherit
               partclone
               imaged-agent
               initramfsStaging
+              modulesInitrd
               muslPkgs
               vmlinuz
               ;
@@ -73,7 +87,8 @@
             initramfs = pkgs.callPackage ./nix/packages/initramfs.nix {
               inherit imaged-agent initramfsStaging;
             };
-          };
+          }
+          // import ./nix/lib/module-archives.nix modulesInitrd;
 
         targets = {
           x86_64 =
@@ -98,9 +113,10 @@
             };
         };
 
-        kernelAssets = lib.mapAttrs' (
-          arch: target: lib.nameValuePair "${arch}/vmlinuz" target.vmlinuz
-        ) targets;
+        kernelAssets = lib.concatMapAttrs (arch: target: {
+          "${arch}/vmlinuz" = target.vmlinuz;
+          "${arch}/modules.cpio.xz" = target.modules;
+        }) targets;
         initramfsAssets = lib.mapAttrs' (
           arch: target: lib.nameValuePair "${arch}/initramfs.cpio.xz" target.initramfs
         ) targets;
@@ -235,10 +251,15 @@
             partclone
             imaged-agent
             initramfs
+            modules
+            display-intel
+            display-nvidia
             ;
           partclone-arm64 = targets.arm64.partclone;
           imaged-agent-arm64 = targets.arm64.imaged-agent;
           initramfs-arm64 = targets.arm64.initramfs;
+          modules-arm64 = targets.arm64.modules;
+          display-nvidia-arm64 = targets.arm64.display-nvidia;
           inherit
             build-initramfs
             run-vm
@@ -255,10 +276,13 @@
           inherit imaged-pack;
         };
 
+        lib.modulesInitrd = { arch, ... }@args: targets.${arch}.modulesInitrd (removeAttrs args [ "arch" ]);
+
         devShells.default = devShell;
         devShells.e2e = devShell.overrideAttrs (shell: {
           nativeBuildInputs = shell.nativeBuildInputs ++ [
-            pkgs.qemu_kvm
+            pkgs.qemu
+            pkgs.cpio
             pkgs.dnsmasq
             pkgs.iproute2
             pkgs.curl

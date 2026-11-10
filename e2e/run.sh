@@ -52,8 +52,8 @@ describe_checkout() {
 
 check_boot_assets() {
     local asset
-    for asset in x86_64/vmlinuz x86_64/initramfs.cpio.xz arm64/vmlinuz arm64/initramfs.cpio.xz ipxe.efi ipxe-arm64.efi undionly.kpxe; do
-        [[ -f $IMAGED_BOOT_ASSETS/$asset ]] || fail "missing $IMAGED_BOOT_ASSETS/$asset; build the boot assets (build-initramfs x86_64) or copy real ones into $IMAGED_BOOT_ASSETS"
+    for asset in x86_64/vmlinuz x86_64/initramfs.cpio.xz x86_64/modules.cpio.xz arm64/vmlinuz arm64/initramfs.cpio.xz arm64/modules.cpio.xz ipxe.efi ipxe-arm64.efi undionly.kpxe; do
+        [[ -f $IMAGED_BOOT_ASSETS/$asset ]] || fail "missing $IMAGED_BOOT_ASSETS/$asset; build the boot assets (enter the dev shell for the kernels and their modules, build-initramfs x86_64 for the initramfs) or copy real ones into $IMAGED_BOOT_ASSETS"
     done
     local initramfs=$IMAGED_BOOT_ASSETS/x86_64/initramfs.cpio.xz
     if (($(stat -c %s "$initramfs") < 1048576)); then

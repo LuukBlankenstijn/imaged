@@ -1,42 +1,14 @@
 {
   pkgsStatic,
   partclone,
-  kernel,
-  gawk,
-  kmod,
-  xz,
-  linux-firmware,
 }:
 
 # Populates the initramfs staging tree at the directory named by the `$STAGING`
 # shell variable, embedding `agentBin` as /bin/imaged-agent. `agentBin` is
 # spliced verbatim, so callers may pass either a Nix store path (pure build) or
 # a runtime shell expression like "$(pwd)/target/.../imaged-agent" (dev flow).
-#
-# This is the single source of truth for what goes into the initramfs; both the
-# pure `initramfs` derivation and the `build-initramfs` dev script consume it.
-let
-  version = kernel.modDirVersion;
-  modules = "${kernel.modules}/lib/modules/${version}";
-  excluded = builtins.concatStringsSep "|" [
-    "drivers/(media|iio|infiniband|staging|comedi|bluetooth|net/wireless|net/can)/"
-    "drivers/gpu/drm/(amd|radeon|xe|panfrost|panthor|lima|etnaviv|v3d|msm)/"
-    "drivers/(md|mtd|hwmon|isdn|accel|vfio|target|nfc|edac|watchdog|leds|w1|fpga|ntb)/"
-    "drivers/(thunderbolt|firewire|parport|hte|siox|most|greybus|counter)/"
-    "drivers/net/ethernet/(chelsio|qlogic|huawei|cavium|sfc|netronome|pensando|emulex|brocade)/"
-    "drivers/net/ethernet/(mellanox/mlx4|mellanox/mlxsw|intel/ice|intel/idpf|marvell/octeontx2)/"
-    "sound/"
-    "net/"
-    "crypto/"
-    "arch/[^/]+/crypto/"
-    "kernel/"
-    "samples/"
-    "fs/"
-  ];
-  kept = "fs/(ext4|fat|btrfs|nls|jbd2|efivarfs)/|fs/mbcache|net/packet/";
-in
 agentBin: ''
-  mkdir -p "$STAGING"/{bin,proc,sys,dev,tmp,etc,run,lib/modules/${version}}
+  mkdir -p "$STAGING"/{bin,proc,sys,dev,tmp,etc,run}
 
   cp ${pkgsStatic.busybox}/bin/busybox "$STAGING/bin/busybox"
   cp ${pkgsStatic.libuuid}/bin/lsblk "$STAGING/bin/"
@@ -52,41 +24,6 @@ agentBin: ''
   ln -sfr "$STAGING/bin/partclone.extfs" "$STAGING/bin/partclone.ext4"
   ln -sf busybox "$STAGING/bin/sh"
   printf '[options]\nbroken_system_clock = 1\n' > "$STAGING/etc/e2fsck.conf"
-
-  cp --no-preserve=mode ${modules}/modules.{order,builtin,builtin.modinfo} "$STAGING/lib/modules/${version}/"
-  ${gawk}/bin/awk -F': ?' \
-    -v excluded='^kernel/(${excluded})' -v kept='^kernel/(${kept})' \
-    '$1 !~ excluded || $1 ~ kept { print $1; n = split($2, deps, " "); for (i = 1; i <= n; i++) print deps[i] }' \
-    ${modules}/modules.dep \
-    | sort -u \
-    | (cd ${modules} && xargs cp --parents --no-preserve=mode -t "$STAGING/lib/modules/${version}")
-  chmod -R u+w "$STAGING/lib/modules"
-  find "$STAGING/lib/modules" -name '*.ko.xz' -exec ${xz}/bin/xz -d {} +
-  ${kmod}/bin/depmod -b "$STAGING" ${version}
-
-  nouveau="$STAGING/lib/modules/${version}/kernel/drivers/gpu/drm/nouveau/nouveau.ko"
-  if [ -f "$nouveau" ]; then
-    gspFirmware=$(${kmod}/bin/modinfo -F firmware "$nouveau" | ${gawk}/bin/awk -F/ '$3 == "gsp"')
-    gspVersion=$(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ 'match($4, /^gsp-.*\.bin$/) { print substr($4, 5, RLENGTH - 8) }' | sort -V | tail -n 1)
-    firmware=${linux-firmware}/lib/firmware
-    declare -A staged=()
-    while read -r dir; do
-      mkdir -p "$STAGING/lib/firmware/$dir"
-      for source in "$firmware/$dir"/*-"$gspVersion".bin; do
-        if [ ! -e "$source" ]; then
-          continue
-        fi
-        file="$dir/''${source##*/}"
-        hash=$(sha256sum "$source" | cut -d' ' -f1)
-        if [ -n "''${staged[$hash]:-}" ]; then
-          ln -sr "$STAGING/lib/firmware/''${staged[$hash]}" "$STAGING/lib/firmware/$file"
-        else
-          cp -L --no-preserve=mode "$source" "$STAGING/lib/firmware/$file"
-          staged[$hash]=$file
-        fi
-      done
-    done < <(printf '%s\n' "$gspFirmware" | ${gawk}/bin/awk -F/ '{ print $1 "/" $2 "/" $3 }' | sort -u)
-  fi
 
   install -m 0755 ${./init.sh} "$STAGING/init"
   install -m 0644 ${./mdev.conf} "$STAGING/etc/mdev.conf"
