@@ -169,8 +169,13 @@ otherwise from `assets/` at the repository root, and fails naming every missing
 file. The directory holds `ipxe.efi`, `ipxe-arm64.efi`, `undionly.kpxe` and
 `x86_64/` and `arm64/` with `vmlinuz`, `initramfs.cpio.xz` and
 `modules.cpio.xz` each; `nix build .#boot-assets` builds exactly that
-directory. Nothing else depends on the assets: `imaged-core` and the API
-crates build and test without them.
+directory. The features `x86_64` and `arm64` (both on by default) pick which
+arches are embedded, and the build script only requires their files
+(`ipxe.efi`, `undionly.kpxe` and `x86_64/` for x86_64; `ipxe-arm64.efi` and
+`arm64/` for arm64). With an arch left out, its profiles are rejected at
+startup, since every profile builds on that arch's embedded initramfs, and
+its `/boot/<arch>/…` paths answer 404. Nothing else depends on the assets:
+`imaged-core` and the API crates build and test without them.
 
 ### `crates/web` — `imaged-web`
 
@@ -289,7 +294,10 @@ the `public_url` host when bound to an unspecified address. Bind it to the
 netboot interface: anyone who reaches the port can use it.
 
 With the `server` feature it is also a library for embedding imaged in another
-program. `Imaged::open(config)` once per process, with
+program; the default features `boot-x86_64` and `boot-arm64` choose the
+embedded boot arches, so `default-features = false, features = ["server",
+"boot-arm64"]` leaves the x86_64 kernel, initramfs, modules and iPXE out.
+`Imaged::open(config)` once per process, with
 `Config::new(data_dir, multicast_interface)` and its `script_proxy` and
 `script_variables` fields set as needed; then `imaged.serve(listeners)` with
 `Listeners::new(machine, public_url)` and its `tftp`, `proxy`, `dashboard`
@@ -302,7 +310,11 @@ cannot read or an inconsistent `[boot]` section fails `serve`. `Config`,
 are `#[non_exhaustive]`. `serve` refuses a `public_url` that is not an
 `http://` or `https://` URL with a host (`InvalidInput`) before binding
 anything. A dashboard needs the bundle's `public/` directory next to the
-executable or at `DIOXUS_PUBLIC_PATH`. `stop()` disconnects every agent, gives
+executable or at `DIOXUS_PUBLIC_PATH`. `server.reload_boot(&sources)` loads a
+new `[boot]` set, with the same selector, and swaps it in once every file is
+read and the set is consistent; a failed reload leaves the old set serving,
+and transfers already started finish from the files they began with. `stop()`
+disconnects every agent, gives
 open requests a 3 second grace period and then cuts off whatever connection is
 left, after which `serve` can be called again with new addresses; one `Server`
 runs at a time. The embedding program reads and feeds imaged through the same

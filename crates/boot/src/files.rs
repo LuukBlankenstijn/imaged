@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, hash_map::Entry},
     fmt, io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, PoisonError, RwLock},
 };
 
 use axum::body::Bytes;
@@ -19,6 +19,7 @@ struct BuiltIn {
     modules: &'static [u8],
 }
 
+#[cfg(feature = "x86_64")]
 const X86_64: BuiltIn = BuiltIn {
     kernel: include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/x86_64/vmlinuz")),
     initramfs: include_bytes!(concat!(
@@ -31,6 +32,7 @@ const X86_64: BuiltIn = BuiltIn {
     )),
 };
 
+#[cfg(feature = "arm64")]
 const ARM64: BuiltIn = BuiltIn {
     kernel: include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/arm64/vmlinuz")),
     initramfs: include_bytes!(concat!(
@@ -42,6 +44,19 @@ const ARM64: BuiltIn = BuiltIn {
         "/arm64/modules.cpio.xz"
     )),
 };
+
+fn built_in(arch: Arch) -> Option<&'static BuiltIn> {
+    match arch {
+        #[cfg(feature = "x86_64")]
+        Arch::X86_64 => Some(&X86_64),
+        #[cfg(feature = "arm64")]
+        Arch::Arm64 => Some(&ARM64),
+        #[allow(unreachable_patterns)]
+        _ => None,
+    }
+}
+
+const ARCHES: [Arch; 2] = [Arch::X86_64, Arch::Arm64];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -98,7 +113,7 @@ impl BootFiles {
         for (name, profile) in &sources.profiles {
             profiles.insert(name.clone(), loader.profile(name, profile).await?);
         }
-        for arch in [Arch::X86_64, Arch::Arm64] {
+        for arch in ARCHES.into_iter().filter(|&arch| built_in(arch).is_some()) {
             if let Entry::Vacant(entry) = profiles.entry(ProfileName::of(arch)) {
                 let profile = loader
                     .profile(entry.key(), &ProfileSources::new(arch))
@@ -118,8 +133,8 @@ impl BootFiles {
         Ok(Self { profiles, selector })
     }
 
-    pub(crate) fn select(&self, client: &BootClient) -> (&ProfileName, &Profile) {
-        let fallback = || self.entry(&ProfileName::of(client.arch)).unwrap();
+    pub(crate) fn select(&self, client: &BootClient) -> Option<(&ProfileName, &Profile)> {
+        let fallback = || self.entry(&ProfileName::of(client.arch));
         let Some(name) = self.selector.profile(client) else {
             return fallback();
         };
@@ -132,7 +147,7 @@ impl BootFiles {
                 tracing::warn!(profile = %name, profile_arch = %profile.arch, ?client, "the selector chose a boot profile for another arch; booting the arch default");
                 fallback()
             }
-            Some(selected) => selected,
+            Some(selected) => Some(selected),
         }
     }
 
@@ -149,9 +164,29 @@ impl BootFiles {
     }
 }
 
+#[derive(Clone)]
+pub struct SharedBootFiles(Arc<RwLock<Arc<BootFiles>>>);
+
+impl SharedBootFiles {
+    pub fn new(files: BootFiles) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(files))))
+    }
+
+    pub fn replace(&self, files: BootFiles) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(files);
+    }
+
+    pub(crate) fn current(&self) -> Arc<BootFiles> {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
 fn validate(sources: &Sources, external_selector: bool) -> io::Result<()> {
     let invalid = |message: String| Err(io::Error::new(io::ErrorKind::InvalidInput, message));
-    for arch in [Arch::X86_64, Arch::Arm64] {
+    for arch in ARCHES {
         if let Some(profile) = sources.profiles.get(&ProfileName::of(arch))
             && profile.arch != arch
         {
@@ -192,10 +227,15 @@ impl Loader {
         name: &ProfileName,
         sources: &ProfileSources,
     ) -> io::Result<Profile> {
-        let built_in = match sources.arch {
-            Arch::X86_64 => &X86_64,
-            Arch::Arm64 => &ARM64,
-        };
+        let built_in = built_in(sources.arch).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "boot profile \"{name}\" is for {}, but this imaged was built without the {} boot files",
+                    sources.arch, sources.arch
+                ),
+            )
+        })?;
         let mut initramfs = Vec::new();
         push_aligned(&mut initramfs, Bytes::from_static(built_in.initramfs));
         let kernel = match &sources.kernel {
@@ -270,7 +310,7 @@ impl fmt::Display for KernelSource<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "x86_64", feature = "arm64"))]
 pub(crate) mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -444,7 +484,7 @@ pub(crate) mod tests {
             let files = BootFiles::load(&sources, Some(Arc::new(Fixed(answer))))
                 .await
                 .unwrap();
-            let (selected, profile) = files.select(&client(arch, None));
+            let (selected, profile) = files.select(&client(arch, None)).unwrap();
             assert_eq!(selected.as_str(), expected, "{answer:?} on {arch}");
             assert_eq!(profile.arch, arch);
             assert_eq!(
@@ -474,7 +514,11 @@ pub(crate) mod tests {
             (None, "arm64"),
         ] {
             assert_eq!(
-                files.select(&client(Arch::Arm64, product)).0.as_str(),
+                files
+                    .select(&client(Arch::Arm64, product))
+                    .unwrap()
+                    .0
+                    .as_str(),
                 expected,
                 "{product:?}"
             );
@@ -531,5 +575,34 @@ pub(crate) mod tests {
         for invalid in ["", "a b", "../x", "x/y", "é"] {
             assert!(invalid.parse::<ProfileName>().is_err(), "{invalid}");
         }
+    }
+}
+
+#[cfg(all(test, not(feature = "x86_64")))]
+mod arm64_only_tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn an_arch_left_out_of_the_build_has_no_profiles() {
+        let files = BootFiles::load(&Sources::default(), None).await.unwrap();
+        let client = BootClient::new(Arch::X86_64, IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert!(files.select(&client).is_none());
+        assert!(files.profile("x86_64").is_none());
+        assert!(files.profile("arm64").is_some());
+
+        let mut sources = Sources::default();
+        sources
+            .profiles
+            .insert("box".parse().unwrap(), ProfileSources::new(Arch::X86_64));
+        let error = BootFiles::load(&sources, None).await.err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            error
+                .to_string()
+                .contains("built without the x86_64 boot files"),
+            "{error}"
+        );
     }
 }

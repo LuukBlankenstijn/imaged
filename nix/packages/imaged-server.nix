@@ -41,7 +41,7 @@ craneLib.mkCargoDerivation (
         doCheck = false;
         buildPhaseCargoCommand = ''
           cargo build --locked -p imaged-server --bin imaged-server \
-            --no-default-features --features server \
+            --no-default-features --features server,boot-x86_64,boot-arm64 \
             --target ${stdenv.hostPlatform.rust.rustcTarget} --profile server-release \
             --config 'profile.server-release.inherits="release"' \
             --config profile.server-release.strip=false

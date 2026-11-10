@@ -76,8 +76,9 @@ async fn build_server() -> TestServer {
     let boot_files = imaged_server::BootFiles::load(&imaged_server::BootSources::default(), None)
         .await
         .expect("load the built-in boot files");
-    let router = imaged_server::machine_router(&base_url, std::sync::Arc::new(boot_files))
-        .merge(imaged_api_ui::router().with_state(dioxus_server::FullstackState::headless()));
+    let router =
+        imaged_server::machine_router(&base_url, imaged_server::SharedBootFiles::new(boot_files))
+            .merge(imaged_api_ui::router().with_state(dioxus_server::FullstackState::headless()));
     tokio::spawn(async move {
         let _ = axum::serve(
             listener,

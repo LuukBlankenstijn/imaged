@@ -19,7 +19,7 @@ use futures_lite::stream;
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 
-use crate::{BootClient, BootFiles, files::Profile};
+use crate::{BootClient, BootFiles, SharedBootFiles, files::Profile};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Display)]
 pub enum Arch {
@@ -62,7 +62,7 @@ impl FromStr for Arch {
 #[derive(Clone)]
 struct Pxe {
     base: Arc<str>,
-    files: Arc<BootFiles>,
+    files: SharedBootFiles,
 }
 
 fn boot_client(ip: IpAddr, query: &str) -> Option<BootClient> {
@@ -116,7 +116,14 @@ async fn manifest_ipxe(
         || manufacturer.contains("QEMU");
 
     let arch = client.arch;
-    let (name, profile) = files.select(&client);
+    let files = files.current();
+    let Some((name, profile)) = files.select(&client) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("this server has no {arch} boot files"),
+        )
+            .into_response();
+    };
     let serial = format!(
         "console={}",
         profile.console.as_deref().unwrap_or(arch.serial_console())
@@ -142,7 +149,7 @@ async fn manifest_ipxe(
 
 fn selected<'a>(files: &'a BootFiles, arch: &str, peer: SocketAddr) -> Option<&'a Profile> {
     let client = BootClient::new(arch.parse().ok()?, peer.ip());
-    let (name, profile) = files.select(&client);
+    let (name, profile) = files.select(&client)?;
     tracing::info!(?client, profile = %name, "boot profile selected for a fixed arch path");
     Some(profile)
 }
@@ -182,7 +189,7 @@ async fn arch_vmlinuz(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(arch): Path<String>,
 ) -> Response<Body> {
-    kernel_response(selected(&pxe.files, &arch, peer))
+    kernel_response(selected(&pxe.files.current(), &arch, peer))
 }
 
 async fn arch_initramfs(
@@ -190,18 +197,18 @@ async fn arch_initramfs(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(arch): Path<String>,
 ) -> Response<Body> {
-    initramfs_response(selected(&pxe.files, &arch, peer))
+    initramfs_response(selected(&pxe.files.current(), &arch, peer))
 }
 
 async fn profile_vmlinuz(State(pxe): State<Pxe>, Path(name): Path<String>) -> Response<Body> {
-    kernel_response(pxe.files.profile(&name))
+    kernel_response(pxe.files.current().profile(&name))
 }
 
 async fn profile_initramfs(State(pxe): State<Pxe>, Path(name): Path<String>) -> Response<Body> {
-    initramfs_response(pxe.files.profile(&name))
+    initramfs_response(pxe.files.current().profile(&name))
 }
 
-pub fn router(public_url: &str, files: Arc<BootFiles>) -> Router {
+pub fn router(public_url: &str, files: SharedBootFiles) -> Router {
     Router::new()
         .route("/boot/boot.ipxe", get(bootstrap_ipxe))
         .route("/boot/manifest.ipxe", get(manifest_ipxe))
@@ -218,7 +225,7 @@ pub fn router(public_url: &str, files: Arc<BootFiles>) -> Router {
         })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "x86_64", feature = "arm64"))]
 mod tests {
     use super::*;
     use crate::{
@@ -231,8 +238,8 @@ mod tests {
 
     const PUBLIC_URL: &str = "https://imaged.example:8443";
 
-    async fn built_in() -> Arc<BootFiles> {
-        Arc::new(BootFiles::load(&Sources::default(), None).await.unwrap())
+    async fn built_in() -> SharedBootFiles {
+        SharedBootFiles::new(BootFiles::load(&Sources::default(), None).await.unwrap())
     }
 
     async fn get_from(router: Router, uri: &str) -> Response<Body> {
@@ -420,12 +427,13 @@ mod tests {
         sources
             .profiles
             .insert(name("box"), profile_with(Arch::X86_64, None, &[&extra]));
-        let files = Arc::new(
+        let shared = SharedBootFiles::new(
             BootFiles::load(&sources, Some(Arc::new(Fixed(Some("box")))))
                 .await
                 .unwrap(),
         );
-        let router = router(PUBLIC_URL, files.clone());
+        let files = shared.current();
+        let router = router(PUBLIC_URL, shared);
         let box_initramfs = files.profile("box").unwrap().initramfs.concat();
         let x86_64_initramfs = files.profile("x86_64").unwrap().initramfs.concat();
         assert!(box_initramfs.ends_with(b"extra x86_64 initrd\0"));
@@ -472,6 +480,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replaced_boot_files_are_served_from_the_next_request_on() {
+        let kernel = TempFile::new("pxe-reload-kernel", b"reloaded kernel");
+        let shared = built_in().await;
+        let router = router(PUBLIC_URL, shared.clone());
+        assert_eq!(
+            get_from(router.clone(), "/boot/profile/board/vmlinuz")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let mut sources = Sources::default();
+        sources
+            .profiles
+            .insert(name("board"), profile_with(Arch::Arm64, Some(&kernel), &[]));
+        shared.replace(BootFiles::load(&sources, None).await.unwrap());
+
+        assert_serves(router, "/boot/profile/board/vmlinuz", b"reloaded kernel").await;
+    }
+
+    #[tokio::test]
     async fn the_manifest_points_both_files_at_the_profile_the_selector_picked() {
         let mut sources = Sources::default();
         let mut jetson = ProfileSources::new(Arch::Arm64);
@@ -481,8 +510,8 @@ mod tests {
             "NVIDIA Jetson Orin Nano Developer Kit".to_string(),
             name("jetson"),
         );
-        let files = Arc::new(BootFiles::load(&sources, None).await.unwrap());
-        let router = router(PUBLIC_URL, files);
+        let files = BootFiles::load(&sources, None).await.unwrap();
+        let router = router(PUBLIC_URL, SharedBootFiles::new(files));
 
         let jetson = text(
             router.clone(),
@@ -524,7 +553,7 @@ mod tests {
         let files = BootFiles::load(&Sources::default(), Some(selector.clone()))
             .await
             .unwrap();
-        let router = router(PUBLIC_URL, Arc::new(files));
+        let router = router(PUBLIC_URL, SharedBootFiles::new(files));
 
         text(
             router.clone(),

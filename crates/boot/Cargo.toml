@@ -7,6 +7,11 @@ edition.workspace = true
 name = "imaged_boot"
 path = "src/lib.rs"
 
+[features]
+default = ["x86_64", "arm64"]
+x86_64 = []
+arm64 = []
+
 [dependencies]
 axum.workspace = true
 derive_more = { workspace = true, features = ["display"] }

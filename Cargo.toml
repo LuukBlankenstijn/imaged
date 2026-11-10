@@ -24,7 +24,7 @@ edition = "2024"
 tokio = { version = "1.52.1", features = ["macros", "rt-multi-thread", "process"] }
 imaged-model = { path = "crates/model", default-features = false }
 imaged-archive = { path = "crates/archive" }
-imaged-boot = { path = "crates/boot" }
+imaged-boot = { path = "crates/boot", default-features = false }
 imaged-disk = { path = "crates/disk" }
 imaged-core = { path = "crates/core" }
 imaged-api-agent = { path = "crates/api/agent" }

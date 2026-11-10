@@ -4,7 +4,6 @@ use std::{
     net::SocketAddr,
     path::Path,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -16,23 +15,34 @@ use async_tftp::{
 use axum::body::Bytes;
 use futures_lite::{AsyncRead, io::Cursor};
 
-use crate::{BootClient, BootFiles, pxe::Arch};
+use crate::{BootClient, BootFiles, SharedBootFiles, pxe::Arch};
 
 const RETRANSMIT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_RETRANSMITS: u32 = 10;
 
+#[cfg(feature = "x86_64")]
 static IPXE: &[u8] = include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/ipxe.efi"));
+#[cfg(feature = "arm64")]
 static IPXE_ARM64: &[u8] =
     include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/ipxe-arm64.efi"));
+#[cfg(feature = "x86_64")]
 static UNDIONLY: &[u8] = include_bytes!(concat!(env!("IMAGED_BOOT_ASSETS_DIR"), "/undionly.kpxe"));
 
-fn boot_file(files: &BootFiles, client: &SocketAddr, path: &str) -> Option<(String, Vec<Bytes>)> {
-    let fixed = |bytes| Some((path.to_string(), vec![Bytes::from_static(bytes)]));
+fn ipxe(path: &str) -> Option<&'static [u8]> {
     match path {
-        "ipxe.efi" => return fixed(IPXE),
-        "ipxe-arm64.efi" => return fixed(IPXE_ARM64),
-        "undionly.kpxe" => return fixed(UNDIONLY),
-        _ => {}
+        #[cfg(feature = "x86_64")]
+        "ipxe.efi" => Some(IPXE),
+        #[cfg(feature = "x86_64")]
+        "undionly.kpxe" => Some(UNDIONLY),
+        #[cfg(feature = "arm64")]
+        "ipxe-arm64.efi" => Some(IPXE_ARM64),
+        _ => None,
+    }
+}
+
+fn boot_file(files: &BootFiles, client: &SocketAddr, path: &str) -> Option<(String, Vec<Bytes>)> {
+    if let Some(bytes) = ipxe(path) {
+        return Some((path.to_string(), vec![Bytes::from_static(bytes)]));
     }
     let ((name, profile), file) = match path.strip_prefix("profile/") {
         Some(rest) => {
@@ -42,7 +52,7 @@ fn boot_file(files: &BootFiles, client: &SocketAddr, path: &str) -> Option<(Stri
         None => {
             let (arch, file) = path.split_once('/')?;
             let client = BootClient::new(arch.parse::<Arch>().ok()?, client.ip());
-            (files.select(&client), file)
+            (files.select(&client)?, file)
         }
     };
     let parts = match file {
@@ -53,7 +63,7 @@ fn boot_file(files: &BootFiles, client: &SocketAddr, path: &str) -> Option<(Stri
     Some((format!("profile/{name}/{file}"), parts))
 }
 
-struct TftpFiles(Arc<BootFiles>);
+struct TftpFiles(SharedBootFiles);
 
 struct Transfer {
     parts: std::vec::IntoIter<Bytes>,
@@ -110,7 +120,7 @@ impl Handler for TftpFiles {
             .collect::<Vec<_>>()
             .join("/");
 
-        let Some((served, parts)) = boot_file(&self.0, client, &relative) else {
+        let Some((served, parts)) = boot_file(&self.0.current(), client, &relative) else {
             tracing::warn!(path = %relative, %client, "tftp request for an unknown file");
             return Err(packet::Error::FileNotFound);
         };
@@ -140,7 +150,7 @@ impl Handler for TftpFiles {
 
 pub struct TftpServer(async_tftp::server::TftpServer<TftpFiles>);
 
-pub async fn bind(bind_address: SocketAddr, files: Arc<BootFiles>) -> io::Result<TftpServer> {
+pub async fn bind(bind_address: SocketAddr, files: SharedBootFiles) -> io::Result<TftpServer> {
     let server = TftpServerBuilder::with_handler(TftpFiles(files))
         .bind(bind_address)
         .timeout(RETRANSMIT_TIMEOUT)
@@ -169,7 +179,7 @@ impl TftpServer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "x86_64", feature = "arm64"))]
 mod tests {
     use super::*;
     use crate::{
@@ -177,9 +187,10 @@ mod tests {
         files::tests::{CLIENT_IP, Fixed, TempFile, name, profile_with},
     };
     use futures_lite::AsyncReadExt;
+    use std::sync::Arc;
 
-    async fn files(sources: &Sources) -> Arc<BootFiles> {
-        Arc::new(BootFiles::load(sources, None).await.unwrap())
+    async fn files(sources: &Sources) -> SharedBootFiles {
+        SharedBootFiles::new(BootFiles::load(sources, None).await.unwrap())
     }
 
     async fn read_in_blocks(mut transfer: Transfer) -> Vec<u8> {
@@ -205,7 +216,13 @@ mod tests {
     #[tokio::test]
     async fn nested_boot_files_resolve_with_either_path_separator() {
         let mut handler = TftpFiles(files(&Sources::default()).await);
-        let kernel = handler.0.profile("x86_64").unwrap().kernel.clone();
+        let kernel = handler
+            .0
+            .current()
+            .profile("x86_64")
+            .unwrap()
+            .kernel
+            .clone();
         for requested in [
             "x86_64/vmlinuz",
             "/x86_64/vmlinuz",
@@ -227,7 +244,13 @@ mod tests {
             .profiles
             .insert(name("arm64"), profile_with(Arch::Arm64, None, &[&extra]));
         let mut handler = TftpFiles(files(&sources).await);
-        let expected = handler.0.profile("arm64").unwrap().initramfs.concat();
+        let expected = handler
+            .0
+            .current()
+            .profile("arm64")
+            .unwrap()
+            .initramfs
+            .concat();
 
         let received = fetch(&mut handler, "arm64/initramfs.cpio.xz")
             .await
@@ -245,12 +268,13 @@ mod tests {
             name("orange-pi"),
             profile_with(Arch::Arm64, None, &[&board]),
         );
-        let files = Arc::new(
+        let shared = SharedBootFiles::new(
             BootFiles::load(&sources, Some(Arc::new(Fixed(Some("orange-pi")))))
                 .await
                 .unwrap(),
         );
-        let mut handler = TftpFiles(files.clone());
+        let files = shared.current();
+        let mut handler = TftpFiles(shared);
         let board_initramfs = files.profile("orange-pi").unwrap().initramfs.concat();
 
         assert!(
@@ -296,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn a_client_cannot_raise_the_retransmit_timeout() {
         let files = files(&Sources::default()).await;
-        let kernel_size = files.profile("x86_64").unwrap().kernel.len();
+        let kernel_size = files.current().profile("x86_64").unwrap().kernel.len();
         let server = bind(SocketAddr::from(([127, 0, 0, 1], 0)), files)
             .await
             .unwrap();

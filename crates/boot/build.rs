@@ -6,13 +6,16 @@ use std::{
 
 const ASSETS_ENV: &str = "IMAGED_BOOT_ASSETS";
 
-const REQUIRED: [&str; 9] = [
+const X86_64: [&str; 5] = [
     "ipxe.efi",
-    "ipxe-arm64.efi",
     "undionly.kpxe",
     "x86_64/vmlinuz",
     "x86_64/initramfs.cpio.xz",
     "x86_64/modules.cpio.xz",
+];
+
+const ARM64: [&str; 4] = [
+    "ipxe-arm64.efi",
     "arm64/vmlinuz",
     "arm64/initramfs.cpio.xz",
     "arm64/modules.cpio.xz",
@@ -20,6 +23,18 @@ const REQUIRED: [&str; 9] = [
 
 fn main() -> ExitCode {
     println!("cargo:rerun-if-env-changed={ASSETS_ENV}");
+
+    let mut required = Vec::new();
+    if env::var_os("CARGO_FEATURE_X86_64").is_some() {
+        required.extend(X86_64);
+    }
+    if env::var_os("CARGO_FEATURE_ARM64").is_some() {
+        required.extend(ARM64);
+    }
+    if required.is_empty() {
+        eprintln!("error: imaged-boot needs at least one of its features x86_64 and arm64");
+        return ExitCode::FAILURE;
+    }
 
     let default = default_dir();
     let (dir, source) = match env::var_os(ASSETS_ENV) {
@@ -34,11 +49,11 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    for asset in REQUIRED {
+    for asset in &required {
         println!("cargo:rerun-if-changed={}", dir.join(asset).display());
     }
 
-    let missing: Vec<PathBuf> = REQUIRED
+    let missing: Vec<PathBuf> = required
         .iter()
         .map(|asset| dir.join(asset))
         .filter(|path| !path.is_file())
@@ -55,7 +70,7 @@ fn main() -> ExitCode {
             "Either set {ASSETS_ENV} to an absolute directory holding {}, or put them in {} \
              (in the dev shell the shell hook copies the kernels, their modules and iPXE there \
              and `build-initramfs x86_64 arm64` builds the initramfs).",
-            REQUIRED.join(", "),
+            required.join(", "),
             default.display()
         );
         return ExitCode::FAILURE;

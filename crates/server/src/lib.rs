@@ -18,7 +18,7 @@ use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
 pub use imaged_api_ui::model::{Image, TaskProgress};
 pub use imaged_boot::{
     Arch, BootClient, BootFiles, ProfileName, ProfileSelector,
-    ProfileSources as BootProfileSources, Sources as BootSources,
+    ProfileSources as BootProfileSources, SharedBootFiles, Sources as BootSources,
 };
 use imaged_core::{
     self as core,
@@ -101,6 +101,8 @@ pub struct Server {
     abort: CancellationToken,
     listeners: JoinSet<io::Result<()>>,
     registry: Arc<HostRegistry>,
+    boot_files: SharedBootFiles,
+    profile_selector: Option<Arc<dyn ProfileSelector>>,
     _serving: ServingClaim,
 }
 
@@ -146,8 +148,9 @@ impl Imaged {
         validate_public_url(&listeners.public_url)?;
         let serving = ServingClaim::take(&self.container, listeners.machine.ip())?;
 
-        let boot_files =
-            Arc::new(BootFiles::load(&listeners.boot, listeners.profile_selector.clone()).await?);
+        let boot_files = SharedBootFiles::new(
+            BootFiles::load(&listeners.boot, listeners.profile_selector.clone()).await?,
+        );
         let machine_router = machine_router(&listeners.public_url, boot_files.clone());
         let (machine_router, separate_dashboard) = match listeners.dashboard {
             Dashboard::Off => (machine_router, None),
@@ -164,7 +167,7 @@ impl Imaged {
             None => None,
         };
         let tftp = match listeners.tftp {
-            Some(address) => Some(imaged_boot::tftp::bind(address, boot_files).await?),
+            Some(address) => Some(imaged_boot::tftp::bind(address, boot_files.clone()).await?),
             None => None,
         };
         let proxy = match listeners.proxy {
@@ -179,6 +182,8 @@ impl Imaged {
             abort,
             listeners: JoinSet::new(),
             registry: self.container.host_registry.clone(),
+            boot_files,
+            profile_selector: listeners.profile_selector,
             _serving: serving,
         };
         server.spawn(|shutdown| core::serve(machine, machine_router, shutdown));
@@ -263,6 +268,13 @@ impl Server {
         self.shutdown.cancelled().await
     }
 
+    pub async fn reload_boot(&self, sources: &BootSources) -> io::Result<()> {
+        let files = BootFiles::load(sources, self.profile_selector.clone()).await?;
+        self.boot_files.replace(files);
+        tracing::info!("boot profiles reloaded");
+        Ok(())
+    }
+
     pub async fn stop(mut self) -> io::Result<()> {
         self.shutdown.cancel();
         self.registry.disconnect_all();
@@ -336,7 +348,7 @@ impl Drop for ServingClaim {
 }
 
 #[doc(hidden)]
-pub fn machine_router(public_url: &str, boot_files: Arc<BootFiles>) -> Router {
+pub fn machine_router(public_url: &str, boot_files: SharedBootFiles) -> Router {
     imaged_boot::pxe::router(public_url, boot_files).merge(imaged_api_agent::router())
 }
 
