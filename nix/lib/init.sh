@@ -10,7 +10,10 @@ echo /bin/modprobe > /proc/sys/kernel/modprobe
 /bin/mdev -d
 
 load_drivers() {
-    find /sys/devices -name modalias -exec cat {} + 2>/dev/null | sort -u | xargs -r modprobe -qa
+    {
+        find /sys/devices -name modalias -exec cat {} +
+        find /sys/devices -name uevent -exec sed -n 's/^MODALIAS=//p' {} +
+    } 2>/dev/null | sort -u | xargs -r modprobe -qa
 }
 
 load_drivers
