@@ -76,6 +76,24 @@ if [ -z "${SERVER_ADDR:-}" ]; then
     exec /bin/sh
 fi
 
+has_disk() {
+    for block in /sys/block/*; do
+        case "${block##*/}" in
+            loop*|ram*|zram*) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+echo "Waiting for a disk"
+i=0
+while ! has_disk && [ "$i" -lt 30 ]; do
+    load_drivers
+    i=$((i + 1))
+    sleep 1
+done
+
 echo "Starting imaged-agent at $SERVER_ADDR"
 if [ -c /dev/tty1 ]; then
     dmesg -n 3
