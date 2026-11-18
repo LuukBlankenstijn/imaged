@@ -5,19 +5,23 @@ use axum::{
     },
     response::Response,
 };
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use imaged_core::{
     AgentLiveness,
     di::{HostRepo, Liveness, Progress, Registry, TaskRepo},
     domain::task::TaskRepository,
     progress::ProgressBoard,
-    registry::Registration,
+    registry::{PendingCommand, Registration},
 };
 use imaged_model::{
     AgentEvent, ServerEvent, Task,
     agent::StreamQuery,
+    command::{CommandOutcome, CommandReport, CommandRequest},
     error::{AppError, Result},
 };
+use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::AgentInfo;
@@ -83,7 +87,10 @@ struct HostStream {
 
 impl HostStream {
     async fn serve(mut self, mut socket: WebSocket, progress: &ProgressBoard) {
-        if send(&mut socket, &self.current).await.is_err() {
+        if send(&mut socket, ServerEvent::Current(self.current.clone()))
+            .await
+            .is_err()
+        {
             return;
         }
 
@@ -91,6 +98,8 @@ impl HostStream {
         let mut last_seen = Instant::now();
         let mut ping = tokio::time::interval(self.liveness.ping_interval);
         ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut pending: HashMap<u64, oneshot::Sender<CommandOutcome>> = HashMap::new();
+        let mut next_command = 0;
 
         loop {
             let asked = tokio::select! {
@@ -112,6 +121,12 @@ impl HostStream {
                                 }
                                 continue;
                             }
+                            Ok(AgentEvent::Command(CommandReport { id, outcome })) => {
+                                if let Some(reply) = pending.remove(&id) {
+                                    let _ = reply.send(outcome);
+                                }
+                                continue;
+                            }
                             Err(e) => {
                                 tracing::warn!(host_id, err = %e, "ignoring an undecodable agent event");
                                 continue;
@@ -122,6 +137,16 @@ impl HostStream {
                 dispatch = self.registration.receiver.recv() => match dispatch {
                     Some(()) => false,
                     None => break,
+                },
+                Some(PendingCommand { script, reply }) = self.registration.commands.recv() => {
+                    let id = next_command;
+                    next_command += 1;
+                    if send(&mut socket, ServerEvent::Run(CommandRequest { id, script })).await.is_err() {
+                        break;
+                    }
+                    pending.retain(|_, waiting| !waiting.is_closed());
+                    pending.insert(id, reply);
+                    continue;
                 },
                 _ = ping.tick() => {
                     if last_seen.elapsed() > self.liveness.timeout {
@@ -141,7 +166,11 @@ impl HostStream {
                     break;
                 }
             };
-            if (asked || current != self.current) && send(&mut socket, &current).await.is_err() {
+            if (asked || current != self.current)
+                && send(&mut socket, ServerEvent::Current(current.clone()))
+                    .await
+                    .is_err()
+            {
                 break;
             }
             self.current = current;
@@ -149,12 +178,8 @@ impl HostStream {
     }
 }
 
-async fn send(
-    socket: &mut WebSocket,
-    current: &Option<Task>,
-) -> std::result::Result<(), axum::Error> {
-    let json =
-        serde_json::to_string(&ServerEvent::Current(current.clone())).map_err(axum::Error::new)?;
+async fn send(socket: &mut WebSocket, event: ServerEvent) -> std::result::Result<(), axum::Error> {
+    let json = serde_json::to_string(&event).map_err(axum::Error::new)?;
     socket.send(Message::text(json)).await
 }
 

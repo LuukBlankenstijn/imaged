@@ -510,7 +510,7 @@ fn ImageScriptList(
     let available: Vec<Script> = match &*all_scripts.read() {
         Some(Ok(all)) => all
             .iter()
-            .filter(|s| !ids.contains(&s.id))
+            .filter(|s| s.kind.is_post_install() && !ids.contains(&s.id))
             .cloned()
             .collect(),
         _ => Vec::new(),

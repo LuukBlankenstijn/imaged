@@ -176,7 +176,6 @@ pub fn DeployInputsForm(
         let image_id = image.read().id;
         async move { get_image_scripts(image_id).await }
     });
-    let variables = use_resource(get_script_variable_names);
     let host_ids: Vec<i64> = hosts.iter().map(|h| h.id).collect();
 
     use_effect(move || {
@@ -194,17 +193,7 @@ pub fn DeployInputsForm(
     match &*scripts.read() {
         Some(Ok(list)) if ready && list.is_empty() => rsx! {},
         Some(Ok(list)) if ready => {
-            let fields = form_fields(list);
-            let shared: Vec<ScriptInput> =
-                fields.iter().filter(|f| !f.per_machine).cloned().collect();
-            let per_machine: Vec<ScriptInput> =
-                fields.iter().filter(|f| f.per_machine).cloned().collect();
             let names: Vec<String> = list.iter().map(|s| s.name.clone()).collect();
-            let values = inputs().unwrap_or_default();
-            let variables: Vec<String> = match &*variables.read() {
-                Some(Ok(names)) => names.clone(),
-                _ => Vec::new(),
-            };
             rsx! {
                 div { class: "mt-5 flex flex-col gap-4 border-t border-line pt-4",
                     div { class: "flex flex-wrap items-center gap-1.5 text-xs text-fog-500",
@@ -218,82 +207,108 @@ pub fn DeployInputsForm(
                             span { "This image has no root partition set and not every script picks its own, so the deploy will be refused. Pick one on the Images page." }
                         }
                     }
-                    if !shared.is_empty() {
-                        div { class: "grid gap-3 sm:grid-cols-2",
-                            for field in shared.iter() {
-                                div { key: "{field.name}",
-                                    FieldLabel { input: field.clone(), target: format!("input-{}", field.name) }
-                                    FieldControl {
-                                        id: format!("input-{}", field.name),
-                                        input: field.clone(),
-                                        variables: variables.clone(),
-                                        source: values.shared.get(&field.name).cloned(),
-                                        onchange: {
-                                            let name = field.name.clone();
-                                            move |source: InputSource| {
-                                                let mut inputs = inputs;
-                                                if let Some(form) = inputs.write().as_mut() {
-                                                    form.shared.insert(name.clone(), source);
-                                                }
-                                            }
-                                        },
+                    ScriptInputFields { fields: form_fields(list), hosts, inputs }
+                }
+            }
+        }
+        Some(Err(e)) if ready => rsx! {
+            p { class: "mt-4 text-sm text-bad", "Failed to load the image's scripts: {e}" }
+        },
+        _ => rsx! {
+            div { class: "mt-4 flex justify-center", Spinner { class: "w-4 h-4" } }
+        },
+    }
+}
+
+#[component]
+pub fn ScriptInputFields(
+    fields: Vec<ScriptInput>,
+    hosts: Vec<Host>,
+    inputs: Signal<Option<DeployInputs>>,
+) -> Element {
+    let variables = use_resource(get_script_variable_names);
+    let shared: Vec<ScriptInput> = fields.iter().filter(|f| !f.per_machine).cloned().collect();
+    let per_machine: Vec<ScriptInput> = fields.iter().filter(|f| f.per_machine).cloned().collect();
+    let values = inputs().unwrap_or_default();
+    let variables: Vec<String> = match &*variables.read() {
+        Some(Ok(names)) => names.clone(),
+        _ => Vec::new(),
+    };
+
+    rsx! {
+        if !shared.is_empty() {
+            div { class: "grid gap-3 sm:grid-cols-2",
+                for field in shared.iter() {
+                    div { key: "{field.name}",
+                        FieldLabel { input: field.clone(), target: format!("input-{}", field.name) }
+                        FieldControl {
+                            id: format!("input-{}", field.name),
+                            input: field.clone(),
+                            variables: variables.clone(),
+                            source: values.shared.get(&field.name).cloned(),
+                            onchange: {
+                                let name = field.name.clone();
+                                move |source: InputSource| {
+                                    let mut inputs = inputs;
+                                    if let Some(form) = inputs.write().as_mut() {
+                                        form.shared.insert(name.clone(), source);
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        if !per_machine.is_empty() {
+            div {
+                div { class: "mb-1 font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                    "Per machine"
+                }
+                div { class: "max-h-72 overflow-auto rounded-md border border-line",
+                    table { class: "w-full text-sm",
+                        thead {
+                            tr { class: "text-fog-500",
+                                th { class: "px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Host" }
+                                for field in per_machine.iter() {
+                                    th { key: "{field.name}", class: "px-3 py-2 text-left",
+                                        FieldLabel { input: field.clone() }
                                     }
                                 }
                             }
                         }
-                    }
-                    if !per_machine.is_empty() {
-                        div {
-                            div { class: "mb-1 font-mono text-[11px] uppercase tracking-wider text-fog-500",
-                                "Per machine"
-                            }
-                            div { class: "max-h-72 overflow-auto rounded-md border border-line",
-                                table { class: "w-full text-sm",
-                                    thead {
-                                        tr { class: "text-fog-500",
-                                            th { class: "px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider", "Host" }
-                                            for field in per_machine.iter() {
-                                                th { key: "{field.name}", class: "px-3 py-2 text-left",
-                                                    FieldLabel { input: field.clone() }
-                                                }
-                                            }
-                                        }
+                        tbody {
+                            for host in hosts.iter() {
+                                tr { key: "{host.id}", class: "border-t border-line/60",
+                                    td { class: "px-3 py-1.5",
+                                        div { class: "text-fog-100", "{host.name}" }
+                                        div { class: "font-mono text-[11px] text-fog-600", "{host.mac_address}" }
                                     }
-                                    tbody {
-                                        for host in hosts.iter() {
-                                            tr { key: "{host.id}", class: "border-t border-line/60",
-                                                td { class: "px-3 py-1.5",
-                                                    div { class: "text-fog-100", "{host.name}" }
-                                                    div { class: "font-mono text-[11px] text-fog-600", "{host.mac_address}" }
-                                                }
-                                                for field in per_machine.iter() {
-                                                    td { key: "{field.name}", class: "px-3 py-1.5",
-                                                        FieldControl {
-                                                            id: format!("input-{}-{}", host.id, field.name),
-                                                            label: format!("{} for {}", field_label(field), host.name),
-                                                            input: field.clone(),
-                                                            variables: variables.clone(),
-                                                            source: values
-                                                                .per_machine
-                                                                .get(&host.id)
-                                                                .and_then(|v| v.get(&field.name))
-                                                                .cloned(),
-                                                            onchange: {
-                                                                let name = field.name.clone();
-                                                                let host_id = host.id;
-                                                                move |source: InputSource| {
-                                                                    let mut inputs = inputs;
-                                                                    if let Some(form) = inputs.write().as_mut() {
-                                                                        form.per_machine
-                                                                            .entry(host_id)
-                                                                            .or_default()
-                                                                            .insert(name.clone(), source);
-                                                                    }
-                                                                }
-                                                            },
+                                    for field in per_machine.iter() {
+                                        td { key: "{field.name}", class: "px-3 py-1.5",
+                                            FieldControl {
+                                                id: format!("input-{}-{}", host.id, field.name),
+                                                label: format!("{} for {}", field_label(field), host.name),
+                                                input: field.clone(),
+                                                variables: variables.clone(),
+                                                source: values
+                                                    .per_machine
+                                                    .get(&host.id)
+                                                    .and_then(|v| v.get(&field.name))
+                                                    .cloned(),
+                                                onchange: {
+                                                    let name = field.name.clone();
+                                                    let host_id = host.id;
+                                                    move |source: InputSource| {
+                                                        let mut inputs = inputs;
+                                                        if let Some(form) = inputs.write().as_mut() {
+                                                            form.per_machine
+                                                                .entry(host_id)
+                                                                .or_default()
+                                                                .insert(name.clone(), source);
                                                         }
                                                     }
-                                                }
+                                                },
                                             }
                                         }
                                     }
@@ -304,12 +319,6 @@ pub fn DeployInputsForm(
                 }
             }
         }
-        Some(Err(e)) if ready => rsx! {
-            p { class: "mt-4 text-sm text-bad", "Failed to load the image's scripts: {e}" }
-        },
-        _ => rsx! {
-            div { class: "mt-4 flex justify-center", Spinner { class: "w-4 h-4" } }
-        },
     }
 }
 

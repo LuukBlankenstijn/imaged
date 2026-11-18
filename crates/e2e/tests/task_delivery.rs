@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use reqwest::Url;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use imaged_agent::server::{Server, Uplink};
@@ -46,6 +46,7 @@ async fn connect(
     let uplink = Uplink {
         progress: watch::channel(None).1,
         idle,
+        commands: mpsc::unbounded_channel().1,
     };
     Box::pin(
         agent

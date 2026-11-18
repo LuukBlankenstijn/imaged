@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE scripts SET name = ?, kind = ?, body = ?, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "6886f1cdde7583448f53dea77d4bf9f3e71b92b621ce11c4c75961bcc38803d6"
+}

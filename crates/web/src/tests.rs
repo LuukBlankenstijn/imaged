@@ -20,7 +20,7 @@ use crate::components::ui::{
 use crate::format::{format_bytes, format_relative};
 use crate::model::{
     DeployInputs, Host, HostPartition, Image, ImageKind, ImagePartition, ImageStatus, InputKind,
-    InputSource, InputSources, Script, ScriptInput, TaskState, TaskType,
+    InputSource, InputSources, Script, ScriptInput, ScriptKind, TaskState, TaskType,
 };
 use crate::views::groups::{all_selected, toggle_visible};
 use crate::views::scripts::InputDraft;
@@ -250,6 +250,7 @@ fn script(id: i64, inputs: Vec<ScriptInput>) -> Script {
     Script {
         id,
         name: format!("script-{id}"),
+        kind: ScriptKind::PostInstall,
         body: String::new(),
         updated_at: 0,
         inputs,

@@ -2,12 +2,15 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use imaged_model::command::{CommandOutcome, CommandRun, HostCommandResult};
 pub use imaged_model::group::Group;
 pub use imaged_model::host::{ConnectionChange, HostConnectionEvent, HostPartition};
 pub use imaged_model::image::{ImageKind, ImagePartition, ImageStatus};
 pub use imaged_model::multicast::{ReceiverProgress, TransferPhase};
 pub use imaged_model::progress::{HostProgress, Stage};
-pub use imaged_model::script::{DeployInputs, InputKind, InputSource, InputSources, ScriptInput};
+pub use imaged_model::script::{
+    DeployInputs, InputKind, InputSource, InputSources, ScriptInput, ScriptKind,
+};
 pub use imaged_model::task::TaskState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +183,8 @@ pub struct UpdateGroupRequest {
 pub struct Script {
     pub id: i64,
     pub name: String,
+    #[serde(default)]
+    pub kind: ScriptKind,
     pub body: String,
     pub updated_at: i64,
     pub inputs: Vec<ScriptInput>,
@@ -190,6 +195,8 @@ pub struct Script {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptRequest {
     pub name: String,
+    #[serde(default)]
+    pub kind: ScriptKind,
     pub body: String,
     pub inputs: Vec<ScriptInput>,
 }

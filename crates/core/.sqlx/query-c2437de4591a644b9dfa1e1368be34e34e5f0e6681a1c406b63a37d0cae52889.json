@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!\", name, body, updated_at as \"updated_at: DateTime<Utc>\"\n               FROM scripts WHERE id = ?",
+  "query": "SELECT id as \"id!\", name, kind, body, updated_at as \"updated_at: DateTime<Utc>\"\n               FROM scripts WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -14,13 +14,18 @@
         "type_info": "Text"
       },
       {
-        "name": "body",
+        "name": "kind",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "updated_at: DateTime<Utc>",
+        "name": "body",
         "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "updated_at: DateTime<Utc>",
+        "ordinal": 4,
         "type_info": "Text"
       }
     ],
@@ -31,8 +36,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "384cf99e6e0f2f56cb542323d3bbc3072f06367c89b2792c209c3cb0c7c5ed20"
+  "hash": "c2437de4591a644b9dfa1e1368be34e34e5f0e6681a1c406b63a37d0cae52889"
 }

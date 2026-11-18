@@ -1,13 +1,13 @@
 use dioxus::prelude::*;
 
-use crate::model::{DeployRequest, Host, Task, UpdateName};
+use crate::model::{CommandRun, DeployRequest, Host, HostCommandResult, Task, UpdateName};
 
 #[cfg(feature = "server")]
 use injectable::inject;
 
 #[cfg(feature = "server")]
 use imaged_core::di::{
-    HostRepo, ImageRepo, MachineIp, Registry, ScriptRepo, ScriptVariables, TaskRepo,
+    HostRepo, ImageRepo, MachineIp, Registry, ScriptProxy, ScriptRepo, ScriptVariables, TaskRepo,
 };
 #[cfg(feature = "server")]
 use imaged_core::domain::host::Host as DHost;
@@ -17,6 +17,8 @@ use imaged_core::domain::image::Image as DImage;
 use imaged_core::domain::script::{Script as DScript, resolve_inputs, script_roots};
 #[cfg(feature = "server")]
 use imaged_core::domain::task::TaskType;
+#[cfg(feature = "server")]
+use imaged_core::service::command::CommandService;
 #[cfg(feature = "server")]
 use imaged_model::error::AppError;
 use imaged_model::error::Result;
@@ -122,6 +124,20 @@ pub async fn wake_on_lan(host_ids: Vec<i64>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[post("/api/ui/hosts/command")]
+#[inject(registry: Registry, host_repo: HostRepo, script_repo: ScriptRepo, script_variables: ScriptVariables, script_proxy: ScriptProxy)]
+pub async fn run_command(host_ids: Vec<i64>, run: CommandRun) -> Result<Vec<HostCommandResult>> {
+    CommandService {
+        registry: &registry,
+        hosts: &**host_repo,
+        scripts: &**script_repo,
+        variables: &script_variables,
+        proxy: script_proxy.as_deref(),
+    }
+    .run(&host_ids, run)
+    .await
 }
 
 #[cfg(feature = "server")]

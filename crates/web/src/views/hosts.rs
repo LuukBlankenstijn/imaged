@@ -1,12 +1,17 @@
+use std::collections::HashSet;
+
 use dioxus::prelude::*;
 
 use crate::api::hosts::{
-    delete_host, deploy, get_all_hosts, reboot, update_host_name, wake_on_lan,
+    delete_host, deploy, get_all_hosts, reboot, run_command, update_host_name, wake_on_lan,
 };
 use crate::api::images::get_all_images;
+use crate::api::scripts::get_all_scripts;
+use crate::app::Route;
 use crate::components::connection::{Connections, use_connection};
 use crate::components::deploy_inputs::{
-    DeployInputsForm, EraseWarning, ImagePicker, deploy_request,
+    DeployInputsForm, EraseWarning, ImagePicker, ScriptInputFields, deploy_request, initial_inputs,
+    submitted_inputs,
 };
 use crate::components::hooks::use_poll;
 use crate::components::icons::Icon;
@@ -17,10 +22,15 @@ use crate::components::partitions::{
 };
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
-    Button, ButtonVariant, Card, EmptyState, ErrorBanner, PageHeader, Spinner, StatusDot,
+    Badge, Button, ButtonVariant, Card, EmptyState, ErrorBanner, FIELD_CLASSES, PageHeader,
+    Spinner, StatusDot, Tone,
 };
 use crate::format::format_bytes;
-use crate::model::{DeployInputs, Host, Image, ImageStatus, UpdateName};
+use crate::model::{
+    CommandOutcome, CommandRun, DeployInputs, Host, HostCommandResult, Image, ImageStatus, Script,
+    UpdateName,
+};
+use crate::views::groups::{all_selected, toggle_visible};
 
 #[component]
 pub fn Hosts() -> Element {
@@ -29,6 +39,8 @@ pub fn Hosts() -> Element {
     let mut query = use_signal(String::new);
     let mut show_online = use_signal(|| false);
     let mut show_offline = use_signal(|| false);
+    let mut selected = use_signal(HashSet::<i64>::new);
+    let mut command_open = use_signal(|| false);
     let polled = hosts.read();
 
     rsx! {
@@ -63,6 +75,10 @@ pub fn Hosts() -> Element {
                             );
                             (online, visible)
                         };
+                        let visible_ids: Vec<i64> = visible.iter().map(|h| h.id).collect();
+                        let all_visible_selected = all_selected(&selected.read(), &visible_ids);
+                        let targets = selected_ids(list, &selected.read());
+                        let count = targets.len();
                         rsx! {
                             div { class: "flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3",
                                 div { class: "relative min-w-0 max-w-sm flex-1",
@@ -103,6 +119,28 @@ pub fn Hosts() -> Element {
                                     }
                                 }
                             }
+                            if count > 0 {
+                                div { class: "flex flex-wrap items-center gap-3 border-b border-line bg-ink-800/40 px-4 py-2",
+                                    span { class: "font-mono text-xs text-fog-300", "{count} selected" }
+                                    Button {
+                                        variant: ButtonVariant::Subtle,
+                                        onclick: move |_| selected.write().clear(),
+                                        "Clear"
+                                    }
+                                    div { class: "flex-1" }
+                                    Button { onclick: move |_| command_open.set(true),
+                                        Icon { name: "script", class: "w-4 h-4" }
+                                        "Run command"
+                                    }
+                                }
+                            }
+                            if command_open() {
+                                CommandModal {
+                                    hosts: list.clone(),
+                                    targets,
+                                    onclose: move |_| command_open.set(false),
+                                }
+                            }
                             if visible.is_empty() {
                                 EmptyState {
                                     title: "No matching hosts",
@@ -113,6 +151,15 @@ pub fn Hosts() -> Element {
                                     table { class: "w-full text-sm",
                                         thead {
                                             tr { class: "text-fog-500",
+                                                th { class: "w-8 py-2.5 pl-4 pr-0 text-left",
+                                                    input {
+                                                        r#type: "checkbox",
+                                                        class: "accent-amber-500",
+                                                        aria_label: "Select all shown hosts",
+                                                        checked: all_visible_selected,
+                                                        onchange: move |_| toggle_visible(&mut selected.write(), &visible_ids),
+                                                    }
+                                                }
                                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider w-10" }
                                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Host" }
                                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "MAC address" }
@@ -127,6 +174,7 @@ pub fn Hosts() -> Element {
                                                     key: "{h.id}",
                                                     host: h.clone(),
                                                     index: i,
+                                                    selected,
                                                     on_changed: move |_| hosts.restart(),
                                                 }
                                             }
@@ -150,7 +198,7 @@ pub fn Hosts() -> Element {
     }
 }
 
-fn chip_classes(active: bool) -> &'static str {
+pub(crate) fn chip_classes(active: bool) -> &'static str {
     if active {
         "border-amber-500/50 bg-amber-500/15 text-amber-300"
     } else {
@@ -177,6 +225,246 @@ pub(crate) fn visible_hosts(
         .collect()
 }
 
+pub(crate) fn selected_ids(hosts: &[Host], selected: &HashSet<i64>) -> Vec<i64> {
+    hosts
+        .iter()
+        .map(|h| h.id)
+        .filter(|id| selected.contains(id))
+        .collect()
+}
+
+fn command_status(outcome: &CommandOutcome) -> (Tone, String) {
+    match outcome {
+        CommandOutcome::Exited { code: Some(0), .. } => (Tone::Ok, "exit 0".to_string()),
+        CommandOutcome::Exited {
+            code: Some(code), ..
+        } => (Tone::Bad, format!("exit {code}")),
+        CommandOutcome::Exited { code: None, .. } => (Tone::Bad, "killed".to_string()),
+        CommandOutcome::TimedOut { .. } => (Tone::Warn, "timed out".to_string()),
+        CommandOutcome::Failed { .. } => (Tone::Bad, "failed".to_string()),
+    }
+}
+
+#[component]
+fn CommandModal(hosts: Vec<Host>, targets: Vec<i64>, onclose: EventHandler<()>) -> Element {
+    let scripts = use_resource(|| async move { get_all_scripts().await });
+    let mut script_mode = use_signal(|| false);
+    let mut command = use_signal(String::new);
+    let mut script_id = use_signal(|| None::<i64>);
+    let inputs = use_signal(|| None::<DeployInputs>);
+    let mut running = use_signal(|| false);
+    let mut results = use_signal(|| None::<Vec<HostCommandResult>>);
+    let count = targets.len();
+    let selected_hosts: Vec<Host> = hosts
+        .iter()
+        .filter(|h| targets.contains(&h.id))
+        .cloned()
+        .collect();
+    let client_scripts: Vec<Script> = match &*scripts.read() {
+        Some(Ok(all)) => all.iter().filter(|s| s.kind.is_client()).cloned().collect(),
+        _ => Vec::new(),
+    };
+    let picked = client_scripts
+        .iter()
+        .find(|s| Some(s.id) == script_id())
+        .cloned();
+
+    let pending = move || -> Option<CommandRun> {
+        if script_mode() {
+            let inputs = submitted_inputs(&inputs()?);
+            script_id().map(|id| CommandRun::Script { id, inputs })
+        } else {
+            let command = command();
+            (!command.trim().is_empty()).then_some(CommandRun::Command(command))
+        }
+    };
+
+    let run = use_callback({
+        let targets = targets.clone();
+        move |()| {
+            let Some(request) = pending() else {
+                return;
+            };
+            if running() || targets.is_empty() {
+                return;
+            }
+            let host_ids = targets.clone();
+            running.set(true);
+            results.set(None);
+            spawn(async move {
+                match run_command(host_ids, request).await {
+                    Ok(list) => results.set(Some(list)),
+                    Err(err) => toast_error("Command failed", err.to_string()),
+                }
+                running.set(false);
+            });
+        }
+    });
+
+    rsx! {
+        Modal { open: true, onclose: move |_| onclose.call(()), title: "Run command", wide: true,
+            div { class: "flex flex-col gap-4",
+                div { class: "flex items-center gap-1.5",
+                    for (mode , text) in [(false, "Command"), (true, "Script")] {
+                        button {
+                            key: "{text}",
+                            class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(script_mode() == mode)}",
+                            aria_pressed: (script_mode() == mode).to_string(),
+                            onclick: move |_| script_mode.set(mode),
+                            "{text}"
+                        }
+                    }
+                }
+                if script_mode() {
+                    match &*scripts.read() {
+                        Some(Ok(_)) if client_scripts.is_empty() => rsx! {
+                            p { class: "rounded-md border border-line bg-ink-900/60 px-3 py-3 text-xs text-fog-600",
+                                "No client scripts yet. Create one on the "
+                                Link { to: Route::Scripts {}, class: "text-amber-400 hover:text-amber-300", "Scripts page" }
+                                "."
+                            }
+                        },
+                        Some(Ok(_)) => rsx! {
+                            div {
+                                label {
+                                    class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                                    r#for: "host-script",
+                                    "Script"
+                                }
+                                select {
+                                    id: "host-script",
+                                    class: "{FIELD_CLASSES} w-full max-w-sm font-mono",
+                                    onchange: {
+                                        let client_scripts = client_scripts.clone();
+                                        let targets = targets.clone();
+                                        move |e: FormEvent| {
+                                            let mut inputs = inputs;
+                                            let script = e
+                                                .value()
+                                                .parse::<i64>()
+                                                .ok()
+                                                .and_then(|id| client_scripts.iter().find(|s| s.id == id));
+                                            script_id.set(script.map(|s| s.id));
+                                            inputs.set(script.map(|s| initial_inputs(&s.inputs, &targets)));
+                                        }
+                                    },
+                                    option { value: "", selected: picked.is_none(), "choose a client script…" }
+                                    for script in client_scripts.iter() {
+                                        option {
+                                            key: "{script.id}",
+                                            value: "{script.id}",
+                                            selected: Some(script.id) == script_id(),
+                                            "{script.name}"
+                                        }
+                                    }
+                                }
+                                p { class: "mt-1 text-xs text-fog-600",
+                                    "Runs in the netboot environment of each of the {count} selected host(s), with no disk mounted. Output combines stdout and stderr; the script is stopped after 30 s."
+                                }
+                            }
+                            if let Some(script) = picked.clone() {
+                                ScriptInputFields {
+                                    key: "{script.id}",
+                                    fields: script.inputs,
+                                    hosts: selected_hosts.clone(),
+                                    inputs,
+                                }
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            p { class: "text-sm text-bad", "Failed to load scripts: {e}" }
+                        },
+                        None => rsx! {
+                            div { class: "flex justify-center", Spinner { class: "w-4 h-4" } }
+                        },
+                    }
+                } else {
+                    div {
+                        label {
+                            class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                            r#for: "host-command",
+                            "Command"
+                        }
+                        textarea {
+                            id: "host-command",
+                            class: "{FIELD_CLASSES} block w-full font-mono text-xs leading-relaxed",
+                            rows: 3,
+                            spellcheck: false,
+                            autofocus: true,
+                            placeholder: "uname -a",
+                            value: "{command}",
+                            oninput: move |e| command.set(e.value()),
+                            onkeydown: move |e| {
+                                let modifiers = e.modifiers();
+                                if e.key() == Key::Enter && (modifiers.ctrl() || modifiers.meta()) {
+                                    e.prevent_default();
+                                    run.call(());
+                                }
+                            },
+                        }
+                        p { class: "mt-1 text-xs text-fog-600",
+                            "Runs with /bin/sh in the netboot environment of each of the {count} selected host(s), not the installed OS. Output combines stdout and stderr; the command is stopped after 30 s. Ctrl+Enter runs it."
+                        }
+                    }
+                }
+                div { class: "flex justify-end gap-2",
+                    Button { variant: ButtonVariant::Ghost, onclick: move |_| onclose.call(()), "Close" }
+                    Button {
+                        disabled: pending().is_none() || running() || count == 0,
+                        onclick: move |_| run.call(()),
+                        if running() {
+                            Spinner { class: "w-4 h-4" }
+                        }
+                        "Run"
+                    }
+                }
+                if let Some(list) = results() {
+                    div { class: "flex flex-col gap-2",
+                        for result in list {
+                            CommandResultView {
+                                key: "{result.host_id}",
+                                name: hosts
+                                    .iter()
+                                    .find(|h| h.id == result.host_id)
+                                    .map_or_else(|| result.host_id.to_string(), |h| h.name.clone()),
+                                outcome: result.outcome,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CommandResultView(name: String, outcome: CommandOutcome) -> Element {
+    let (tone, status) = command_status(&outcome);
+
+    rsx! {
+        div { class: "overflow-hidden rounded-md border border-line bg-ink-900/60",
+            div { class: "flex items-center gap-3 border-b border-line/60 px-3 py-1.5",
+                span { class: "min-w-0 flex-1 truncate text-sm text-fog-100", "{name}" }
+                Badge { tone, "{status}" }
+            }
+            match outcome {
+                CommandOutcome::Failed { reason } => rsx! {
+                    p { class: "px-3 py-2 text-xs text-bad", "{reason}" }
+                },
+                CommandOutcome::Exited { output, .. } | CommandOutcome::TimedOut { output } => rsx! {
+                    if output.is_empty() {
+                        p { class: "px-3 py-2 font-mono text-xs text-fog-600", "no output" }
+                    } else {
+                        pre { class: "max-h-80 overflow-auto whitespace-pre-wrap break-all px-3 py-2 font-mono text-xs leading-relaxed text-fog-300",
+                            "{output}"
+                        }
+                    }
+                },
+            }
+        }
+    }
+}
+
 pub(crate) fn host_matches(host: &Host, needle: &str) -> bool {
     needle.is_empty()
         || host.name.to_lowercase().contains(needle)
@@ -185,7 +473,12 @@ pub(crate) fn host_matches(host: &Host, needle: &str) -> bool {
 }
 
 #[component]
-fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
+fn HostRow(
+    host: Host,
+    index: usize,
+    selected: Signal<HashSet<i64>>,
+    on_changed: EventHandler<()>,
+) -> Element {
     let host_id = host.id;
     let name = host.name.clone();
     let ip_display = host.ip.clone().unwrap_or_else(|| "\u{2014}".to_string());
@@ -210,6 +503,22 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
         tr {
             class: "group border-t border-line/60 transition-colors hover:bg-ink-800/40 rise",
             style: "--d: {delay}ms",
+            td { class: "w-8 py-3 pl-4 pr-0",
+                input {
+                    r#type: "checkbox",
+                    class: "accent-amber-500",
+                    aria_label: "Select {name}",
+                    checked: selected.read().contains(&host_id),
+                    onchange: move |e| {
+                        let mut selected = selected;
+                        if e.checked() {
+                            selected.write().insert(host_id);
+                        } else {
+                            selected.write().remove(&host_id);
+                        }
+                    },
+                }
+            }
             td { class: "px-4 py-3 w-10", StatusDot { connected } }
             td { class: "px-4 py-3",
                 if editing() {
@@ -385,7 +694,7 @@ fn HostRow(host: Host, index: usize, on_changed: EventHandler<()>) -> Element {
         }
         if partitions_open() && partition_count > 0 {
             tr { class: "border-t border-line/30",
-                td { colspan: 6, class: "px-4 pb-3 pt-1",
+                td { colspan: 7, class: "px-4 pb-3 pt-1",
                     HostPartitionList { partitions }
                 }
             }
@@ -516,7 +825,9 @@ fn DeployModal(host: Host, onclose: EventHandler<()>, on_deployed: EventHandler<
 
 #[cfg(test)]
 mod tests {
-    use super::{connection_allows, host_matches, visible_hosts};
+    use std::collections::HashSet;
+
+    use super::{connection_allows, host_matches, selected_ids, visible_hosts};
     use crate::model::Host;
 
     fn host(id: i64, name: &str, mac: &str, ip: Option<&str>) -> Host {
@@ -614,5 +925,13 @@ mod tests {
             ["gamma"]
         );
         assert!(visible_hosts(&hosts, "beta", false, true, connected).is_empty());
+    }
+
+    #[test]
+    fn only_selected_hosts_that_are_still_listed_are_targeted() {
+        let hosts = fleet();
+        assert_eq!(selected_ids(&hosts, &HashSet::from([3, 1, 99])), [1, 3]);
+        assert!(selected_ids(&hosts, &HashSet::from([99])).is_empty());
+        assert!(selected_ids(&[], &HashSet::from([1])).is_empty());
     }
 }

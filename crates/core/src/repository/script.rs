@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use derive_more::Constructor;
-use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
+use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput, ScriptKind};
 use sqlx::{Executor, Sqlite, SqliteConnection, SqlitePool, types::Json};
 
 use crate::domain::script::{ImageScript, NewImageScript, NewScript, Script, ScriptRepository};
@@ -16,6 +16,7 @@ pub struct SqliteScriptRepository {
 struct ScriptRow {
     id: i64,
     name: String,
+    kind: String,
     body: String,
     updated_at: DateTime<Utc>,
 }
@@ -36,16 +37,18 @@ impl SqliteScriptRepository {
     async fn assemble(&self, rows: Vec<ScriptRow>) -> Result<Vec<Script>> {
         let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
         let mut inputs = load_inputs(&self.pool, &ids).await?;
-        Ok(rows
-            .into_iter()
-            .map(|row| Script {
-                inputs: inputs.remove(&row.id).unwrap_or_default(),
-                id: row.id,
-                name: row.name,
-                body: row.body,
-                updated_at: row.updated_at,
+        rows.into_iter()
+            .map(|row| {
+                Ok(Script {
+                    inputs: inputs.remove(&row.id).unwrap_or_default(),
+                    kind: script_kind(&row.kind)?,
+                    id: row.id,
+                    name: row.name,
+                    body: row.body,
+                    updated_at: row.updated_at,
+                })
             })
-            .collect())
+            .collect()
     }
 }
 
@@ -96,6 +99,14 @@ fn input_kind(value: &str) -> Result<InputKind> {
     })
 }
 
+fn script_kind(value: &str) -> Result<ScriptKind> {
+    match value {
+        "post_install" => Ok(ScriptKind::PostInstall),
+        "client" => Ok(ScriptKind::Client),
+        other => Err(AppError::Internal(format!("unknown script kind `{other}`"))),
+    }
+}
+
 async fn insert_inputs(conn: &mut SqliteConnection, script_id: i64, script: &NewScript) -> Result {
     for (position, input) in script.inputs.iter().enumerate() {
         let position = position as i64;
@@ -127,7 +138,7 @@ impl ScriptRepository for SqliteScriptRepository {
     async fn get_all(&self) -> Result<Vec<Script>> {
         let rows = sqlx::query_as!(
             ScriptRow,
-            r#"SELECT id as "id!", name, body, updated_at as "updated_at: DateTime<Utc>"
+            r#"SELECT id as "id!", name, kind, body, updated_at as "updated_at: DateTime<Utc>"
                FROM scripts ORDER BY name"#
         )
         .fetch_all(&self.pool)
@@ -138,7 +149,7 @@ impl ScriptRepository for SqliteScriptRepository {
     async fn get(&self, id: i64) -> Result<Script> {
         let row = sqlx::query_as!(
             ScriptRow,
-            r#"SELECT id as "id!", name, body, updated_at as "updated_at: DateTime<Utc>"
+            r#"SELECT id as "id!", name, kind, body, updated_at as "updated_at: DateTime<Utc>"
                FROM scripts WHERE id = ?"#,
             id
         )
@@ -158,7 +169,7 @@ impl ScriptRepository for SqliteScriptRepository {
 
     async fn update(&self, id: i64, script: &NewScript) -> Result<Script> {
         script.validate()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         write_script(&mut tx, Some(id), &script.name, script).await?;
         tx.commit().await?;
         self.get(id).await
@@ -204,7 +215,7 @@ impl ScriptRepository for SqliteScriptRepository {
 
     async fn get_for_image(&self, image_id: i64) -> Result<Vec<ImageScript>> {
         let (rows, roots): (Vec<ScriptRow>, Vec<Option<i64>>) = sqlx::query!(
-            r#"SELECT s.id as "id!", s.name, s.body, s.updated_at as "updated_at: DateTime<Utc>",
+            r#"SELECT s.id as "id!", s.name, s.kind, s.body, s.updated_at as "updated_at: DateTime<Utc>",
                       i.root_partition
                FROM image_scripts i JOIN scripts s ON s.id = i.script_id
                WHERE i.image_id = ?
@@ -219,6 +230,7 @@ impl ScriptRepository for SqliteScriptRepository {
                 ScriptRow {
                     id: row.id,
                     name: row.name,
+                    kind: row.kind,
                     body: row.body,
                     updated_at: row.updated_at,
                 },
@@ -308,7 +320,7 @@ async fn import_script(
     loop {
         let name = import_name(&script.name, attempt);
         let Some(existing) = sqlx::query!(
-            r#"SELECT id as "id!", body FROM scripts WHERE name = ?"#,
+            r#"SELECT id as "id!", kind, body FROM scripts WHERE name = ?"#,
             name
         )
         .fetch_optional(&mut *conn)
@@ -320,10 +332,11 @@ async fn import_script(
             .await?
             .remove(&existing.id)
             .unwrap_or_default();
-        if existing.body == script.body && inputs == script.inputs {
+        let same_kind = existing.kind == script.kind.to_string();
+        if same_kind && existing.body == script.body && inputs == script.inputs {
             return Ok(existing.id);
         }
-        if attempt == 1 && !used_by_other_images(conn, existing.id, image_id).await? {
+        if same_kind && attempt == 1 && !used_by_other_images(conn, existing.id, image_id).await? {
             return write_script(conn, Some(existing.id), &name, script).await;
         }
         attempt += 1;
@@ -362,11 +375,13 @@ async fn write_script(
     script: &NewScript,
 ) -> Result<i64> {
     let now = Utc::now();
+    let kind = script.kind.to_string();
     let id = match id {
         None => {
             sqlx::query_scalar!(
-                r#"INSERT INTO scripts (name, body, updated_at) VALUES (?, ?, ?) RETURNING id as "id!""#,
+                r#"INSERT INTO scripts (name, kind, body, updated_at) VALUES (?, ?, ?, ?) RETURNING id as "id!""#,
                 name,
+                kind,
                 script.body,
                 now
             )
@@ -374,9 +389,25 @@ async fn write_script(
             .await?
         }
         Some(id) => {
+            if script.kind.is_client() {
+                let images = sqlx::query_scalar!(
+                    "SELECT DISTINCT i.name FROM image_scripts s JOIN images i ON i.id = s.image_id \
+                     WHERE s.script_id = ? ORDER BY i.name",
+                    id
+                )
+                .fetch_all(&mut *conn)
+                .await?;
+                if !images.is_empty() {
+                    return Err(AppError::FailedPrecondition(format!(
+                        "script {id} runs after deploys of image {}, so it cannot become a client script",
+                        images.join(", ")
+                    )));
+                }
+            }
             let updated = sqlx::query!(
-                "UPDATE scripts SET name = ?, body = ?, updated_at = ? WHERE id = ?",
+                "UPDATE scripts SET name = ?, kind = ?, body = ?, updated_at = ? WHERE id = ?",
                 name,
+                kind,
                 script.body,
                 now,
                 id
@@ -417,10 +448,15 @@ async fn link_scripts(
                 "script {script_id} is listed twice"
             )));
         }
-        sqlx::query_scalar!("SELECT id FROM scripts WHERE id = ?", script_id)
+        let kind = sqlx::query_scalar!("SELECT kind FROM scripts WHERE id = ?", script_id)
             .fetch_optional(&mut *conn)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("script {script_id}")))?;
+        if script_kind(&kind)?.is_client() {
+            return Err(AppError::InvalidArgument(format!(
+                "script {script_id} is a client script, only post-install scripts run after a deploy"
+            )));
+        }
         let position = position as i64;
         sqlx::query!(
             "INSERT INTO image_scripts (image_id, position, script_id, root_partition) VALUES (?, ?, ?, ?)",
@@ -441,7 +477,7 @@ mod tests {
     use crate::test_support::repos;
     use imaged_model::error::AppError;
     use imaged_model::image::ImageKind;
-    use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput};
+    use imaged_model::script::{InputKind, MAX_SCRIPT_NAME_LEN, ScriptInput, ScriptKind};
 
     fn input(name: &str, kind: InputKind, choices: &[&str]) -> ScriptInput {
         ScriptInput {
@@ -459,6 +495,7 @@ mod tests {
     fn new_script(name: &str, body: &str, inputs: Vec<ScriptInput>) -> NewScript {
         NewScript {
             name: name.to_string(),
+            kind: ScriptKind::PostInstall,
             body: body.to_string(),
             inputs,
         }
@@ -686,6 +723,87 @@ mod tests {
         assert_eq!(
             c.script_repo.get_for_image(image.id).await.unwrap().len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn client_scripts_never_run_after_a_deploy() {
+        let (c, _g) = repos().await;
+        let image = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let client = NewScript {
+            kind: ScriptKind::Client,
+            ..new_script("probe", "lsblk", vec![])
+        };
+        let client = c.script_repo.create(&client).await.unwrap();
+        let attached = c
+            .script_repo
+            .create(&new_script("setup", "echo", vec![]))
+            .await
+            .unwrap();
+        c.script_repo
+            .set_for_image(image.id, &[attached.id])
+            .await
+            .unwrap();
+
+        let refused = c
+            .script_repo
+            .set_for_image(image.id, &[attached.id, client.id])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refused, AppError::InvalidArgument(_)),
+            "{refused:?}"
+        );
+        let converted = c
+            .script_repo
+            .update(
+                attached.id,
+                &NewScript {
+                    kind: ScriptKind::Client,
+                    ..new_script("setup", "echo", vec![])
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(converted, AppError::FailedPrecondition(_)),
+            "{converted:?}"
+        );
+
+        let scripts = c.script_repo.get_for_image(image.id).await.unwrap();
+        assert_eq!(scripts.len(), 1);
+        assert_eq!(scripts[0].script.kind, ScriptKind::PostInstall);
+    }
+
+    #[tokio::test]
+    async fn an_imported_script_never_takes_over_a_client_script_of_the_same_name() {
+        let (c, _g) = repos().await;
+        let image = c
+            .image_repo
+            .create_image("img".into(), ImageKind::Disk)
+            .await
+            .unwrap();
+        let client = NewScript {
+            kind: ScriptKind::Client,
+            ..new_script("setup", "echo", vec![])
+        };
+        let client = c.script_repo.create(&client).await.unwrap();
+
+        c.script_repo
+            .import_for_image(image.id, &attachable([new_script("setup", "echo", vec![])]))
+            .await
+            .unwrap();
+
+        let imported = c.script_repo.get_for_image(image.id).await.unwrap();
+        assert_eq!(imported[0].script.name, "setup-2");
+        assert_eq!(imported[0].script.kind, ScriptKind::PostInstall);
+        assert_eq!(
+            c.script_repo.get(client.id).await.unwrap().kind,
+            ScriptKind::Client
         );
     }
 

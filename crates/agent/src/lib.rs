@@ -1,8 +1,10 @@
 pub mod agent;
+pub mod command;
 pub mod connection;
 pub mod logging;
 pub mod multicast;
 pub mod reboot;
+pub mod script;
 pub mod server;
 pub mod shell;
 pub mod status;

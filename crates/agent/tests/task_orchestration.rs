@@ -10,16 +10,16 @@ use imaged_agent::agent::Agent;
 use imaged_agent::status::{Outcome, Step};
 use imaged_agent::task::types::RunningTask;
 use imaged_agent::task::{
-    Capture, ClientState, ClientTaskExt, Http, RebootTask, Restore, WholeDisk, handle_message,
+    Capture, ClientState, ClientTaskExt, Http, RebootTask, Restore, WholeDisk, handle_current,
 };
 use imaged_model::agent::path;
-use imaged_model::{ServerEvent, Task as SharedTask, Work};
+use imaged_model::{Task as SharedTask, Work};
 use tokio_util::sync::CancellationToken;
 
 const MAC: &str = "aa:bb:cc:dd:ee:0f";
 
-fn capture_event(id: i64) -> ServerEvent {
-    ServerEvent::Current(Some(SharedTask::new(id, Work::Capture { image_id: 1 })))
+fn capture(id: i64) -> Option<SharedTask> {
+    Some(SharedTask::new(id, Work::Capture { image_id: 1 }))
 }
 
 async fn reporting_server() -> (StubServer, Agent) {
@@ -59,7 +59,7 @@ async fn a_current_task_while_idle_starts_and_stores_the_running_task() {
     let (_server, agent) = reporting_server().await;
     let state = Arc::new(ClientState::default());
 
-    handle_message(&agent, state.clone(), capture_event(7)).await;
+    handle_current(&agent, state.clone(), capture(7)).await;
 
     {
         let guard = state.current_task.lock().await;
@@ -76,7 +76,7 @@ async fn naming_the_running_task_again_leaves_it_running() {
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_agent(), state.clone(), capture_event(100)).await;
+    handle_current(&offline_agent(), state.clone(), capture(100)).await;
 
     assert!(!cancel.is_cancelled());
     assert_eq!(
@@ -91,7 +91,7 @@ async fn naming_another_task_cancels_the_running_one_without_starting_the_other_
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_agent(), state.clone(), capture_event(200)).await;
+    handle_current(&offline_agent(), state.clone(), capture(200)).await;
 
     assert!(cancel.is_cancelled());
     assert_eq!(
@@ -107,7 +107,7 @@ async fn naming_no_task_cancels_the_running_one() {
     let cancel = CancellationToken::new();
     preseed(&state, 100, cancel.clone()).await;
 
-    handle_message(&offline_agent(), state.clone(), ServerEvent::Current(None)).await;
+    handle_current(&offline_agent(), state.clone(), None).await;
 
     assert!(cancel.is_cancelled());
     assert!(
@@ -123,7 +123,7 @@ async fn after_completion_the_slot_is_cleared_and_the_agent_becomes_idle() {
     let state = Arc::new(ClientState::default());
     let mut idle = state.idle();
 
-    handle_message(&agent, state.clone(), capture_event(11)).await;
+    handle_current(&agent, state.clone(), capture(11)).await;
 
     tokio::time::timeout(Duration::from_secs(5), idle.changed())
         .await

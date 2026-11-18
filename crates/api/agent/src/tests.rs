@@ -15,7 +15,7 @@ use core::domain::task::TaskType;
 use core::test_support::container;
 use imaged_model::agent::{ImageLayout, ImagePartition, MAC_HEADER, PostInstall, path, route};
 use imaged_model::image::{ImageKind, ImageStatus};
-use imaged_model::script::{InputKind, ScriptInput};
+use imaged_model::script::{InputKind, ScriptInput, ScriptKind};
 use imaged_model::task::TaskState;
 
 const MAC: &str = "aa:bb:cc:dd:ee:01";
@@ -1012,6 +1012,7 @@ async fn scripted_image(c: &DIContainer, scripts: &[(&str, Vec<ScriptInput>)]) -
             .script_repo
             .create(&NewScript {
                 name: next_name(name),
+                kind: ScriptKind::PostInstall,
                 body: format!("#!/bin/sh\necho {name}"),
                 inputs: inputs.clone(),
             })
@@ -1520,6 +1521,7 @@ async fn stored_inputs_that_no_longer_fit_the_scripts_stop_the_restore_before_th
         let id = script.id;
         let changed = NewScript {
             name: script.name.clone(),
+            kind: script.kind,
             body: script.body.clone(),
             inputs,
         };

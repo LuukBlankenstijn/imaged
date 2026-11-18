@@ -1,13 +1,24 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures::future::join_all;
 use parking_lot::RwLock;
 
+use imaged_model::command::{COMMAND_TIMEOUT, CommandOutcome, CommandScript, HostCommandResult};
 use imaged_model::host::{ConnectionChange, HostConnectionEvent};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
+
+const ANSWER_GRACE: Duration = Duration::from_secs(10);
+
+pub struct PendingCommand {
+    pub script: CommandScript,
+    pub reply: oneshot::Sender<CommandOutcome>,
+}
 
 pub struct Registration {
     pub receiver: mpsc::Receiver<()>,
+    pub commands: mpsc::UnboundedReceiver<PendingCommand>,
     cleanup: Option<Box<dyn FnOnce() + Send>>,
 }
 
@@ -50,6 +61,7 @@ struct HostEntry {
     /// connection's cleanup can't tear down a newer registration for the host.
     generation: u64,
     dispatch: mpsc::Sender<()>,
+    commands: mpsc::UnboundedSender<PendingCommand>,
 }
 
 #[derive(Default)]
@@ -81,11 +93,13 @@ impl HostRegistry {
         hosts.next_generation += 1;
 
         let (dispatch, receiver) = mpsc::channel(1);
+        let (commands, command_receiver) = mpsc::unbounded_channel();
         hosts.map.insert(
             id,
             HostEntry {
                 generation,
                 dispatch,
+                commands,
             },
         );
         let _ = self.broadcast.send(HostConnectionEvent::new(id, true));
@@ -110,6 +124,7 @@ impl HostRegistry {
 
         Registration {
             receiver,
+            commands: command_receiver,
             cleanup: Some(Box::new(cleanup)),
         }
     }
@@ -136,6 +151,38 @@ impl HostRegistry {
         let hosts = self.hosts.read();
         if let Some(entry) = hosts.map.get(&host_id) {
             let _ = entry.dispatch.try_send(());
+        }
+    }
+
+    pub async fn run(&self, scripts: Vec<(i64, CommandScript)>) -> Vec<HostCommandResult> {
+        join_all(scripts.into_iter().map(|(host_id, script)| async move {
+            HostCommandResult {
+                host_id,
+                outcome: self.run_on(host_id, script).await,
+            }
+        }))
+        .await
+    }
+
+    async fn run_on(&self, host_id: i64, script: CommandScript) -> CommandOutcome {
+        let (reply, answer) = oneshot::channel();
+        let sent = self.hosts.read().map.get(&host_id).is_some_and(|entry| {
+            entry
+                .commands
+                .send(PendingCommand { script, reply })
+                .is_ok()
+        });
+        let reason = if !sent {
+            "the host is not connected"
+        } else {
+            match tokio::time::timeout(COMMAND_TIMEOUT + ANSWER_GRACE, answer).await {
+                Ok(Ok(outcome)) => return outcome,
+                Ok(Err(_)) => "the host disconnected before answering",
+                Err(_) => "the host did not answer in time",
+            }
+        };
+        CommandOutcome::Failed {
+            reason: reason.to_owned(),
         }
     }
 

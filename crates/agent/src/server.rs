@@ -9,6 +9,7 @@ use imaged_model::agent::{
     IP_HEADER, ImageLayout, ImagePartition, MAC_HEADER, MacAddress, PartitionUpload, PostInstall,
     ScriptFinished, ScriptOutputUpload, StreamQuery, TaskFailure, TaskStarted, path, route,
 };
+use imaged_model::command::CommandReport;
 use imaged_model::progress::HostProgress;
 use imaged_model::{AgentEvent, ServerEvent};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -17,7 +18,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
 use tokio::net::TcpStream;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tokio_tungstenite::tungstenite::{self, Message};
@@ -74,6 +75,7 @@ impl Rejected {
 pub struct Uplink {
     pub progress: watch::Receiver<Option<HostProgress>>,
     pub idle: watch::Receiver<()>,
+    pub commands: mpsc::UnboundedReceiver<CommandReport>,
 }
 
 impl Server {
@@ -363,6 +365,13 @@ impl Connection {
                 Ok(()) = self.uplink.idle.changed() => {
                     if let Err(e) = self.send(&AgentEvent::Idle).await {
                         tracing::info!(err=%e, "could not ask for the next task, closing the agent control stream");
+                        return None;
+                    }
+                    continue;
+                }
+                Some(report) = self.uplink.commands.recv() => {
+                    if let Err(e) = self.send(&AgentEvent::from(report)).await {
+                        tracing::info!(err=%e, "could not report a command's outcome, closing the agent control stream");
                         return None;
                     }
                     continue;

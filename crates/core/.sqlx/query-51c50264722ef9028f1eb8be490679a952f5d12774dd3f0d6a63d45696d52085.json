@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!\", body FROM scripts WHERE name = ?",
+  "query": "SELECT id as \"id!\", kind, body FROM scripts WHERE name = ?",
   "describe": {
     "columns": [
       {
@@ -9,8 +9,13 @@
         "type_info": "Integer"
       },
       {
-        "name": "body",
+        "name": "kind",
         "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "body",
+        "ordinal": 2,
         "type_info": "Text"
       }
     ],
@@ -19,8 +24,9 @@
     },
     "nullable": [
       true,
+      false,
       false
     ]
   },
-  "hash": "2f0f6a1099c58f0f9fd25e85972d54883061b04e9c742fe7567a9cf1a6b45a61"
+  "hash": "51c50264722ef9028f1eb8be490679a952f5d12774dd3f0d6a63d45696d52085"
 }

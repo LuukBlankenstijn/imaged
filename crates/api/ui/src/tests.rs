@@ -12,7 +12,7 @@ use core::domain::task::{MAX_TASK_PAGE_SIZE, Task as DTask, TaskQuery, TaskType}
 use core::test_support::container;
 use imaged_model::error::AppError;
 use imaged_model::image::{ImageKind, ImageStatus};
-use imaged_model::script::{InputKind, ScriptInput};
+use imaged_model::script::{InputKind, ScriptInput, ScriptKind};
 use imaged_model::task::TaskState;
 use std::collections::BTreeMap;
 
@@ -1688,6 +1688,7 @@ async fn scripted_image(c: &DIContainer, root: Option<i64>, inputs: Vec<ScriptIn
         .script_repo
         .create(&NewScript {
             name: "setup".into(),
+            kind: ScriptKind::PostInstall,
             body: "echo".into(),
             inputs,
         })

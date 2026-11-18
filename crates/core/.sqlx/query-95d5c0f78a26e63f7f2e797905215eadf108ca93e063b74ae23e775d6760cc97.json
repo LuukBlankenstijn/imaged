@@ -1,12 +1,12 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id FROM scripts WHERE id = ?",
+  "query": "SELECT kind FROM scripts WHERE id = ?",
   "describe": {
     "columns": [
       {
-        "name": "id",
+        "name": "kind",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "ac4f755054ff855c790c12a21d981b86dcf48c717bb04fb2d061fa79bc025a9a"
+  "hash": "95d5c0f78a26e63f7f2e797905215eadf108ca93e063b74ae23e775d6760cc97"
 }

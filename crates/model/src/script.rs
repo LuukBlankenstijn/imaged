@@ -17,6 +17,17 @@ pub enum InputKind {
     Secret,
 }
 
+#[derive(
+    Debug, Clone, Copy, Default, Display, IsVariant, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[display(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptKind {
+    #[default]
+    PostInstall,
+    Client,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptInput {
     pub name: String,

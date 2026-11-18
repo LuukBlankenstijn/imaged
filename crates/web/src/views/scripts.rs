@@ -5,10 +5,13 @@ use crate::components::icons::Icon;
 use crate::components::modal::{ConfirmDialog, Modal};
 use crate::components::toast::{toast_error, toast_success};
 use crate::components::ui::{
-    Button, ButtonVariant, Card, EmptyState, FIELD_CLASSES, PageHeader, Spinner,
+    Badge, Button, ButtonVariant, Card, EmptyState, FIELD_CLASSES, PageHeader, Spinner, Tone,
 };
 use crate::format::format_relative;
-use crate::model::{InputKind, Script, ScriptInput, ScriptRequest, UpdateScriptRequest};
+use crate::model::{
+    InputKind, Script, ScriptInput, ScriptKind, ScriptRequest, UpdateScriptRequest,
+};
+use crate::views::hosts::chip_classes;
 
 #[derive(Clone, PartialEq)]
 enum Editing {
@@ -24,7 +27,7 @@ pub fn Scripts() -> Element {
     rsx! {
         PageHeader {
             title: "Scripts",
-            subtitle: "Post-install scripts run inside the restored system after a deploy",
+            subtitle: "Post-install scripts run inside the restored system after a deploy; client scripts run on demand on connected hosts",
             Button { onclick: move |_| editing.set(Some(Editing::New)),
                 Icon { name: "plus", class: "w-3.5 h-3.5" }
                 "New script"
@@ -35,7 +38,7 @@ pub fn Scripts() -> Element {
                 Some(Ok(list)) if list.is_empty() => rsx! {
                     EmptyState {
                         title: "No scripts yet",
-                        hint: "Create a script, then attach it to an image to run it after every deploy.",
+                        hint: "Create a post-install script to attach to an image, or a client script to run on connected hosts.",
                     }
                 },
                 Some(Ok(list)) => rsx! {
@@ -43,6 +46,7 @@ pub fn Scripts() -> Element {
                         thead {
                             tr { class: "text-fog-500",
                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Script" }
+                                th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Kind" }
                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Inputs" }
                                 th { class: "px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider", "Updated" }
                                 th { class: "px-4 py-2.5 text-right text-xs font-medium uppercase tracking-wider" }
@@ -96,6 +100,7 @@ fn ScriptRow(
     let id = script.id;
     let name = script.name.clone();
     let input_count = script.inputs.len();
+    let (tone, kind) = kind_badge(script.kind);
     let updated = format_relative(script.updated_at);
     let delay = index * 40;
 
@@ -108,6 +113,9 @@ fn ScriptRow(
                     Icon { name: "script", class: "w-4 h-4 text-amber-500" }
                     span { class: "font-mono text-fog-100", "{name}" }
                 }
+            }
+            td { class: "px-4 py-3",
+                Badge { tone, "{kind}" }
             }
             td { class: "px-4 py-3 font-mono text-xs text-fog-400", "{input_count}" }
             td { class: "px-4 py-3 font-mono text-xs text-fog-500", "{updated}" }
@@ -147,6 +155,13 @@ fn ScriptRow(
                 }
             }
         }
+    }
+}
+
+fn kind_badge(kind: ScriptKind) -> (Tone, &'static str) {
+    match kind {
+        ScriptKind::PostInstall => (Tone::Neutral, "post-install"),
+        ScriptKind::Client => (Tone::Run, "client"),
     }
 }
 
@@ -247,6 +262,7 @@ fn ScriptEditor(
     let id = script.as_ref().map(|s| s.id);
     let mut name = use_signal(|| script.as_ref().map(|s| s.name.clone()).unwrap_or_default());
     let mut body = use_signal(|| script.as_ref().map(|s| s.body.clone()).unwrap_or_default());
+    let mut kind = use_signal(|| script.as_ref().map(|s| s.kind).unwrap_or_default());
     let mut inputs = use_signal(|| {
         script
             .as_ref()
@@ -281,6 +297,29 @@ fn ScriptEditor(
                     }
                 }
                 div {
+                    span { class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
+                        "Kind"
+                    }
+                    div { class: "flex items-center gap-1.5",
+                        for (option , text) in [(ScriptKind::PostInstall, "Post-install"), (ScriptKind::Client, "Client")] {
+                            button {
+                                key: "{text}",
+                                class: "rounded-full border px-2.5 py-1 text-xs transition-colors {chip_classes(kind() == option)}",
+                                aria_pressed: (kind() == option).to_string(),
+                                onclick: move |_| kind.set(option),
+                                "{text}"
+                            }
+                        }
+                    }
+                    p { class: "mt-1 text-xs text-fog-600",
+                        if kind().is_client() {
+                            "Runs on demand on connected hosts from the Hosts page, in the netboot environment with no disk mounted. Cannot be attached to images."
+                        } else {
+                            "Runs after a deploy inside the restored system, for every image it is attached to."
+                        }
+                    }
+                }
+                div {
                     label {
                         class: "mb-1 block font-mono text-[11px] uppercase tracking-wider text-fog-500",
                         r#for: "script-body",
@@ -296,7 +335,11 @@ fn ScriptEditor(
                         oninput: move |e| body.set(e.value()),
                     }
                     p { class: "mt-1 text-xs text-fog-600",
-                        "Runs chrooted in the restored root partition, with /bin/sh unless it starts with #!. Inputs arrive as IMAGED_INPUT_<NAME>; IMAGED_MAC, IMAGED_IP and IMAGED_SERVER are always set."
+                        if kind().is_client() {
+                            "Runs in the busybox netboot environment, with /bin/sh unless it starts with #!, and is stopped after 30 s. Inputs arrive as IMAGED_INPUT_<NAME>; IMAGED_MAC, IMAGED_IP and IMAGED_SERVER are always set."
+                        } else {
+                            "Runs chrooted in the restored root partition, with /bin/sh unless it starts with #!. Inputs arrive as IMAGED_INPUT_<NAME>; IMAGED_MAC, IMAGED_IP and IMAGED_SERVER are always set."
+                        }
                     }
                 }
                 div {
@@ -353,6 +396,7 @@ fn ScriptEditor(
                     onclick: move |_| {
                         let request = ScriptRequest {
                             name: name().trim().to_string(),
+                            kind: kind(),
                             body: body(),
                             inputs: inputs.read().iter().map(ScriptInput::from).collect(),
                         };

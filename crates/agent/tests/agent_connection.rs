@@ -138,7 +138,7 @@ async fn agent_dispatches_events_and_reconnects_without_exiting_or_restarting_th
     let state = Arc::new(ClientState::default());
 
     let driver = async {
-        // The current task sent on connect reaches handle_message and lands in ClientState.
+        // The current task sent on connect reaches handle_current and lands in ClientState.
         wait_for_task(&state, Some(TASK_ID)).await;
         assert_eq!(
             server.upgrades(),

@@ -13,6 +13,7 @@ use crate::domain::image::{Image, ImageRepository, NewImagePartition};
 use crate::domain::script::{NewImageScript, NewScript, ScriptRepository};
 use crate::service::image::ImageService;
 use imaged_model::error::{AppError, Result};
+use imaged_model::script::ScriptKind;
 
 const INTERRUPTED_IMPORT_ERROR: &str = "import interrupted";
 const CHUNK_BYTES: usize = 256 * 1024;
@@ -144,6 +145,7 @@ impl ArchiveService {
             .map(|script| NewImageScript {
                 script: NewScript {
                     name: script.name,
+                    kind: ScriptKind::PostInstall,
                     body: script.body,
                     inputs: script.inputs,
                 },
@@ -400,6 +402,7 @@ mod tests {
         c.image_repo.mark_finished(source.id).await.unwrap();
         let script = NewScript {
             name: "cleanup".into(),
+            kind: ScriptKind::PostInstall,
             body: "rm -rf /var/cache/*\n".into(),
             inputs: vec![],
         };
@@ -460,6 +463,7 @@ mod tests {
         ] {
             let script = NewScript {
                 name: name.into(),
+                kind: ScriptKind::PostInstall,
                 body: body.into(),
                 inputs,
             };
@@ -483,6 +487,7 @@ mod tests {
                 hostname.id,
                 &NewScript {
                     name: "set-hostname".into(),
+                    kind: ScriptKind::PostInstall,
                     body: "echo edited".into(),
                     inputs: vec![],
                 },
@@ -494,6 +499,7 @@ mod tests {
                 cleanup.id,
                 &NewScript {
                     name: "tidy".into(),
+                    kind: ScriptKind::PostInstall,
                     body: cleanup.body.clone(),
                     inputs: vec![],
                 },
@@ -559,6 +565,7 @@ mod tests {
         c.script_repo
             .create(&NewScript {
                 name: "setup".into(),
+                kind: ScriptKind::PostInstall,
                 body: "echo old".into(),
                 inputs: vec![],
             })

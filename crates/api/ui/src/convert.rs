@@ -126,6 +126,7 @@ impl From<DScript> for model::Script {
         Self {
             id: s.id,
             name: s.name,
+            kind: s.kind,
             body: s.body,
             updated_at: s.updated_at.timestamp_millis(),
             inputs: s.inputs,
@@ -147,6 +148,7 @@ impl From<model::ScriptRequest> for DNewScript {
     fn from(s: model::ScriptRequest) -> Self {
         Self {
             name: s.name,
+            kind: s.kind,
             body: s.body,
             inputs: s.inputs,
         }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use imaged_model::script::{InputValues, ScriptInput, validate_script};
+use imaged_model::script::{InputValues, ScriptInput, ScriptKind, validate_script};
 
 use imaged_model::error::{AppError, Result};
 use imaged_model::script::ResolvedInputs;
@@ -13,6 +13,7 @@ use crate::domain::image::Image;
 pub struct Script {
     pub id: i64,
     pub name: String,
+    pub kind: ScriptKind,
     pub body: String,
     pub updated_at: DateTime<Utc>,
     pub inputs: Vec<ScriptInput>,
@@ -21,6 +22,7 @@ pub struct Script {
 #[derive(Debug, Clone)]
 pub struct NewScript {
     pub name: String,
+    pub kind: ScriptKind,
     pub body: String,
     pub inputs: Vec<ScriptInput>,
 }
@@ -187,6 +189,7 @@ mod tests {
         Script {
             id: 1,
             name: "setup".to_string(),
+            kind: ScriptKind::PostInstall,
             body: "#!/bin/sh\n".to_string(),
             updated_at: Utc::now(),
             inputs,

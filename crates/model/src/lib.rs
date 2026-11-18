@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod command;
 pub mod error;
 pub mod group;
 pub mod host;

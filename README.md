@@ -186,7 +186,12 @@ partition, and each script can pick a root partition of its own; the deploy
 and multicast dialogs need an explicit image, list every machine whose disk
 will be erased and ask for the inputs of the image's scripts (shared values
 once, per-machine values per host). Hosts without a usable disk show why;
-every host lists the partitions its agent reported. A capture takes the whole
+every host lists the partitions its agent reported. Selected hosts (the header
+checkbox selects the hosts the search and filters show) can be sent a typed
+command or a client script with its inputs; the dialog lists each host's exit
+code or failure and its output, and stays open to run the next one. The
+Scripts page sets each script's kind, and an image only offers post-install
+scripts. A capture takes the whole
 disk or one ext2/3/4, vfat or btrfs partition of the source host. For a
 partition image the deploy dialog asks for the partition to overwrite and only
 offers partitions that are large enough and would not hold a second copy of the
@@ -247,6 +252,11 @@ OPTIONS passes a cross-site check (see [Security](#security)).
   `fstype` and `size_bytes`. Image JSON has `kind` (`disk` or `partition`),
   `fs_uuid` for each partition whose filesystem UUID is known and `fs_label`
   for each partition whose filesystem label is known.
+- `POST /api/ui/hosts/command` runs a typed command or a client script on
+  connected hosts and answers with each host's outcome; see
+  [Client scripts and commands](#client-scripts-and-commands). Script JSON
+  carries `kind`, and `/api/ui/scripts/create` and `/update` take it
+  (default `post_install`).
 - `POST /api/ui/images/scripts/root`
   (`{"req": {"image_id", "position", "partition_number"}}`) makes the image's
   script at `position` (counted from 0) run in another partition of the image;
@@ -262,11 +272,14 @@ headers and the JSON events sent over the websocket) lives in
 `imaged_model::agent`. An agent is identified by its `X-Agent-Mac` header;
 colon- or dash-separated MACs in any case are accepted and stored as lowercase
 colon form, anything else is a 400. The stream query carries exactly one of
-`disk_size_bytes` and `disk_error`. The server sends one event,
-`{"Current": task|null}`: on connect, whenever the host's current task changes
-(a cancel or kick shows up as another task or `null`) and in reply to the
-agent's `"Idle"`. Reporting a task finished or failed again with the same
-outcome succeeds, so the agent can retry its report.
+`disk_size_bytes` and `disk_error`. The server sends `{"Current": task|null}`:
+on connect, whenever the host's current task changes (a cancel or kick shows up
+as another task or `null`) and in reply to the agent's `"Idle"`. It sends
+`{"Run": {"id", "script": {"body", "inputs", "variables", "proxy"}}}` for a
+command or client script from the dashboard or an embedding program, and the
+agent answers with `{"Command": {"id", "outcome"}}`; a command still
+unanswered when the websocket closes fails. Reporting a task finished or
+failed again with the same outcome succeeds, so the agent can retry its report.
 
 Right after connecting, an agent with a usable disk sends
 `{"Partitions": [...]}`, the disk's partitions. Every capture, deploy and
@@ -322,12 +335,19 @@ handle: `imaged.import_archive(reader)` imports an image archive and returns
 the image, `imaged.script_inputs(image_id)` lists the inputs declared by the
 image's scripts in script order (both return `io::Result`, with `NotFound`,
 `InvalidInput` and `AlreadyExists` kinds), `imaged.connected_hosts()` lists the
-ids of the machines whose agent is connected and `imaged.task_progress()`
-returns the progress of every task being worked on, the same `TaskProgress` the
-dashboard shows. `imaged.watch_task_progress()` follows it: the feed's `next()`
-returns the current progress at once and then waits for each change; changes
-made between two calls are merged, so a slow reader only sees the latest.
-`Image`, `TaskProgress` and `ScriptInput` are re-exported from `imaged_server`.
+ids of the machines whose agent is connected, `imaged.client_scripts()` lists
+the client scripts with their inputs, `imaged.run_command(&host_ids, run)`
+runs a `CommandRun::Command(..)` or `CommandRun::Script { id, inputs }` on those
+hosts and returns a `HostCommandResult` per host, as
+`POST /api/ui/hosts/command` does (`NotFound` for an unknown host or script,
+`InvalidInput` for a post-install script or rejected inputs), and
+`imaged.task_progress()` returns the progress of every task being worked on,
+the same `TaskProgress` the dashboard shows. `imaged.watch_task_progress()`
+follows it: the feed's `next()` returns the current progress at once and then
+waits for each change; changes made between two calls are merged, so a slow
+reader only sees the latest. `Image`, `TaskProgress`, `Script`, `ScriptInput`,
+`CommandRun`, `DeployInputs`, `InputSource`, `HostCommandResult` and
+`CommandOutcome` are re-exported from `imaged_server`.
 
 The server side (core, boot, both API crates and the `server` library) also builds
 for Windows (`x86_64-pc-windows-gnu`). Multicast is Linux-only: on other
@@ -422,6 +442,10 @@ A capture runs `e2fsck -p` or `fsck.fat -a` on each partition right before
 cloning it; a btrfs partition gets `btrfs check --readonly` instead and is
 never repaired, so a btrfs filesystem with errors fails the capture. Reboot
 tasks touch no disk.
+
+Commands and client scripts from the server run next to any task, in the
+netboot environment rather than the installed system; see
+[Client scripts and commands](#client-scripts-and-commands).
 
 A partition task works on one existing partition of the target disk, named by
 its PARTUUID, and never touches the partition table. A partition capture clones
@@ -789,10 +813,12 @@ efivarfs.
 
 Scripts are a library on the server (`/api/ui/scripts`, written with
 `POST /api/ui/scripts/create`, `/update` and `/delete`): a unique name (letters,
-digits, `-`, `_`, `.`), a body and a list of declared inputs. An input has a
+digits, `-`, `_`, `.`), a kind (`post_install`, the default, or `client`; see
+[Client scripts and commands](#client-scripts-and-commands)), a body and a list
+of declared inputs. An input has a
 name (`[a-z0-9_]+`), a label, an optional description (at most 1000
 characters, shown under the field wherever its value is entered: the
-dashboard's deploy and multicast dialogs), a kind (`text`, `number`, `choice`
+dashboard's deploy, multicast and run command dialogs), a kind (`text`, `number`, `choice`
 with its choices, or `secret`), whether it is required, an optional default and
 whether its value is given per machine or shared by every machine of a
 deployment. Inputs have the same JSON shape in `/api/ui/scripts/*`, archive
@@ -802,8 +828,12 @@ value it is stored with the task host and never returned by `/api/ui/*`, but it
 is handed to whoever presents the host's MAC (see [Security](#security)). A
 script that prints it puts it in the stored script output. An
 image keeps an
-ordered list of scripts (`POST /api/ui/images/scripts`) and always runs their
-current version; a script that an image still uses cannot be deleted. Images
+ordered list of post-install scripts (`POST /api/ui/images/scripts`) and always
+runs their current version; a client script cannot be attached (400), a script
+that an image uses cannot become a client script (412) and cannot be deleted.
+An archive import never reuses a client script of the same name; its script
+gets the next free name (`name-2`, …).
+Images
 also carry a root partition (`POST /api/ui/images/root-partition`), the
 partition the scripts run in, and each script of an image can run in another
 of the image's partitions instead (`POST /api/ui/images/scripts/root`). A
@@ -892,6 +922,31 @@ non-zero stops the deploy and fails that host with the script's name; the
 mounts are always undone in reverse order before the agent reports back and
 reboots.
 
+## Client scripts and commands
+
+A client script runs on demand on connected hosts, in the netboot environment
+the agent runs in (busybox, nothing of the disk mounted), next to any task the
+host is working on. `POST /api/ui/hosts/command` runs either a typed command,
+`{"host_ids": [...], "run": {"command": "uname -a"}}`, or a client script,
+`{"host_ids": [...], "run": {"script": {"id": <script>, "inputs": {...}}}}`,
+where `inputs` has the deploy's shape and goes through the same checks. An
+unknown host is a 404; a post-install script or rejected inputs are a 400.
+The answer comes once every host has answered, at most 40 seconds later: one
+`{"host_id", "outcome"}` per host in request order (a host listed twice runs it
+once, at its first place), where `outcome` is
+`{"exited": {"code", "output"}}` (`code` is `null` when a signal ended it),
+`{"timed_out": {"output"}}` or `{"failed": {"reason"}}` (the host is not
+connected, disconnected before answering, did not answer in time, or the
+script could not start). Nothing is stored.
+
+The agent writes the script, or the command, to a file under `/tmp` and runs
+it through its shebang or `/bin/sh`, in `/`, with the variables of a
+post-install script except that `PATH` is the agent's own. stdout and stderr
+come back merged, the last 64 KiB of them with a line saying how many bytes
+were left out. After 30 seconds its process group is killed and the output so
+far comes back as timed out. A background process that keeps the output open
+is not waited for beyond half a second after the script exits.
+
 ## Security
 
 imaged has no authentication. Anyone who reaches the dashboard listener has
@@ -916,6 +971,14 @@ it on a trusted, isolated network.
   of a host while it runs a task gets that host's input values, `secret`
   inputs included, and every `[script_variables]` entry, can upload partition
   data for an image it is capturing and can report its tasks' outcome.
+  Whoever connects with a host's MAC takes over that host's connection, task or
+  not, so it receives the commands and client scripts sent to the host, with
+  their input values and every `[script_variables]` entry, and can answer them
+  with any output.
+- Commands and client scripts sent from the dashboard or through
+  `Imaged::run_command` run as root in the netboot environment of each
+  selected host, which can reach every local disk, and get every
+  `[script_variables]` entry.
 - Every `[script_variables]` entry is exported to every post-install script,
   including scripts that arrived in an imported archive.
 - Resolved input values, secrets included, are stored in plain text in

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO scripts (name, body, updated_at) VALUES (?, ?, ?) RETURNING id as \"id!\"",
+  "query": "INSERT INTO scripts (name, kind, body, updated_at) VALUES (?, ?, ?, ?) RETURNING id as \"id!\"",
   "describe": {
     "columns": [
       {
@@ -10,11 +10,11 @@
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 4
     },
     "nullable": [
       false
     ]
   },
-  "hash": "e5105475ad56f5724e1be3d10f70714268b2639052637d58f5cc744b0b4deb1b"
+  "hash": "f6b5851fd83d731b27e2af6b92ca669cc0635c0e371736fcc8e72f6320c4abe2"
 }

@@ -15,7 +15,10 @@ use std::{
 
 use axum::{Router, http::Uri, routing::get};
 use dioxus::server::{DioxusRouterExt, FullstackState, ServeConfig};
-pub use imaged_api_ui::model::{Image, TaskProgress};
+pub use imaged_api_ui::model::{
+    CommandOutcome, CommandRun, DeployInputs, HostCommandResult, Image, InputSource, Script,
+    TaskProgress,
+};
 pub use imaged_boot::{
     Arch, BootClient, BootFiles, ProfileName, ProfileSelector,
     ProfileSources as BootProfileSources, SharedBootFiles, Sources as BootSources,
@@ -25,6 +28,7 @@ use imaged_core::{
     di::{DIContainer, MachineIp},
     progress::Snapshot,
     registry::HostRegistry,
+    service::command::CommandService,
 };
 use imaged_model::error::AppError;
 pub use imaged_model::script::ScriptInput;
@@ -241,6 +245,37 @@ impl Imaged {
 
     pub fn connected_hosts(&self) -> Vec<i64> {
         self.container.host_registry.connected_hosts()
+    }
+
+    pub async fn run_command(
+        &self,
+        host_ids: &[i64],
+        run: CommandRun,
+    ) -> io::Result<Vec<HostCommandResult>> {
+        CommandService {
+            registry: &self.container.host_registry,
+            hosts: &*self.container.host_repo,
+            scripts: &*self.container.script_repo,
+            variables: &self.container.script_variables,
+            proxy: self.container.script_proxy.as_deref(),
+        }
+        .run(host_ids, run)
+        .await
+        .map_err(into_io_error)
+    }
+
+    pub async fn client_scripts(&self) -> io::Result<Vec<Script>> {
+        let scripts = self
+            .container
+            .script_repo
+            .get_all()
+            .await
+            .map_err(into_io_error)?;
+        Ok(scripts
+            .into_iter()
+            .filter(|script| script.kind.is_client())
+            .map(Into::into)
+            .collect())
     }
 
     pub fn task_progress(&self) -> Vec<TaskProgress> {

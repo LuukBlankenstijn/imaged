@@ -1,6 +1,7 @@
 use derive_more::{Constructor, Display, From, IsVariant};
 use serde::{Deserialize, Serialize};
 
+use crate::command::{CommandReport, CommandRequest};
 use crate::host::HostPartition;
 use crate::progress::HostProgress;
 
@@ -61,12 +62,14 @@ impl Work {
 #[derive(Debug, Serialize, Deserialize, From, Clone, PartialEq, Eq)]
 pub enum ServerEvent {
     Current(Option<Task>),
+    Run(CommandRequest),
 }
 
 #[derive(Debug, Serialize, Deserialize, From, Clone, PartialEq)]
 pub enum AgentEvent {
     Progress(HostProgress),
     Partitions(Vec<HostPartition>),
+    Command(CommandReport),
     #[from(skip)]
     Idle,
 }

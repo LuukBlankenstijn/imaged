@@ -16,12 +16,11 @@ pub use implementations::{
 
 use tokio_util::sync::CancellationToken;
 
-pub async fn handle_message(
+pub async fn handle_current(
     agent: &Agent,
     state: Arc<ClientState>,
-    event: imaged_model::ServerEvent,
+    current: Option<imaged_model::Task>,
 ) {
-    let imaged_model::ServerEvent::Current(current) = event;
     let mut running = state.current_task.lock().await;
     match (running.as_ref(), current) {
         (Some(task), Some(current)) if task.task_id == current.id => {}

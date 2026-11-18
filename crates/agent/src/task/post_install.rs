@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::pin::Pin;
@@ -9,19 +9,18 @@ use anyhow::{Context as _, Result, bail};
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use imaged_model::agent::{PostInstall, PostInstallScript};
-use imaged_model::script_env::{AGENT_VARIABLES, INPUT_PREFIX, PROXY_VARIABLES};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::agent::Agent;
-use crate::status::{Identity, ScriptPhase};
+use crate::script::{SYSTEM_PATH, script_command, script_env};
+use crate::status::ScriptPhase;
 use crate::sys::disk::{PartitionTarget, find_target_disk};
 use crate::sys::fstab::Matching;
 use crate::sys::mount::MountedSystem;
 
 const SCRIPT_PATH: &str = "/tmp/imaged-script";
-const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
 const LIVE_OUTPUT_BYTES: usize = 1024 * 1024;
 const KEPT_TAIL_BYTES: usize = 256 * 1024;
@@ -95,7 +94,13 @@ async fn run_scripts(
 ) -> Result<()> {
     let identity = agent.status.snapshot().identity;
     for (index, script) in (run.first..).zip(run.scripts) {
-        let env = script_env(script, &identity, plan.proxy.as_deref(), &plan.variables);
+        let env = script_env(
+            SYSTEM_PATH,
+            &script.inputs,
+            &identity,
+            plan.proxy.as_deref(),
+            &plan.variables,
+        );
         agent
             .status
             .update_task(|task| task.scripts[index].1 = ScriptPhase::Running);
@@ -109,48 +114,6 @@ async fn run_scripts(
         }
     }
     Ok(())
-}
-
-fn script_env(
-    script: &PostInstallScript,
-    identity: &Identity,
-    proxy: Option<&str>,
-    variables: &BTreeMap<String, String>,
-) -> Vec<(String, String)> {
-    let ip = identity.ip.as_deref().unwrap_or_default();
-    let agent_values = [PATH, "/root", &identity.mac, ip, &identity.server];
-    let mut env: Vec<(String, String)> = AGENT_VARIABLES
-        .iter()
-        .zip(agent_values)
-        .map(|(name, value)| (name.to_string(), value.to_string()))
-        .collect();
-    env.extend(
-        variables
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    env.extend(script.inputs.iter().map(|(name, value)| {
-        (
-            format!("{INPUT_PREFIX}{}", name.to_ascii_uppercase()),
-            value.clone(),
-        )
-    }));
-    if let Some(proxy) = proxy {
-        env.extend(
-            PROXY_VARIABLES
-                .iter()
-                .map(|name| (name.to_string(), proxy.to_string())),
-        );
-    }
-    env
-}
-
-fn script_command(body: &str) -> &'static [&'static str] {
-    if body.starts_with("#!") {
-        &[SCRIPT_PATH]
-    } else {
-        &["/bin/sh", SCRIPT_PATH]
-    }
 }
 
 async fn run_script(
@@ -189,7 +152,7 @@ async fn execute(
     let mut command = Command::new("chroot");
     command
         .arg(root)
-        .args(script_command(&script.body))
+        .args(script_command(&script.body, SCRIPT_PATH))
         .env_clear()
         .envs(env)
         .stdin(Stdio::null())
@@ -372,70 +335,6 @@ mod tests {
         let e = runs(&scripts, &[restored(1)]).unwrap_err();
 
         assert_eq!(e.to_string(), "root partition 5 was not restored");
-    }
-
-    fn agent() -> Identity {
-        Identity {
-            mac: "52:54:00:12:34:56".to_string(),
-            ip: Some("10.0.2.15".to_string()),
-            server: "http://10.0.2.2:8080".to_string(),
-        }
-    }
-
-    fn lookup<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
-        env.iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    }
-
-    #[test]
-    fn inputs_and_the_agent_identity_reach_the_script_as_variables() {
-        let env = script_env(
-            &script(&[("host_name", "pc-1"), ("site", "")]),
-            &agent(),
-            None,
-            &BTreeMap::new(),
-        );
-
-        assert_eq!(lookup(&env, "IMAGED_INPUT_HOST_NAME"), Some("pc-1"));
-        assert_eq!(lookup(&env, "IMAGED_INPUT_SITE"), Some(""));
-        assert_eq!(lookup(&env, "IMAGED_MAC"), Some("52:54:00:12:34:56"));
-        assert_eq!(lookup(&env, "IMAGED_IP"), Some("10.0.2.15"));
-        assert_eq!(lookup(&env, "IMAGED_SERVER"), Some("http://10.0.2.2:8080"));
-        assert!(lookup(&env, "PATH").is_some_and(|path| path.contains("/usr/bin")));
-        assert_eq!(lookup(&env, "http_proxy"), None);
-    }
-
-    #[test]
-    fn a_configured_proxy_is_exported_in_both_spellings() {
-        let env = script_env(
-            &script(&[]),
-            &agent(),
-            Some("http://proxy:3128"),
-            &BTreeMap::new(),
-        );
-
-        for name in PROXY_VARIABLES {
-            assert_eq!(lookup(&env, name), Some("http://proxy:3128"), "{name}");
-        }
-    }
-
-    #[test]
-    fn variables_from_the_server_reach_every_script() {
-        let variables = BTreeMap::from([("IMAGED_IMAGE_TOKEN".to_string(), "secret".to_string())]);
-        let env = script_env(&script(&[]), &agent(), None, &variables);
-
-        assert_eq!(lookup(&env, "IMAGED_IMAGE_TOKEN"), Some("secret"));
-    }
-
-    #[test]
-    fn a_shebang_picks_the_interpreter_and_anything_else_runs_in_sh() {
-        assert_eq!(
-            script_command("#!/usr/bin/env python3\nprint()"),
-            [SCRIPT_PATH]
-        );
-        assert_eq!(script_command("echo hi"), ["/bin/sh", SCRIPT_PATH]);
-        assert_eq!(script_command(" #!/bin/bash"), ["/bin/sh", SCRIPT_PATH]);
     }
 
     #[tokio::test]

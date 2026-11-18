@@ -7,7 +7,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use reqwest::Url;
 use tokio::io::AsyncReadExt;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use imaged_agent::server::{Server, Uplink};
 use imaged_agent::status::{Identity, Status};
@@ -23,7 +23,7 @@ use imaged_model::agent::{
 use imaged_model::host::HostPartition;
 use imaged_model::image::{ImageKind, ImageStatus};
 use imaged_model::progress::{HostProgress, Stage};
-use imaged_model::script::{InputKind, InputValues, ScriptInput};
+use imaged_model::script::{InputKind, InputValues, ScriptInput, ScriptKind};
 use imaged_model::task::TaskState;
 
 const DISK: u64 = 8 * 1024 * 1024 * 1024;
@@ -56,6 +56,7 @@ fn uplink(progress: watch::Receiver<Option<HostProgress>>) -> Uplink {
     Uplink {
         progress,
         idle: watch::channel(()).1,
+        commands: mpsc::unbounded_channel().1,
     }
 }
 
@@ -257,6 +258,7 @@ async fn a_restore_through_the_client_downloads_the_image_and_records_the_script
         .script_repo
         .create(&NewScript {
             name: harness::unique_name("rc-setup"),
+            kind: ScriptKind::PostInstall,
             body: "#!/bin/sh\necho \"$hostname\"\n".to_string(),
             inputs: vec![ScriptInput {
                 name: "hostname".to_string(),
